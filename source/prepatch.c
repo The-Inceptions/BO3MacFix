@@ -68,8 +68,8 @@ static const hook_def_t hook_defs[] = {
     { ADDR_LobbyMsgRW_PrepWriteMsg, Push_R14 },
     { ADDR_Lua_GetBuildIntField, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
     { ADDR_Lua_GetBuildStringField, Push_R14 },
+    { ADDR_SDL_SetWindowTitle, Push_R14 },
     { ADDR_someLoggingFunction, Push_R15 },
-    { ADDR_someWindowCreationFunction, Push_R15 },
     { ADDR_Sys_CheckSumPacketCopy, 10, 0, { 0x66, 0xB8, 0xFF, 0xFF, 0x81, 0xFA, 0xE8, 0x04, 0x00, 0x00 } }, // mov ax, 0xFFFF; cmp edx, 0x4E8
     { ADDR_Sys_VerifyPacketChecksum, Push_R15 },
 };
