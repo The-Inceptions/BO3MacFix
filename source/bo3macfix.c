@@ -30,6 +30,7 @@
 #include "havok.h"
 #include "utilities.h"
 #include "offsets.h"
+#include "prepatch.h"
 #include "steam.h"
 #include "stream_stall_recovery.h"
 #include "t7overcharged.h"
@@ -502,13 +503,7 @@ static void network_version_patch() {
     uint16_t original_network_version = 18530;
     uint16_t patched_network_version = 18532;
     // all the places the original network version is hardcoded
-    uint32_t netver_addresses[] = {
-        0x00E078E4, 0x00E181D3, 0x00E83E4E, 0x00EB8389, 0x00EB91A9,
-        0x00F988A0, 0x0104E0CB, 0x0105973D, 0x01059844, 0x0105C368,
-        0x0105C5DC, 0x011F7C3E, 0x011F7C43, 0x011F7C49, 0x0120B547,
-        0x0120B56A, 0x0123244C, 0x0126F78C, 0x0126F897, 0x0126F8BC,
-        0x0126F90D, 0x0126F96F, 0x012D35DA, 0x013B5C1D, 
-    };
+    uint32_t netver_addresses[] = { ADDRS_NetworkVersion };
     int num_netver_addrs = sizeof(netver_addresses) / sizeof(netver_addresses[0]);
     // enumerate through every one of these instances
     for (int i = 0; i < num_netver_addrs; i++) {
@@ -516,7 +511,7 @@ static void network_version_patch() {
         int o = 0;
         bool found = false;
         for (o = 0; o < 16; o++)  {
-            if (memcmp((void *)(game_base_address + netver_addresses[i] + o), &original_network_version, sizeof(uint16_t)) == 0) {
+            if (memcmp(prepatch_original_code((void *)(game_base_address + netver_addresses[i] + o), sizeof(uint16_t)), &original_network_version, sizeof(uint16_t)) == 0) {
                 found = true;
                 break;
             }
@@ -530,17 +525,14 @@ static void network_version_patch() {
     // patch the tu version used to get the ffotd
     uint8_t original_tuver[] = "tu30";
     uint8_t patched_tuver[] = "tu32";
-    uint32_t tuver_addresses[] = {
-        0x016AA513, 0x017251FB, 0x01725209, 0x0172529C, 0x017252AB,
-        0x017252B7, 
-    };
+    uint32_t tuver_addresses[] = { ADDRS_TUVersion };
     int num_tuver_addrs = sizeof(tuver_addresses) / sizeof(tuver_addresses[0]);
     // enumerate through every one of these instances
     for (int i = 0; i < num_tuver_addrs; i++) {
         int o = 0;
         bool found = false;
         for (o = 0; o < 16; o++)  {
-            if (memcmp((void *)(game_base_address + tuver_addresses[i] + o), original_tuver, sizeof(original_tuver) - 1) == 0) {
+            if (memcmp(prepatch_original_code((void *)(game_base_address + tuver_addresses[i] + o), sizeof(original_tuver) - 1), original_tuver, sizeof(original_tuver) - 1) == 0) {
                 found = true;
                 break;
             }
@@ -566,7 +558,7 @@ static void network_version_patch() {
 
 // replaces the code at address with patch, only if it's still the code we expect
 static void checked_code_patch(uint32_t address, const uint8_t *expected, uint8_t *patch, uint32_t size) {
-    if (memcmp((void *)(game_base_address + address), expected, size) == 0)
+    if (memcmp(prepatch_original_code((void *)(game_base_address + address), size), expected, size) == 0)
         DobbyCodePatch((void *)(game_base_address + address), patch, size);
     else
         printf("unexpected code at %08x, not patching\n", address);
@@ -871,7 +863,7 @@ __attribute__((constructor)) static void dylib_main() {
     // don't want to inject into defaults, Aspyr launcher or Steamwebhelper
     const char *image_path = _dyld_get_image_name(0);
     const char *image_name = filename_from_path(image_path);
-    if (strcmp(image_name, "CoDBlkOps3_Exe") != 0)
+    if (strcmp(image_name, "CoDBlkOps3_Exe") != 0 && strcmp(image_name, Prepatched_Exe_Name) != 0)
         return;
 
     // started from Steam our log goes nowhere, so keep it in BO3MacFix/log.txt (replaced every launch)
@@ -885,6 +877,7 @@ __attribute__((constructor)) static void dylib_main() {
 
     // get the base address of the binary
     game_base_address = get_base_address();
+    prepatch_init(game_base_address);
 
     // test switch: leave the game's code exactly as shipped (no hooks, no byte patches), to measure whether
     // patching code in memory makes Rosetta run the game through its JIT instead of its ahead-of-time translation.
@@ -998,6 +991,9 @@ __attribute__((constructor)) static void dylib_main() {
 
     // pre-fetch the wine path so we don't need to search earlier
     get_wine_path();
+
+    // running from the pre-patched executable, say what was set up and whether any game code was written
+    prepatch_report();
 
     // i'll figure all that stuff out later :')
     //int sbr = sandbox_init_with_parameters("(version 1)(allow default)(debug allow)", 0, NULL, NULL);

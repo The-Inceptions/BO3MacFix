@@ -16,6 +16,7 @@
 
 #include "gpu_tweaks.h"
 #include "metalfx.h"
+#include "prepatch.h"
 #include "offsets.h"
 
 extern uint64_t game_base_address;
@@ -55,6 +56,9 @@ static void **alloc_slot_near(uint64_t address) {
 // points a call qword ptr [rip + disp32] that goes through objc_msgSend's pointer at function instead,
 // returns 1 if the game's code was changed
 static int redirect_objc_msgSend_call(uint32_t address, const uint8_t *expected, void *function, code_patch_fn checked_code_patch) {
+    // the pre-patched executable already calls a stub here that jumps through a slot
+    if (prepatch_redirect_call(address, function))
+        return 1;
     uint8_t *code = (uint8_t *)(game_base_address + address);
     if (memcmp(code, expected, 6) != 0) {
         printf("unexpected code at %08x, not patching\n", address);

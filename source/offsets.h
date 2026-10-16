@@ -52,6 +52,10 @@
 #define ADDR_LOCAL_CLIENT_COUNT 0x11534590 // int
 #define ADDR_LOCAL_CLIENTS 0x11534598 // pointer
 #define ADDR_CLIENT_GLOBALS 0x115345a0 // pointer
+#define ADDR_Prepatch_Header 0x1964080 // pre-patched executable: header and stubs, in __TEXT's padding after __eh_frame
+#define ADDR_Prepatch_CodeEnd 0x1965000 // end of that padding
+#define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
+#define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
 // controllers
 #define ADDR_GPad_GetGamepadType 0x122f78d // func - returns gamepadType_e, Aspyr's always says DURANGO for a connected pad
@@ -80,5 +84,11 @@
 #define ADDR_ASL_FramesInFlightSemaphoreInstr 0x2accc // mid-func - mov edi, 2 before dispatch_semaphore_create (Metal frames in flight)
 #define ADDR_ASL_Present_PresentDrawableCall 0xe91e1 // mid-func - call [objc_msgSend] for [commandBuffer presentDrawable:]
 #define ADDR_ASL_Present_CopyToDrawableCall 0xe8fde // mid-func - call [objc_msgSend] for [blitEncoder copyFromTexture:backbuffer ... toTexture:drawable.texture ...]
+// where the network version (18530) and the "tu30" string are hardcoded, each within 16 bytes after the address
+#define ADDRS_NetworkVersion \
+    0x00E078E4, 0x00E181D3, 0x00E83E4E, 0x00EB8389, 0x00EB91A9, 0x00F988A0, 0x0104E0CB, 0x0105973D, \
+    0x01059844, 0x0105C368, 0x0105C5DC, 0x011F7C3E, 0x011F7C43, 0x011F7C49, 0x0120B547, 0x0120B56A, \
+    0x0123244C, 0x0126F78C, 0x0126F897, 0x0126F8BC, 0x0126F90D, 0x0126F96F, 0x012D35DA, 0x013B5C1D
+#define ADDRS_TUVersion 0x016AA513, 0x017251FB, 0x01725209, 0x0172529C, 0x017252AB, 0x017252B7
 #define ADDR_JQ_IdleWait_TimeoutInstr 0x11a7551 // mid-func - mov esi, 1 (idle job workers' WaitForSingleObject timeout in ms)
 // -- END OFFSETS

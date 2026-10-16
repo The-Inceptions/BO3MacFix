@@ -28,6 +28,9 @@ FRAMEWORKS += -framework Foundation -weak_framework GameController -weak_framewo
 
 # MetalFX upscaling (metalfx.m), MetalFX is weak-linked because it needs macOS 13
 SOURCES += source/metalfx.m
+
+# the pre-patched executable (prepatch.c), the launcher builds it with BO3MacFix_BuildPrepatched
+SOURCES += source/prepatch.c
 FRAMEWORKS += -framework Metal -framework QuartzCore -framework AppKit -weak_framework MetalFX
 
 all: $(TARGET)

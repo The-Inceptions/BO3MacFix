@@ -14,6 +14,7 @@
 #include "dobby.h"
 #include "offsets.h"
 #include "controllers.h"
+#include "prepatch.h"
 #include "gc_bridge.h"
 
 #define Controller_DB_Path "../../../BO3MacFix/gamecontrollerdb.txt"
@@ -218,7 +219,7 @@ void controllers_init(uint64_t base, int add_mappings, int button_prompts) {
         // push rbp; mov rbp, rsp; movsxd rax, edi; imul rax, rax, 0x70
         static const uint8_t expected[] = { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xC7, 0x48, 0x6B, 0xC0, 0x70 };
         void *func = (void *)(base + ADDR_GPad_GetGamepadType);
-        if (memcmp(func, expected, sizeof(expected)) == 0)
+        if (memcmp(prepatch_original_code(func, sizeof(expected)), expected, sizeof(expected)) == 0)
             install_hook_GPad_GetGamepadType(func);
         else
             printf("unexpected code at %08x, not hooking\n", ADDR_GPad_GetGamepadType);

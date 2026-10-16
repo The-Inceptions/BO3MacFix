@@ -21,6 +21,7 @@
 #include "dobby.h"
 #include "offsets.h"
 #include "gc_bridge.h"
+#include "prepatch.h"
 
 #define XUSER_MAX_COUNT 4
 #define ERROR_SUCCESS 0
@@ -629,7 +630,8 @@ void gc_bridge_init(uint64_t base, int mode, int lightbar_rgb) {
         static const uint8_t expected[] = { 0x55, 0x48, 0x89, 0xE5, 0x41, 0x56, 0x53, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00 };
         void *get_state = (void *)(base + ADDR_ASL_XInputGetState);
         void *set_state = (void *)(base + ADDR_ASL_XInputSetState);
-        if (memcmp(get_state, expected, sizeof(expected)) != 0 || memcmp(set_state, expected, sizeof(expected)) != 0) {
+        if (memcmp(prepatch_original_code(get_state, sizeof(expected)), expected, sizeof(expected)) != 0 ||
+            memcmp(prepatch_original_code(set_state, sizeof(expected)), expected, sizeof(expected)) != 0) {
             printf("unexpected code at %08x or %08x, GameController bridge off\n", ADDR_ASL_XInputGetState, ADDR_ASL_XInputSetState);
             return;
         }

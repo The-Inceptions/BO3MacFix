@@ -10,6 +10,7 @@
 #include "dyld-interposing.h"
 #include "offsets.h"
 #include "cpu_tuning.h"
+#include "prepatch.h"
 
 static uint64_t base_address = 0;
 static int thread_qos_enabled = 0;
@@ -43,7 +44,7 @@ install_hook_name(ASL_SleepEx, uint32_t, uint32_t milliseconds, int alertable) {
 
 // replaces the code at address with patch, only if it's still the code we expect
 static int cpu_checked_code_patch(uint32_t address, const uint8_t *expected, uint8_t *patch, uint32_t size) {
-    if (memcmp((void *)(base_address + address), expected, size) != 0) {
+    if (memcmp(prepatch_original_code((void *)(base_address + address), size), expected, size) != 0) {
         printf("unexpected code at %08x, not patching\n", address);
         return 0;
     }
