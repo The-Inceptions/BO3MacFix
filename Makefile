@@ -22,6 +22,9 @@ FRAMEWORKS = -framework CoreFoundation -framework IOKit -framework CoreGraphics 
 
 SOURCES = source/bo3macfix.c source/bo3macnative.m source/stream_stall_recovery.c source/utilities.c source/steam.c source/exports.c source/havok.c source/t7overcharged.c source/cpu_tuning.c
 SOURCES += source/controllers.c source/gpu_tweaks.c
+# PlayStation controllers through macOS's GameController framework (gc_bridge.m), weak-linked because it needs macOS 11.3
+SOURCES += source/gc_bridge.m
+FRAMEWORKS += -framework Foundation -weak_framework GameController -weak_framework CoreHaptics
 
 # MetalFX upscaling (metalfx.m), MetalFX is weak-linked because it needs macOS 13
 SOURCES += source/metalfx.m

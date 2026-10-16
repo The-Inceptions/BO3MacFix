@@ -14,6 +14,7 @@
 #include "dobby.h"
 #include "offsets.h"
 #include "controllers.h"
+#include "gc_bridge.h"
 
 #define Controller_DB_Path "../../../BO3MacFix/gamecontrollerdb.txt"
 
@@ -74,13 +75,21 @@ static char *read_user_mappings(void) {
     return mappings;
 }
 
+static void append_line(char *config, const char *line) {
+    if (config[0] != '\0')
+        strcat(config, "\n");
+    strcat(config, line);
+}
+
 // SDL reads SDL_GAMECONTROLLERCONFIG (one mapping per line) right after its built-in list, and a later line
 // replaces an earlier one for the same GUID. Ours go first so Steam's and the user's own mappings win.
+// With the GameController bridge on, SDL gets none of ours, the bridge reads PlayStation controllers instead.
 static void add_sdl_mappings(void) {
     const char *existing = getenv("SDL_GAMECONTROLLERCONFIG");
     char *user_mappings = read_user_mappings();
+    size_t count = gc_bridge_enabled() ? 0 : PlayStation_Mapping_Count;
     size_t size = 1;
-    for (size_t i = 0; i < PlayStation_Mapping_Count; i++)
+    for (size_t i = 0; i < count; i++)
         size += strlen(playstation_mappings[i]) + 1;
     if (existing != NULL)
         size += strlen(existing) + 1;
@@ -92,22 +101,20 @@ static void add_sdl_mappings(void) {
         free(user_mappings);
         return;
     }
-    for (size_t i = 0; i < PlayStation_Mapping_Count; i++) {
-        if (i > 0)
-            strcat(config, "\n");
-        strcat(config, playstation_mappings[i]);
-    }
-    if (existing != NULL && existing[0] != '\0') {
-        strcat(config, "\n");
-        strcat(config, existing);
-    }
-    if (user_mappings != NULL && user_mappings[0] != '\0') {
-        strcat(config, "\n");
-        strcat(config, user_mappings);
-    }
-    setenv("SDL_GAMECONTROLLERCONFIG", config, 1);
-    printf("BO3MacFix: added %zu PlayStation controller mappings%s\n", PlayStation_Mapping_Count,
-           user_mappings != NULL ? " and BO3MacFix/gamecontrollerdb.txt" : "");
+    for (size_t i = 0; i < count; i++)
+        append_line(config, playstation_mappings[i]);
+    if (existing != NULL && existing[0] != '\0')
+        append_line(config, existing);
+    if (user_mappings != NULL && user_mappings[0] != '\0')
+        append_line(config, user_mappings);
+    if (config[0] != '\0')
+        setenv("SDL_GAMECONTROLLERCONFIG", config, 1);
+    if (count > 0)
+        printf("BO3MacFix: added %zu PlayStation controller mappings%s\n", count,
+               user_mappings != NULL ? " and BO3MacFix/gamecontrollerdb.txt" : "");
+    else
+        printf("BO3MacFix: no PlayStation controller mappings for SDL, the GameController bridge reads them%s\n",
+               user_mappings != NULL ? " (added BO3MacFix/gamecontrollerdb.txt)" : "");
     free(config);
     free(user_mappings);
 }
@@ -134,8 +141,9 @@ static bool is_playstation_product(int product) {
 
 // SDL only asks for the version while building a new controller's GUID. Log what it will see, and give known
 // PlayStation controllers the version 0x0100 the mappings use, in case Bluetooth or firmware reports another.
+// With the GameController bridge on, give them a version no mapping has instead, so SDL leaves them to the bridge.
 CFTypeRef controllers_hid_property(IOHIDDeviceRef device, CFStringRef key, CFTypeRef value) {
-    if (!mappings_enabled || key != (CFStringRef)(base_address + ADDR_CFString_HIDVersionNumber))
+    if ((!mappings_enabled && !gc_bridge_enabled()) || key != (CFStringRef)(base_address + ADDR_CFString_HIDVersionNumber))
         return value;
     int vendor = hid_int_property(device, CFSTR(kIOHIDVendorIDKey));
     if (vendor != SONY_VENDOR_ID)
@@ -150,6 +158,15 @@ CFTypeRef controllers_hid_property(IOHIDDeviceRef device, CFStringRef key, CFTyp
         CFStringGetCString(transport_ref, transport, sizeof(transport), kCFStringEncodingUTF8);
     printf("BO3MacFix: Sony controller %04x:%04x version %04x over %s\n", vendor, product, version, transport);
 
+    if (gc_bridge_enabled() && is_playstation_product(product)) {
+        static CFNumberRef version_unmapped = NULL;
+        if (version_unmapped == NULL) {
+            int v = 0xFFFF;
+            version_unmapped = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &v);
+        }
+        printf("BO3MacFix: keeping it away from SDL, the GameController bridge reads it\n");
+        return version_unmapped;
+    }
     if (!is_playstation_product(product) || version == 0x0100)
         return value;
     static CFNumberRef version_0100 = NULL;
@@ -160,14 +177,14 @@ CFTypeRef controllers_hid_property(IOHIDDeviceRef device, CFStringRef key, CFTyp
     return version_0100;
 }
 
-// is the SDL controller behind this gamepad port made by Sony?
+// is the controller behind this gamepad port made by Sony? an SDL one, or one from the GameController bridge
 static bool is_playstation_port(int port) {
     int user_index = *(int *)(base_address + ADDR_g_gpadPorts + port * 8);
     if (user_index < 0 || user_index > 3)
         return false;
     const uint8_t *controller = *(const uint8_t **)(base_address + ADDR_ASL_XInputSlots + user_index * 24);
     if (controller == NULL)
-        return false;
+        return gc_bridge_is_playstation_user(user_index);
     // SDL_GameController.guid is at +0xC, and the GUID's vendor at +4 in that
     uint16_t vendor;
     memcpy(&vendor, controller + 0x10, sizeof(vendor));

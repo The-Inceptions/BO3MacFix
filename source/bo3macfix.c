@@ -34,6 +34,7 @@
 #include "stream_stall_recovery.h"
 #include "t7overcharged.h"
 #include "controllers.h"
+#include "gc_bridge.h"
 
 #include "versioninfo.h"
 
@@ -588,7 +589,7 @@ static void display_mode_patch() {
 
 // reads a number from a "Name = value" line in BO3MacFix/settings.ini, or returns fallback
 #define Settings_Path Macfix_Path "/settings.ini"
-static int read_int_setting(const char *name, int fallback) {
+static int read_setting(const char *name, int fallback, int base) {
     FILE *fp = fopen(Settings_Path, "r");
     if (fp == NULL)
         return fallback;
@@ -605,10 +606,21 @@ static int read_int_setting(const char *name, int fallback) {
             continue;
         p++;
         p += strspn(p, " \t\"");
-        value = atoi(p);
+        if (base == 16 && *p == '#')
+            p++;
+        value = (int)strtol(p, NULL, base);
     }
     fclose(fp);
     return value;
+}
+
+static int read_int_setting(const char *name, int fallback) {
+    return read_setting(name, fallback, 10);
+}
+
+// for colours like LightbarColor = 0040FF
+static int read_hex_setting(const char *name, int fallback) {
+    return read_setting(name, fallback, 16);
 }
 
 // the job system's worker thread count comes from a dvar that allows 2 to 4, which the Mac version leaves at 2
@@ -957,6 +969,10 @@ __attribute__((constructor)) static void dylib_main() {
         job_threads = atoi(job_threads_env);
     if (job_threads >= 3 && job_threads <= 4)
         job_threads_patch(job_threads);
+
+    // DualSense/DualShock 4 through macOS's GameController framework (Bluetooth, rumble, lightbar), see gc_bridge.m.
+    // Before controllers_init, which then leaves PlayStation controllers to it.
+    gc_bridge_init(game_base_address, read_int_setting("ControllerBridge", 0), read_hex_setting("LightbarColor", -1));
 
     // DualSense/DualShock 4 mappings for SDL, and PlayStation button prompts (0 = auto, 1 = Xbox, 2 = PlayStation)
     controllers_init(game_base_address, read_int_setting("ControllerMappings", 1), read_int_setting("ButtonPrompts", 0));
