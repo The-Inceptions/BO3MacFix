@@ -31,6 +31,7 @@
 #include "steam.h"
 #include "stream_stall_recovery.h"
 #include "t7overcharged.h"
+#include "controllers.h"
 
 #include "versioninfo.h"
 
@@ -664,7 +665,7 @@ CFTypeRef IOHIDDeviceGetProperty_hook(IOHIDDeviceRef device, CFStringRef key)
             }
         }
     }
-    return orig;
+    return controllers_hid_property(device, key, orig);
 }
 DYLD_INTERPOSE(IOHIDDeviceGetProperty_hook, IOHIDDeviceGetProperty);
 
@@ -945,6 +946,9 @@ __attribute__((constructor)) static void dylib_main() {
         job_threads = atoi(job_threads_env);
     if (job_threads >= 3 && job_threads <= 4)
         job_threads_patch(job_threads);
+
+    // DualSense/DualShock 4 mappings for SDL, and PlayStation button prompts (0 = auto, 1 = Xbox, 2 = PlayStation)
+    controllers_init(game_base_address, read_int_setting("ControllerMappings", 1), read_int_setting("ButtonPrompts", 0));
 
     // pre-fetch the wine path so we don't need to search earlier
     get_wine_path();

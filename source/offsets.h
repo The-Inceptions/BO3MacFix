@@ -52,6 +52,13 @@
 #define ADDR_LOCAL_CLIENTS 0x11534598 // pointer
 #define ADDR_CLIENT_GLOBALS 0x115345a0 // pointer
 
+// controllers
+#define ADDR_GPad_GetGamepadType 0x122f78d // func - returns gamepadType_e, Aspyr's always says DURANGO for a connected pad
+#define ADDR_g_gpads 0x5dedb70 // gamepad[2], 0x70 bytes each, mapped port (0-3) at +4 - name is a guess
+#define ADDR_g_gpadPorts 0x5dedc50 // { int xinputUserIndex; int controllerIndex; }[4] - name is a guess
+#define ADDR_ASL_XInputSlots 0x2108d50 // { SDL_GameController *; SDL_Haptic *; int effect; }[4] - name is a guess
+#define ADDR_CFString_HIDVersionNumber 0x1b8b5e0 // CFStringRef - the "VersionNumber" key SDL 2.0.7 reads
+
 //function patches
 #define ADDR_Scr_ErrorInternalPatch 0x11a238e // mid-func
 #define ADDR_Curl_ContentLengthSetStart 0x159345c // mid-func
