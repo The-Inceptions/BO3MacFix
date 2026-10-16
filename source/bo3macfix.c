@@ -865,6 +865,15 @@ __attribute__((constructor)) static void dylib_main() {
     // get the base address of the binary
     game_base_address = get_base_address();
 
+    // test switch: leave the game's code exactly as shipped (no hooks, no byte patches), to measure whether
+    // patching code in memory makes Rosetta run the game through its JIT instead of its ahead-of-time translation.
+    // The game then runs stock: no AAE, map loading fix, previews, native resolutions, controllers or CPU/GPU tweaks.
+    // Only the data-only DYLD_INTERPOSE replacements stay active.
+    if (read_int_setting("NoCodePatches", 0) != 0 || getenv("BO3MACFIX_NOCODEPATCHES") != NULL) {
+        printf("BO3MacFix: NoCodePatches is on, not changing any game code\n");
+        return;
+    }
+
     // apply the hooks
     install_hook_HKAI_InitMapData((void *)(game_base_address + ADDR_HKAI_InitMapData));
     install_hook_load_workshop_texture((void *)(game_base_address + ADDR_load_workshop_texture));
