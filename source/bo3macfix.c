@@ -874,6 +874,15 @@ __attribute__((constructor)) static void dylib_main() {
     if (strcmp(image_name, "CoDBlkOps3_Exe") != 0)
         return;
 
+    // started from Steam our log goes nowhere, so keep it in BO3MacFix/log.txt (replaced every launch)
+    struct stat out_stat;
+    if (!isatty(STDOUT_FILENO) && (fstat(STDOUT_FILENO, &out_stat) != 0 || !S_ISREG(out_stat.st_mode))) {
+        if (freopen(Macfix_Path "/log.txt", "w", stdout) != NULL) {
+            setvbuf(stdout, NULL, _IOLBF, 0);
+            dup2(fileno(stdout), STDERR_FILENO);
+        }
+    }
+
     // get the base address of the binary
     game_base_address = get_base_address();
 
