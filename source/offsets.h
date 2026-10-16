@@ -37,6 +37,12 @@
 #define ADDR_hks_pushnamedcclosure 0x1476385 // func
 #define ADDR_R_TrackTextureMemory 0x126dad2 // func - name is a guess
 #define ADDR_ASL_SleepEx 0x111752 // func - Aspyr's Sleep/SleepEx(milliseconds, alertable)
+#define ADDR_SDL_SetWindowTitle 0x1944d0 // func
+#define ADDR_LiveSteam_RunEveryFrame 0x1434f3e // func
+#define ADDR_SomeControllerTypeFunc 0x122f78d // func
+#define ADDR_SDL_PrivateGameControllerAddMapping 0x13cff0 // func
+#define ADDR_SDL_GameControllerInitMappings 0x13d450 // func
+#define ADDR_Cbuf_AddText 0xf754aa // func
 
 //globals
 #define ADDR_g_workshopMapId 0x3087dac // char[] - name is a guess

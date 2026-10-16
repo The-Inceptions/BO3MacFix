@@ -193,11 +193,30 @@ install_hook_name(someLoggingFunction, void, int bla, int bla2, char *str, int b
     return;
 }
 
+/*
 // Hooks some early window creation function to set the window title to ours
 install_hook_name(someWindowCreationFunction, bool, void *r3, int r4) {
     bool r = orig_someWindowCreationFunction(r3, r4);
     set_window_title("Call of Duty: Black Ops III (with BO3MacFix)");
     return r;
+}
+*/
+
+// Hooks the SDL window title setting function
+bool added_menu_bar = false;
+install_hook_name(SDL_SetWindowTitle, void, void *sdlWindow, const char *title)
+{
+    // verify the window title we're setting is the main game window
+    if (strcmp("Call of Duty: Black Ops III", title) == 0)
+    {
+        title = "Call of Duty: Black Ops III (with BO3MacFix)";
+        set_window_title(title);
+        if (added_menu_bar == false) {
+            //add_menu_bar();
+            added_menu_bar = true;
+        }
+    }
+    orig_SDL_SetWindowTitle(sdlWindow, title);
 }
 
 // Adds the version of our mod to the version info in the corner
@@ -736,7 +755,19 @@ bool ISteamApps_BIsDlcInstalled(void *interface, AppId_t app) {
     return steam_dlc_installed(app);
 }
 
+char playerNameBuffer[17] = {0};
+void set_player_name(const char *name) {
+    strncpy(playerNameBuffer, name, sizeof(playerNameBuffer));
+}
+const char *get_player_name() {
+    return playerNameBuffer;
+}
+
 const char *ISteamFriends_GetPersonaName(void *interface) {
+    // check the player name set dynamically first
+    if (playerNameBuffer[0] != '\0' && strlen(playerNameBuffer) >= 1 && strlen(playerNameBuffer) <= 16)
+        return playerNameBuffer;
+    // then check the player name
     const char *envname = getenv("BO3MACFIX_PLAYERNAME");
     if (envname != NULL && strlen(envname) >= 1 && strlen(envname) <= 16)
         return envname;
@@ -857,6 +888,32 @@ install_hook_name(Lua_GetBuildStringField, int, lua_State *s) {
     return orig_Lua_GetBuildStringField(s);
 }
 
+static int (*SDL_PrivateGameControllerAddMapping)(const char *mappingString, int priority);
+
+// WIP(Emma): unfinished support for adding extra SDL controller mappings
+static const char *extraGamepadMappings[] = {
+    "030000004c050000a00b000000010000,PS4 Controller,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,",
+    "030000004c050000c405000000000000,PS4 Controller,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,",
+    "030000004c050000c405000000010000,PS4 Controller,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,",
+    "030000004c050000cc09000000010000,PS4 Controller,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,",
+    "050000004c050000e60c000000010000,PS5 Controller,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,misc1:b13,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,",
+    "030000004c050000cc09000000000000,Sony DualShock 4 V2,a:b1,b:b2,back:b13,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,",
+    "030000004c050000a00b000000000000,Sony DualShock 4 Wireless Adaptor,a:b1,b:b2,back:b13,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,",
+    NULL
+};
+install_hook_name(SDL_GameControllerInitMappings, int, void)
+{
+    int r = orig_SDL_GameControllerInitMappings();
+    int i = 0;
+    const char *pMappingString = extraGamepadMappings[i];
+    while (pMappingString) {
+        SDL_PrivateGameControllerAddMapping(pMappingString, 0);
+        i++;
+        pMappingString = extraGamepadMappings[i];
+    }
+    return r;
+}
+
 // Entrypoint for the dylib
 __attribute__((constructor)) static void dylib_main() {
     // make sure we're loading into the game process and nothing else
@@ -893,7 +950,8 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_load_workshop_texture((void *)(game_base_address + ADDR_load_workshop_texture));
     install_hook_Live_SystemInfo((void *)(game_base_address + ADDR_Live_SystemInfo));
     install_hook_someLoggingFunction((void *)(game_base_address + ADDR_someLoggingFunction));
-    install_hook_someWindowCreationFunction((void *)(game_base_address + ADDR_someWindowCreationFunction));
+    //install_hook_someWindowCreationFunction((void *)(game_base_address + ADDR_someWindowCreationFunction));
+    install_hook_SDL_SetWindowTitle((void *)(game_base_address + ADDR_SDL_SetWindowTitle));
     install_hook_Sys_VerifyPacketChecksum((void *)(game_base_address + ADDR_Sys_VerifyPacketChecksum));
     install_hook_Sys_CheckSumPacketCopy((void *)(game_base_address + ADDR_Sys_CheckSumPacketCopy));
     install_hook_LobbyMsgRW_PrepReadMsg((void *)(game_base_address + ADDR_LobbyMsgRW_PrepReadMsg));
@@ -909,6 +967,7 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_Com_GetBuildIntField((void *)(game_base_address + ADDR_Com_GetBuildIntField));
     install_hook_Lua_GetBuildIntField((void *)(game_base_address + ADDR_Lua_GetBuildIntField));
     install_hook_Lua_GetBuildStringField((void *)(game_base_address + ADDR_Lua_GetBuildStringField));
+    //install_hook_SDL_GameControllerInitMappings((void *)(game_base_address + ADDR_SDL_GameControllerInitMappings));
 
     // set up functions that we later call
     havok_init(game_base_address);
@@ -920,6 +979,7 @@ __attribute__((constructor)) static void dylib_main() {
     Sys_Checksum = (void *)(game_base_address + ADDR_Sys_Checksum);
     MSG_ReadByte = (void *)(game_base_address + ADDR_MSG_ReadByte);
     MSG_WriteByte = (void *)(game_base_address + ADDR_MSG_WriteByte);
+    SDL_PrivateGameControllerAddMapping = (void *)(game_base_address + ADDR_SDL_PrivateGameControllerAddMapping);
 
     // disable setting a fatal error in Scr_ErrorInternal, Aspyr forces it to always be true
     uint8_t error_patch[1] = { 0x00 };
