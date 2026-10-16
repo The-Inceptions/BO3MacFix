@@ -4,6 +4,7 @@
 // Core Animation stretches it to the screen. With this on, the drawable stays at the screen's native size instead,
 // Aspyr's 1:1 copy of the backbuffer into the drawable copies into our own texture, and right before the drawable is
 // presented MetalFX upscales that into the drawable. If the game already renders at the screen's size nothing changes.
+#import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalFX/MetalFX.h>
@@ -47,9 +48,19 @@ static void updateDrawableSize_hook(id self, SEL sel) {
     int forced_height = *(int *)((char *)self + forced_height_offset);
     if (forced_width <= 0 || forced_height <= 0)
         return;
-    CGSize view_size = *(CGSize *)((char *)self + view_size_offset);
-    double scale = ((double (*)(id, SEL))objc_msgSend)(self, sel_contentScaleFactor);
-    int native_width = (int)lround(view_size.width * scale), native_height = (int)lround(view_size.height * scale);
+    // the view's size in pixels. Aspyr's _viewSize and contentScaleFactor are in points here (1728x1117 with a
+    // scale of 1 on a 3456x2234 MacBook Pro), so go by the view's bounds and its window's backing scale instead.
+    int native_width, native_height;
+    if ([self isKindOfClass:[NSView class]] && ((NSView *)self).window != nil) {
+        NSRect backing = [(NSView *)self convertRectToBacking:((NSView *)self).bounds];
+        native_width = (int)lround(backing.size.width);
+        native_height = (int)lround(backing.size.height);
+    } else {
+        CGSize view_size = *(CGSize *)((char *)self + view_size_offset);
+        double scale = ((double (*)(id, SEL))objc_msgSend)(self, sel_contentScaleFactor);
+        native_width = (int)lround(view_size.width * scale);
+        native_height = (int)lround(view_size.height * scale);
+    }
 
     static int last_forced_width = -1, last_forced_height = -1, last_native_width = -1, last_native_height = -1;
     int changed = forced_width != last_forced_width || forced_height != last_forced_height ||

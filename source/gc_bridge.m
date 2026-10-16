@@ -60,6 +60,7 @@ typedef struct {
     id players[2];              // CHHapticAdvancedPatternPlayer
     int engine_count;
     uint16_t motors[2];         // speeds the players are running at
+    double haptics_retry_at;    // CFAbsoluteTime after which setting up rumble may be tried again
 } bridged_pad;
 
 static uint64_t base_address;
@@ -213,17 +214,29 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
 
 API_AVAILABLE(macos(11.3))
 static id make_player(CHHapticEngine *engine) {
-    NSError *error = nil;
-    CHHapticEventParameter *intensity =
-        [[[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1.0f] autorelease];
-    CHHapticEvent *event = [[[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
-                                                          parameters:@[ intensity ]
-                                                        relativeTime:0
-                                                            duration:GCHapticDurationInfinite] autorelease];
-    CHHapticPattern *pattern = [[[CHHapticPattern alloc] initWithEvents:@[ event ] parameters:@[] error:&error] autorelease];
-    if (pattern == nil)
-        return nil;
-    return [[engine createAdvancedPlayerWithPattern:pattern error:&error] retain];
+    // a continuous event that never ends, or if CoreHaptics won't take that, a 30 second one that loops
+    const float durations[2] = { GCHapticDurationInfinite, 30.0f };
+    for (int i = 0; i < 2; i++) {
+        NSError *error = nil;
+        CHHapticEventParameter *intensity =
+            [[[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1.0f] autorelease];
+        CHHapticEvent *event = [[[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
+                                                              parameters:@[ intensity ]
+                                                            relativeTime:0
+                                                                duration:durations[i]] autorelease];
+        CHHapticPattern *pattern = [[[CHHapticPattern alloc] initWithEvents:@[ event ] parameters:@[] error:&error] autorelease];
+        id<CHHapticAdvancedPatternPlayer> player = pattern != nil ? [engine createAdvancedPlayerWithPattern:pattern error:&error] : nil;
+        if (player != nil) {
+            if (i == 1) {
+                player.loopEnabled = YES;
+                player.loopEnd = durations[i];
+            }
+            return [player retain];
+        }
+        printf("GameController bridge: couldn't make the %s rumble pattern: %s\n", i == 0 ? "endless" : "looping",
+               error.localizedDescription.UTF8String ?: "unknown error");
+    }
+    return nil;
 }
 
 // the motors run as continuous events at full strength, scaled by a dynamic intensity, so speed changes don't
@@ -257,13 +270,22 @@ static void set_motors(bridged_pad *pad, uint16_t left, uint16_t right) {
 
 // on input_queue: play what the game last asked for, or nothing while it isn't focused
 API_AVAILABLE(macos(11.3))
+static void start_haptics(bridged_pad *pad, GCController *controller, int user_index);
+
+API_AVAILABLE(macos(11.3))
 static void apply_motors(bridged_pad *pad) {
     os_unfair_lock_lock(&pads_lock);
     uint16_t left = pad->wanted_motors[0], right = pad->wanted_motors[1];
-    bool connected = pad->controller != nil;
+    GCController *controller = [pad->controller retain];
+    int user_index = pad->user_index;
     os_unfair_lock_unlock(&pads_lock);
-    if (!connected || !atomic_load(&app_active))
+    if (controller == nil || !atomic_load(&app_active))
         left = right = 0;
+    // rumble couldn't be set up when the controller connected (the game may not have been frontmost yet),
+    // so try again when the game first asks for it, at most every 3 seconds
+    if (pad->engine_count == 0 && (left != 0 || right != 0) && CFAbsoluteTimeGetCurrent() >= pad->haptics_retry_at)
+        start_haptics(pad, controller, user_index);
+    [controller release];
     set_motors(pad, left, right);
 }
 
@@ -282,8 +304,45 @@ static void restart_haptics(bridged_pad *pad) {
 }
 
 // on input_queue. DualSense and DualShock 4 have a motor in each grip, so one engine per grip where macOS offers it
+// makes, starts and keeps one rumble engine for this locality, returns 0 (saying why) if macOS won't
+API_AVAILABLE(macos(11.3))
+static int add_engine(bridged_pad *pad, GCDeviceHaptics *haptics, GCHapticsLocality locality, int user_index) {
+    CHHapticEngine *engine = [haptics createEngineWithLocality:locality];
+    if (engine == nil) {
+        printf("GameController bridge: macOS made no rumble engine for %s on player %i\n", locality.UTF8String, user_index + 1);
+        return 0;
+    }
+    engine.playsHapticsOnly = YES;
+    NSError *error = nil;
+    if (![engine startAndReturnError:&error]) {
+        printf("GameController bridge: couldn't start rumble (%s) on player %i: %s\n", locality.UTF8String, user_index + 1,
+               error.localizedDescription.UTF8String ?: "unknown error");
+        return 0;
+    }
+    id player = make_player(engine);
+    if (player == nil) {
+        [engine stopWithCompletionHandler:nil];
+        return 0;
+    }
+    engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
+        printf("GameController bridge: rumble engine on player %i stopped (reason %li)\n", user_index + 1, (long)reason);
+    };
+    engine.resetHandler = ^{
+        dispatch_async(input_queue, ^{
+            @autoreleasepool {
+                restart_haptics(pad);
+            }
+        });
+    };
+    pad->engines[pad->engine_count] = [engine retain];
+    pad->players[pad->engine_count] = player;
+    pad->engine_count++;
+    return 1;
+}
+
 API_AVAILABLE(macos(11.3))
 static void start_haptics(bridged_pad *pad, GCController *controller, int user_index) {
+    pad->haptics_retry_at = CFAbsoluteTimeGetCurrent() + 3.0;
     GCDeviceHaptics *haptics = controller.haptics;
     if (haptics == nil) {
         printf("GameController bridge: no rumble on player %i, macOS gives no haptics for this controller\n", user_index + 1);
@@ -291,38 +350,12 @@ static void start_haptics(bridged_pad *pad, GCController *controller, int user_i
     }
     NSSet *localities = haptics.supportedLocalities;
     bool grips = [localities containsObject:GCHapticsLocalityLeftHandle] && [localities containsObject:GCHapticsLocalityRightHandle];
-    GCHapticsLocality wanted[2] = { grips ? GCHapticsLocalityLeftHandle : GCHapticsLocalityDefault, GCHapticsLocalityRightHandle };
     pad->engine_count = 0;
-    for (int i = 0; i < (grips ? 2 : 1); i++) {
-        CHHapticEngine *engine = [haptics createEngineWithLocality:wanted[i]];
-        if (engine == nil)
-            break;
-        engine.playsHapticsOnly = YES;
-        NSError *error = nil;
-        if (![engine startAndReturnError:&error]) {
-            printf("GameController bridge: couldn't start rumble on player %i: %s\n", user_index + 1,
-                   error.localizedDescription.UTF8String ?: "unknown error");
-            break;
-        }
-        id player = make_player(engine);
-        if (player == nil) {
-            [engine stopWithCompletionHandler:nil];
-            break;
-        }
-        engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
-            printf("GameController bridge: rumble engine on player %i stopped (reason %li)\n", user_index + 1, (long)reason);
-        };
-        engine.resetHandler = ^{
-            dispatch_async(input_queue, ^{
-                @autoreleasepool {
-                    restart_haptics(pad);
-                }
-            });
-        };
-        pad->engines[i] = [engine retain];
-        pad->players[i] = player;
-        pad->engine_count++;
-    }
+    // one engine per grip for the game's two motors, otherwise (or if that fails) one engine for both
+    if (grips && add_engine(pad, haptics, GCHapticsLocalityLeftHandle, user_index))
+        add_engine(pad, haptics, GCHapticsLocalityRightHandle, user_index);
+    if (pad->engine_count == 0)
+        add_engine(pad, haptics, GCHapticsLocalityDefault, user_index);
     if (pad->engine_count == 2)
         printf("GameController bridge: rumble ready on player %i (left and right grip)\n", user_index + 1);
     else if (pad->engine_count == 1)
