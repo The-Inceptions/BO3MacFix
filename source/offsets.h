@@ -36,6 +36,7 @@
 #define ADDR_hksi_lua_pcall 0x14465f9 // func
 #define ADDR_hks_pushnamedcclosure 0x1476385 // func
 #define ADDR_R_TrackTextureMemory 0x126dad2 // func - name is a guess
+#define ADDR_ASL_SleepEx 0x111752 // func - Aspyr's Sleep/SleepEx(milliseconds, alertable)
 
 //globals
 #define ADDR_g_workshopMapId 0x3087dac // char[] - name is a guess
@@ -73,4 +74,5 @@
 #define ADDR_ASL_DXGIOutput_GetModes_WidthCap 0xdee97 // mid-func - jg over modes wider than the desktop
 #define ADDR_ASL_DXGIOutput_GetModes_HeightCap 0xdeea0 // mid-func - jg over modes taller than the desktop
 #define ADDR_JobThreadsDvar_DefaultInstr 0x1330b91 // mid-func - mov edx, 2 (default job worker thread count, range 2-4)
+#define ADDR_JQ_IdleWait_TimeoutInstr 0x11a7551 // mid-func - mov esi, 1 (idle job workers' WaitForSingleObject timeout in ms)
 // -- END OFFSETS

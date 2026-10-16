@@ -20,7 +20,7 @@ LDFLAGS = -shared -Wl,-undefined -Wl,dynamic_lookup -Llib -ldobby
 
 FRAMEWORKS = -framework CoreFoundation -framework IOKit -framework CoreGraphics -framework ImageIO
 
-SOURCES = source/bo3macfix.c source/bo3macnative.m source/stream_stall_recovery.c source/utilities.c source/steam.c source/exports.c source/havok.c source/t7overcharged.c
+SOURCES = source/bo3macfix.c source/bo3macnative.m source/stream_stall_recovery.c source/utilities.c source/steam.c source/exports.c source/havok.c source/t7overcharged.c source/cpu_tuning.c
 SOURCES += source/controllers.c
 
 all: $(TARGET)

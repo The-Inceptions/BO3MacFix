@@ -24,6 +24,7 @@
 
 #include "bo3macnative.h"
 #include "codhavoktypes.h"
+#include "cpu_tuning.h"
 #include "dobby.h"
 #include "havok.h"
 #include "utilities.h"
@@ -949,6 +950,10 @@ __attribute__((constructor)) static void dylib_main() {
 
     // DualSense/DualShock 4 mappings for SDL, and PlayStation button prompts (0 = auto, 1 = Xbox, 2 = PlayStation)
     controllers_init(game_base_address, read_int_setting("ControllerMappings", 1), read_int_setting("ButtonPrompts", 0));
+
+    // thread QoS and job worker waiting fixes (see cpu_tuning.c), each can be turned off in settings.ini
+    cpu_tuning_init(game_base_address, read_int_setting("ThreadQoS", 1), read_int_setting("JobIdleFix", 1),
+                    read_int_setting("YieldSleep0", 0));
 
     // pre-fetch the wine path so we don't need to search earlier
     get_wine_path();
