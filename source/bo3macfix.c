@@ -26,6 +26,7 @@
 #include "codhavoktypes.h"
 #include "cpu_tuning.h"
 #include "dobby.h"
+#include "gpu_tweaks.h"
 #include "havok.h"
 #include "utilities.h"
 #include "offsets.h"
@@ -954,6 +955,9 @@ __attribute__((constructor)) static void dylib_main() {
     // thread QoS and job worker waiting fixes (see cpu_tuning.c), each can be turned off in settings.ini
     cpu_tuning_init(game_base_address, read_int_setting("ThreadQoS", 1), read_int_setting("JobIdleFix", 1),
                     read_int_setting("YieldSleep0", 0));
+
+    // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
+    gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);
 
     // pre-fetch the wine path so we don't need to search earlier
     get_wine_path();
