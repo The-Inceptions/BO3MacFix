@@ -76,5 +76,6 @@
 #define ADDR_JobThreadsDvar_DefaultInstr 0x1330b91 // mid-func - mov edx, 2 (default job worker thread count, range 2-4)
 #define ADDR_ASL_FramesInFlightSemaphoreInstr 0x2accc // mid-func - mov edi, 2 before dispatch_semaphore_create (Metal frames in flight)
 #define ADDR_ASL_Present_PresentDrawableCall 0xe91e1 // mid-func - call [objc_msgSend] for [commandBuffer presentDrawable:]
+#define ADDR_ASL_Present_CopyToDrawableCall 0xe8fde // mid-func - call [objc_msgSend] for [blitEncoder copyFromTexture:backbuffer ... toTexture:drawable.texture ...]
 #define ADDR_JQ_IdleWait_TimeoutInstr 0x11a7551 // mid-func - mov esi, 1 (idle job workers' WaitForSingleObject timeout in ms)
 // -- END OFFSETS

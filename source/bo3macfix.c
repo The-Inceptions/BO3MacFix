@@ -968,6 +968,9 @@ __attribute__((constructor)) static void dylib_main() {
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);
 
+    // MetalFX upscaling when the game runs below the screen's resolution (MetalFXUpscale, 0 = off), see metalfx.m
+    gpu_tweaks_metalfx_init(read_int_setting("MetalFXUpscale", 0), checked_code_patch);
+
     // pre-fetch the wine path so we don't need to search earlier
     get_wine_path();
 
