@@ -1,3 +1,5 @@
+// Modified by Mickael DE LA ROQUE on 2026-09-08 with offsets used by the
+// unofficial custom-map stream-stall workaround.
 // -- START OFFSETS [Mac v1.0.0.0, in-game v98, executable 5e42371b6a16f2b11e637f48e38554625570aa9f]
 // functions
 #define ADDR_HKAI_InitMapData 0xe09aa9 // func
@@ -23,12 +25,32 @@
 #define ADDR_hks_load_dll 0x148460d // func
 #define ADDR_hksf_fopen_internal 0xfb503 // func - name is a guess, called by hksf_fopen
 #define ADDR_CL_FirstSnapshot 0xe2f0be // func
+#define ADDR_CL_SetCGameTime 0xe2fbe8 // func
+#define ADDR_DB_GetStreamFraction 0x127c182 // func - name is a guess
 #define ADDR_Com_GetBuildIntField 0xf16d9a // func
+#define ADDR_Lua_GetBuildStringField 0xe66e2f // func - Engine.GetBuildStringField
+#define ADDR_Lua_GetBuildIntField 0xe66e92 // func - Engine.GetBuildIntField
+#define ADDR_hksi_lua_pushlstring 0x1409c50 // func
+#define ADDR_hksi_luaL_checklstring 0x1473440 // func
+#define ADDR_hksi_hksL_loadbuffer 0x1474566 // func
+#define ADDR_hksi_lua_pcall 0x14465f9 // func
+#define ADDR_hks_pushnamedcclosure 0x1476385 // func
+#define ADDR_R_TrackTextureMemory 0x126dad2 // func - name is a guess
 
 //globals
 #define ADDR_g_workshopMapId 0x3087dac // char[] - name is a guess
 #define ADDR_g_emuPath 0x4ae9c00 // char[] - name is a guess
 #define ADDR_sSessionModeState 0x6939a14 // int
+#define ADDR_DB_XAssetPool 0x1017cc40 // XAssetPool[]
+#define ADDR_g_assetNames 0x20d84b0 // const char *[]
+#define ADDR_g_d3d11Device 0x113c0b18 // ID3D11Device * - name is a guess
+#define ADDR_DB_LOAD_TOTALS 0xb2b81c0 // int[4]
+#define ADDR_DB_LOAD_STAGE_COUNT 0xb2b81d0 // int
+#define ADDR_DB_LOAD_COMPLETED 0xb2b81e0 // int[4]
+#define ADDR_CLIENT_CONNECTIONS 0x115324a0 // client connection array
+#define ADDR_LOCAL_CLIENT_COUNT 0x11534590 // int
+#define ADDR_LOCAL_CLIENTS 0x11534598 // pointer
+#define ADDR_CLIENT_GLOBALS 0x115345a0 // pointer
 
 //function patches
 #define ADDR_Scr_ErrorInternalPatch 0x11a238e // mid-func
@@ -39,4 +61,9 @@
 #define ADDR_Live_SystemInfo_LarpInstr 0x129dbcc // mid-func
 #define ADDR_LobbyHostMsg_SendJoinRequest_GetChangelistCall 0x1232458 // mid-func
 #define ADDR_HKAI_InitMapData_DemonWithinCheck 0xe09f68 // mid-func
+#define ADDR_ASL_BuildModeTable_WidthCap 0x6f275 // mid-func - jg over modes wider than the desktop
+#define ADDR_ASL_BuildModeTable_HeightCap 0x6f27a // mid-func - jg over modes taller than the desktop
+#define ADDR_ASL_DXGIOutput_GetModes_WidthCap 0xdee97 // mid-func - jg over modes wider than the desktop
+#define ADDR_ASL_DXGIOutput_GetModes_HeightCap 0xdeea0 // mid-func - jg over modes taller than the desktop
+#define ADDR_JobThreadsDvar_DefaultInstr 0x1330b91 // mid-func - mov edx, 2 (default job worker thread count, range 2-4)
 // -- END OFFSETS
