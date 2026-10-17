@@ -58,7 +58,7 @@ typedef struct {
     uint16_t wanted_motors[2];  // last speeds from XInputSetState
     // only on input_queue:
     id engines[2];              // CHHapticEngine for the left (large) and right (small) motor, or one for both
-    id players[2];              // CHHapticAdvancedPatternPlayer
+    id players[2];              // CHHapticPatternPlayer
     int engine_count;
     uint16_t motors[2];         // speeds the players are running at
     double haptics_retry_at;    // CFAbsoluteTime after which setting up rumble may be tried again
@@ -215,7 +215,9 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
 
 API_AVAILABLE(macos(11.3))
 static id make_player(CHHapticEngine *engine) {
-    // a continuous event that never ends, or if CoreHaptics won't take that, a 30 second one that loops
+    // a continuous event that never ends, or if CoreHaptics won't take that, a 30 second one. (Not an advanced
+    // player, which could loop it: those never work with controller haptics on macOS, "Couldn't communicate with
+    // a helper application".)
     const float durations[2] = { GCHapticDurationInfinite, 30.0f };
     for (int i = 0; i < 2; i++) {
         NSError *error = nil;
@@ -226,15 +228,10 @@ static id make_player(CHHapticEngine *engine) {
                                                             relativeTime:0
                                                                 duration:durations[i]] autorelease];
         CHHapticPattern *pattern = [[[CHHapticPattern alloc] initWithEvents:@[ event ] parameters:@[] error:&error] autorelease];
-        id<CHHapticAdvancedPatternPlayer> player = pattern != nil ? [engine createAdvancedPlayerWithPattern:pattern error:&error] : nil;
-        if (player != nil) {
-            if (i == 1) {
-                player.loopEnabled = YES;
-                player.loopEnd = durations[i];
-            }
+        id<CHHapticPatternPlayer> player = pattern != nil ? [engine createPlayerWithPattern:pattern error:&error] : nil;
+        if (player != nil)
             return [player retain];
-        }
-        printf("GameController bridge: couldn't make the %s rumble pattern: %s\n", i == 0 ? "endless" : "looping",
+        printf("GameController bridge: couldn't make the %s rumble pattern: %s\n", i == 0 ? "endless" : "30 second",
                error.localizedDescription.UTF8String ?: "unknown error");
     }
     return nil;
@@ -248,7 +245,7 @@ static void set_motors(bridged_pad *pad, uint16_t left, uint16_t right) {
     if (pad->engine_count == 1)
         speeds[0] = left > right ? left : right;    // one engine for both plays the stronger one
     for (int i = 0; i < pad->engine_count; i++) {
-        id<CHHapticAdvancedPatternPlayer> player = pad->players[i];
+        id<CHHapticPatternPlayer> player = pad->players[i];
         if (player == nil || pad->motors[i] == speeds[i])
             continue;
         NSError *error = nil;
@@ -263,7 +260,13 @@ static void set_motors(bridged_pad *pad, uint16_t left, uint16_t right) {
                 [[[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
                                                                  value:speeds[i] / 65535.0f
                                                           relativeTime:0] autorelease];
-            [player sendParameters:@[ intensity ] atTime:CHHapticTimeImmediate error:&error];
+            BOOL sent = [player sendParameters:@[ intensity ] atTime:CHHapticTimeImmediate error:&error];
+            static bool said = false;
+            if (!said) {
+                printf("GameController bridge: first rumble (motor %i at %.0f%%): %s\n", i, speeds[i] / 655.35f,
+                       sent ? "playing" : error.localizedDescription.UTF8String ?: "failed");
+                said = true;
+            }
         }
         pad->motors[i] = speeds[i];
     }
