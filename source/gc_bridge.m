@@ -264,6 +264,16 @@ static void set_adaptive_triggers(GCController *controller, bool on) {
     if (on) {
         [dualsense.rightTrigger setModeWeaponWithStartPosition:0.25f endPosition:0.55f resistiveStrength:0.5f];
         [dualsense.leftTrigger setModeFeedbackWithStartPosition:0.15f resistiveStrength:0.25f];
+        // the controller takes a moment to report the new modes back, so check once, a little later
+        static atomic_bool checked = false;
+        if (!atomic_exchange(&checked, true)) {
+            [dualsense retain];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), input_queue, ^{
+                printf("GameController bridge: adaptive triggers report R2 mode %ld, L2 mode %ld (0 = off)\n",
+                       (long)dualsense.rightTrigger.mode, (long)dualsense.leftTrigger.mode);
+                [dualsense release];
+            });
+        }
     } else {
         [dualsense.rightTrigger setModeOff];
         [dualsense.leftTrigger setModeOff];
