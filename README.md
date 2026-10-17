@@ -23,15 +23,18 @@ BO3MacFix reads `BO3MacFix/settings.ini` in the game's folder when the game star
 | `ThreadQoS` | 1 | Runs the game's main, render and job threads at the highest scheduling priority. |
 | `JobIdleFix` | 1 | Lets idle job threads sleep instead of spinning. |
 | `YieldSleep0` | 0 | Makes `Sleep(0)` yield like on Windows. |
+| `FastSetjmp` | 1 | Makes the script VMs' `setjmp`/`longjmp` skip saving the signal mask, a syscall each time. |
 | `FramesInFlight` | 2 | How many frames the CPU may queue ahead of the GPU, 1 to 3 (`MaxFrameLatency` in config.ini does nothing on Mac). |
 | `FramePacingFPS` | 0 | Keeps each frame on screen for at least 1/N of a second, 30 to 240, for even pacing below the refresh rate. |
-| `MetalFXUpscale` | 0 | Upscales with MetalFX when the game's resolution is lower than the screen's. Needs macOS 13. |
+| `MetalFXUpscale` | 0 | Upscales with MetalFX when the game's resolution is lower than the screen's. Use it with `FullScreenMode = 2` (Fullscreen Window) in config.ini, since Fullscreen switches the display to the game's resolution. Needs macOS 13. |
 | `ControllerMappings` | 1 | Lets DualShock 4, DualSense and DualSense Edge controllers work over USB. |
 | `ControllerBridge` | 0 | Reads DualShock 4 and DualSense controllers through macOS instead: Bluetooth and USB, rumble and lightbar. Turn Steam Input off for the game. Needs macOS 11.3. |
 | `ButtonPrompts` | 0 | 0 shows PlayStation buttons with a PlayStation controller, 1 always Xbox, 2 always PlayStation. |
 | `LightbarColor` | -1 | The lightbar colour as RRGGBB, with `ControllerBridge`. -1 leaves it alone. |
 | `ExitFix` | 1 | Quits without the crash (and crash report) Aspyr's shutdown causes every time. |
 | `AudioFollowsDefault` | 1 | Moves the game's audio to the new default output device, e.g. when AirPods connect or disconnect. |
+| `FrameStats` | 0 | Logs the frame rate, 1% low and worst frame time every N seconds. |
+| `GpuDiagnostics` | 0 | Logs the window, display mode and Metal layer whenever they change. |
 | `NoCodePatches` | 0 | For testing only: leaves the game's code exactly as shipped, without any of the fixes. Solo play only. |
 
 Most can also be set with an environment variable, `BO3MACFIX_` and the name in capitals. When the game is started
