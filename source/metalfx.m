@@ -70,9 +70,15 @@ static void updateDrawableSize_hook(id self, SEL sel) {
 
     if (native_width < forced_width || native_height < forced_height ||
         (native_width == forced_width && native_height == forced_height)) {
-        if (changed)
+        if (changed) {
             printf("MetalFX: the game's resolution %ix%i already fills the %ix%i screen, nothing to upscale\n",
                    forced_width, forced_height, native_width, native_height);
+            // FullScreenMode = 1 captures the display and switches it to a mode of the game's resolution
+            NSWindow *window = [self isKindOfClass:[NSView class]] ? ((NSView *)self).window : nil;
+            if (window != nil && window.level == CGShieldingWindowLevel() && native_width == forced_width)
+                printf("MetalFX: in Fullscreen the display itself switches to the game's resolution, use "
+                       "FullScreenMode = 2 (Fullscreen Window) in config.ini to upscale with MetalFX\n");
+        }
         return;
     }
     last_view = self;

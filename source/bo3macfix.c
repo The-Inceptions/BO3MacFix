@@ -26,6 +26,7 @@
 #include "codhavoktypes.h"
 #include "cpu_tuning.h"
 #include "dobby.h"
+#include "gpu_diag.h"
 #include "gpu_tweaks.h"
 #include "havok.h"
 #include "utilities.h"
@@ -1051,6 +1052,9 @@ __attribute__((constructor)) static void dylib_main() {
 
     // log the frame rate every FrameStats seconds (0 = off), see gpu_tweaks.c
     gpu_tweaks_frame_stats_init(read_int_setting("FrameStats", 0), checked_code_patch);
+
+    // logs how frames get to the screen when GpuDiagnostics = 1, see gpu_diag.m
+    gpu_diag_init(read_int_setting("GpuDiagnostics", 0));
 
     // pre-fetch the wine path so we don't need to search earlier
     get_wine_path();

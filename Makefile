@@ -27,7 +27,7 @@ SOURCES += source/gc_bridge.m
 FRAMEWORKS += -framework Foundation -weak_framework GameController -weak_framework CoreHaptics
 
 # MetalFX upscaling (metalfx.m), MetalFX is weak-linked because it needs macOS 13
-SOURCES += source/metalfx.m
+SOURCES += source/metalfx.m source/gpu_diag.m
 
 # the pre-patched executable (prepatch.c), the launcher builds it with BO3MacFix_BuildPrepatched
 SOURCES += source/prepatch.c
