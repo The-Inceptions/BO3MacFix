@@ -16,6 +16,9 @@ by Emma / InvoxiPlayGames and Anthony / serious.
 BO3MacFix reads `BO3MacFix/settings.ini` in the game's folder when the game starts, one `Name = value` per line
 (lines starting with `//` are comments). All of them are optional.
 
+They can also be changed in the game: pick **BO3MACFIX SETTINGS** in the main menu, or press F10 in the start
+menu. Settings marked "(restart)" take effect after a restart, which the page offers to do.
+
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `PrePatchedExe` | 1 | Starts a copy of the game with BO3MacFix's changes already made in the file (`CoDBlkOps3_Exe.bo3macfix`, remade after game or BO3MacFix updates), so Rosetta runs it from its ahead-of-time translation instead of its slower JIT. 0 starts the original. |
