@@ -34,6 +34,7 @@
 #include "prepatch.h"
 #include "qol.h"
 #include "rawmouse.h"
+#include "settings_menu.h"
 #include "steam.h"
 #include "stream_stall_recovery.h"
 #include "t7overcharged.h"
@@ -884,11 +885,22 @@ install_hook_name(Lua_GetBuildIntField, int, lua_State *s) {
 
 install_hook_name(Lua_GetBuildStringField, int, lua_State *s) {
     float field;
-    if (hks_number_arg(s, 1, &field) && (int)field == BUILD_STRINGFIELD_BUILD_TIME) {
+    bool build_time = hks_number_arg(s, 1, &field) && (int)field == BUILD_STRINGFIELD_BUILD_TIME;
+    // All-around Enhancement's scripts call this while they load: a chance to set up the in-game settings page (it
+    // puts the stack back)
+    settings_menu_run(s);
+    if (build_time) {
         hks_push_string(s, PC_BUILD_TIME);
         return 1;
     }
     return orig_Lua_GetBuildStringField(s);
+}
+
+// The stock frontend's UI calls Engine.Exec when it makes its main menu ("checkforinvites"), and nothing else we hook
+// runs in the UI's Lua state without a mod: another chance to set up the in-game settings page
+install_hook_name(Lua_Exec, int, lua_State *s) {
+    settings_menu_run(s);
+    return orig_Lua_Exec(s);
 }
 
 static int (*SDL_PrivateGameControllerAddMapping)(const char *mappingString, int priority);
@@ -971,6 +983,7 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_Com_GetBuildIntField((void *)(game_base_address + ADDR_Com_GetBuildIntField));
     install_hook_Lua_GetBuildIntField((void *)(game_base_address + ADDR_Lua_GetBuildIntField));
     install_hook_Lua_GetBuildStringField((void *)(game_base_address + ADDR_Lua_GetBuildStringField));
+    install_hook_Lua_Exec((void *)(game_base_address + ADDR_Lua_Exec));
     //install_hook_SDL_GameControllerInitMappings((void *)(game_base_address + ADDR_SDL_GameControllerInitMappings));
 
     // set up functions that we later call

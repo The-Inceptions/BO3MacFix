@@ -67,6 +67,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_load_workshop_texture, Push_R15 },
     { ADDR_LobbyMsgRW_PrepReadMsg, Push_R14 },
     { ADDR_LobbyMsgRW_PrepWriteMsg, Push_R14 },
+    { ADDR_Lua_Exec, Push_R14 },
     { ADDR_Lua_GetBuildIntField, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
     { ADDR_Lua_GetBuildStringField, Push_R14 },
     { ADDR_SDL_SetWindowTitle, Push_R14 },

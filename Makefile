@@ -34,6 +34,8 @@ SOURCES += source/prepatch.c
 
 # settings.ini's options for an in-game menu, the settings.ini writer and restarting (settings.c)
 SOURCES += source/settings.c
+# the in-game settings page that uses it (settings_menu.c)
+SOURCES += source/settings_menu.c
 
 # quitting without a crash and audio following the default output device (qol.c)
 SOURCES += source/qol.c source/rawmouse.c
@@ -48,14 +50,18 @@ test: $(TEST_TARGET)
 $(TEST_TARGET): tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_stream_stall_recovery.c source/stream_stall_recovery.c
 
-$(TARGET): $(SOURCES) source/t7overcharged_lua.h
+$(TARGET): $(SOURCES) source/t7overcharged_lua.h source/settings_menu_lua.h
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(DEFINES) $(LDFLAGS) -o $@ $(SOURCES)
 
 # the Lua half of our T7Overcharged support, embedded as a byte array
 source/t7overcharged_lua.h: source/t7overcharged.lua
 	cd source && xxd -i t7overcharged.lua > t7overcharged_lua.h
 
+# the in-game settings page's Lua (settings_menu.c), embedded as a byte array
+source/settings_menu_lua.h: source/settings_menu.lua
+	cd source && xxd -i settings_menu.lua > settings_menu_lua.h
+
 clean:
-	rm -f -- $(TARGET) $(TEST_TARGET) source/t7overcharged_lua.h
+	rm -f -- $(TARGET) $(TEST_TARGET) source/t7overcharged_lua.h source/settings_menu_lua.h
 
 .PHONY: all clean test

@@ -29,6 +29,7 @@
 #define ADDR_DB_GetStreamFraction 0x127c182 // func - name is a guess
 #define ADDR_Com_GetBuildIntField 0xf16d9a // func
 #define ADDR_Lua_GetBuildStringField 0xe66e2f // func - Engine.GetBuildStringField
+#define ADDR_Lua_Exec 0x13a83fa // func - Engine.Exec
 #define ADDR_Lua_GetBuildIntField 0xe66e92 // func - Engine.GetBuildIntField
 #define ADDR_hksi_lua_pushlstring 0x1409c50 // func
 #define ADDR_hksi_luaL_checklstring 0x1473440 // func
