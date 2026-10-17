@@ -1058,6 +1058,10 @@ __attribute__((constructor)) static void dylib_main() {
     // log the frame rate every FrameStats seconds (0 = off), see gpu_tweaks.c
     gpu_tweaks_frame_stats_init(read_int_setting("FrameStats", 0), checked_code_patch);
 
+    // limit the frame rate on battery (BatteryFPS, 0 = off) and show the Metal HUD (MetalHUD), see gpu_tweaks.c
+    gpu_tweaks_battery_fps_init(read_int_setting("BatteryFPS", 0), checked_code_patch);
+    gpu_tweaks_metal_hud_init(read_int_setting("MetalHUD", 0));
+
     // quitting without Aspyr's shutdown crash, and game audio following the default output device (see qol.c)
     qol_init(read_int_setting("ExitFix", 1), read_int_setting("AudioFollowsDefault", 1));
 

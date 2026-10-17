@@ -39,6 +39,8 @@ BO3MacFix reads `BO3MacFix/settings.ini` in the game's folder when the game star
 | `ExitFix` | 1 | Quits without the crash (and crash report) Aspyr's shutdown causes every time. |
 | `AudioFollowsDefault` | 1 | Moves the game's audio to the new default output device, e.g. when AirPods connect or disconnect. |
 | `FrameStats` | 0 | Logs the frame rate, 1% low and worst frame time every N seconds. |
+| `BatteryFPS` | 0 | Limits the frame rate to N (30 to 240) only while the Mac runs on battery, to save power. |
+| `MetalHUD` | 0 | Shows macOS's Metal performance HUD (FPS and GPU time). |
 | `GpuDiagnostics` | 0 | Logs the window, display mode and Metal layer whenever they change. |
 | `NoCodePatches` | 0 | For testing only: leaves the game's code exactly as shipped, without any of the fixes. Solo play only. |
 

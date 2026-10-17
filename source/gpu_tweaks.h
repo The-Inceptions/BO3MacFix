@@ -15,4 +15,10 @@ void gpu_tweaks_metalfx_init(int metalfx_upscale, code_patch_fn checked_code_pat
 // seconds: how often to log the frame rate, 1% low and worst frame time, 0 = off
 void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch);
 
+// fps: the frame rate limit while on battery, 30 to 240 (0 = off)
+void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch);
+
+// turns on macOS's Metal performance HUD (FPS and GPU time) when enabled
+void gpu_tweaks_metal_hud_init(int enabled);
+
 #endif

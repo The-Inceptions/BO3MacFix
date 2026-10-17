@@ -6,11 +6,18 @@
 // - MetalFXUpscale: when the game runs below the screen's resolution, upscales each frame to the screen's
 //   native size with MetalFX instead of letting Core Animation stretch it, see metalfx.m.
 // - FrameStats: logs the frame rate, 1% low and worst frame time every few seconds, for benchmarking.
+// - BatteryFPS: paces frames to that rate only while the Mac runs on battery, to save power.
+// - MetalHUD: turns on macOS's Metal performance HUD.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <mach/mach.h>
+#include <stdatomic.h>
+#include <dispatch/dispatch.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/ps/IOPowerSources.h>
+#include <IOKit/ps/IOPSKeys.h>
 #include <mach/mach_time.h>
 #include <mach/mach_vm.h>
 #include <objc/runtime.h>
@@ -27,6 +34,8 @@ static double present_min_duration; // 0 when not pacing
 static SEL sel_present_after_minimum_duration;
 static int metalfx_active = 0;
 static int frame_stats_seconds = 0; // 0 when not logging frame stats
+static double battery_min_duration = 0; // 1/BatteryFPS, 0 when not limiting on battery
+static atomic_bool on_battery = false;
 
 static int compare_floats(const void *a, const void *b) {
     float x = *(const float *)a, y = *(const float *)b;
@@ -65,11 +74,14 @@ static void present_drawable(id command_buffer, SEL sel, id drawable) {
         frame_stats_tick();
     if (metalfx_active)
         metalfx_before_present(command_buffer);
+    double min_duration = present_min_duration;
+    if (battery_min_duration > min_duration && atomic_load(&on_battery))
+        min_duration = battery_min_duration;
     static int supported = -1;
-    if (present_min_duration > 0 && supported == -1)
+    if (min_duration > 0 && supported == -1)
         supported = class_respondsToSelector(object_getClass(command_buffer), sel_present_after_minimum_duration);
-    if (present_min_duration > 0 && supported)
-        ((void (*)(id, SEL, id, double))objc_msgSend)(command_buffer, sel_present_after_minimum_duration, drawable, present_min_duration);
+    if (min_duration > 0 && supported)
+        ((void (*)(id, SEL, id, double))objc_msgSend)(command_buffer, sel_present_after_minimum_duration, drawable, min_duration);
     else
         ((void (*)(id, SEL, id))objc_msgSend)(command_buffer, sel, drawable);
 }
@@ -185,4 +197,54 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch) 
     }
     frame_stats_seconds = seconds;
     printf("logging frame stats every %i s\n", seconds);
+}
+
+// whether the Mac is running on battery right now (BO3MACFIX_ONBATTERY=1 pretends it is, for testing)
+static bool running_on_battery(void) {
+    const char *env = getenv("BO3MACFIX_ONBATTERY");
+    if (env != NULL)
+        return atoi(env) != 0;
+    CFTypeRef info = IOPSCopyPowerSourcesInfo();
+    if (info == NULL)
+        return false;
+    CFStringRef source = IOPSGetProvidingPowerSourceType(info);
+    bool battery = source != NULL && CFStringCompare(source, CFSTR(kIOPMBatteryPowerKey), 0) == kCFCompareEqualTo;
+    CFRelease(info);
+    return battery;
+}
+
+void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch) {
+    const char *env = getenv("BO3MACFIX_BATTERYFPS");
+    if (env != NULL)
+        fps = atoi(env);
+    if (fps < 30 || fps > 240)
+        return;
+    if (!redirect_present(checked_code_patch)) {
+        printf("couldn't hook Aspyr's present, no BatteryFPS\n");
+        return;
+    }
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    battery_min_duration = 1.0 / fps;
+    atomic_store(&on_battery, running_on_battery());
+    // check the power source every 5 seconds
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC);
+    dispatch_source_set_event_handler(timer, ^{
+        bool battery = running_on_battery();
+        if (battery != atomic_exchange(&on_battery, battery))
+            printf("%s, %s\n", battery ? "running on battery" : "plugged in", battery ? "limiting the frame rate" : "frame rate unlimited");
+    });
+    dispatch_resume(timer);
+    printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&on_battery) ? "on battery" : "plugged in");
+}
+
+void gpu_tweaks_metal_hud_init(int enabled) {
+    const char *env = getenv("BO3MACFIX_METALHUD");
+    if (env != NULL)
+        enabled = atoi(env);
+    // Metal reads this when the game creates its device, which is after we start
+    if (enabled) {
+        setenv("MTL_HUD_ENABLED", "1", 1);
+        printf("Metal performance HUD on\n");
+    }
 }
