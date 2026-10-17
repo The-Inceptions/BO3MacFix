@@ -8,6 +8,12 @@
 // BO3MACFIX_CONTROLLERBRIDGE and BO3MACFIX_LIGHTBARCOLOR (RRGGBB) at env override both.
 void gc_bridge_init(uint64_t base_address, int mode, int lightbar_rgb);
 
+// DualSense extras for bridged controllers, call before gc_bridge_init. gyro: 0 = off, 1 = gyro aiming always,
+// 2 = only while L2 is held. gyro_sensitivity: percent. gyro_invert: 1 = vertical, 2 = horizontal, 3 = both.
+// triggers: 1 = adaptive trigger resistance on L2 and R2. Env: BO3MACFIX_GYROAIM, _GYROSENSITIVITY, _GYROINVERT,
+// _ADAPTIVETRIGGERS.
+void gc_bridge_set_dualsense_options(int gyro, int gyro_sensitivity, int gyro_invert, int triggers);
+
 // is the bridge on? controllers.c then keeps the game's SDL away from Sony controllers, so they don't give double input
 bool gc_bridge_enabled(void);
 

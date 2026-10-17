@@ -1036,6 +1036,8 @@ __attribute__((constructor)) static void dylib_main() {
 
     // DualSense/DualShock 4 through macOS's GameController framework (Bluetooth, rumble, lightbar), see gc_bridge.m.
     // Before controllers_init, which then leaves PlayStation controllers to it.
+    gc_bridge_set_dualsense_options(read_int_setting("GyroAim", 0), read_int_setting("GyroSensitivity", 100),
+                                    read_int_setting("GyroInvert", 0), read_int_setting("AdaptiveTriggers", 0));
     gc_bridge_init(game_base_address, read_int_setting("ControllerBridge", 0), read_hex_setting("LightbarColor", -1));
 
     // DualSense/DualShock 4 mappings for SDL, and PlayStation button prompts (0 = auto, 1 = Xbox, 2 = PlayStation)

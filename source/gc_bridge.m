@@ -13,6 +13,7 @@
 #import <CoreHaptics/CoreHaptics.h>
 #include <IOKit/hid/IOHIDManager.h>
 #include <IOKit/hid/IOHIDKeys.h>
+#include <math.h>
 #include <os/lock.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -56,17 +57,25 @@ typedef struct {
     int user_index;             // XInput user index the game reads it on, -1 = waiting for a free one
     XINPUT_STATE state;
     uint16_t wanted_motors[2];  // last speeds from XInputSetState
+    int16_t gyro[2];            // right stick deflection GyroAim adds (x, y)
     // only on input_queue:
     id engines[2];              // CHHapticEngine for the left (large) and right (small) motor, or one for both
     id players[2];              // CHHapticPatternPlayer
     int engine_count;
     uint16_t motors[2];         // speeds the players are running at
     double haptics_retry_at;    // CFAbsoluteTime after which setting up rumble may be tried again
+    float gyro_bias[3];         // the gyro's reading at rest, learned while the controller is still
+    float gyro_smooth[2];       // smoothed yaw and pitch rate
+    int gyro_samples;
 } bridged_pad;
 
 static uint64_t base_address;
 static bool enabled;
 static int lightbar_color = -1;
+static int gyro_mode = 0;              // GyroAim: 0 = off, 1 = always, 2 = only while L2 is held
+static float gyro_scale = 1.0f;        // GyroSensitivity / 100
+static int gyro_invert = 0;            // GyroInvert: 1 = vertical, 2 = horizontal, 3 = both
+static bool adaptive_triggers = false; // AdaptiveTriggers
 static atomic_bool app_active = true;
 static os_unfair_lock pads_lock = OS_UNFAIR_LOCK_INIT;
 static bridged_pad pads[XUSER_MAX_COUNT];
@@ -190,6 +199,77 @@ static void update_state(bridged_pad *pad, GCExtendedGamepad *gamepad) {
     os_unfair_lock_unlock(&pads_lock);
 }
 
+// GyroAim: the controller's turn rate becomes extra right stick deflection, about 2.5 rad/s (140 degrees a second)
+// for full deflection at GyroSensitivity 100. It starts just past the game's stick deadzone, so small movements
+// still turn the view, then the game's own stick response applies.
+#define Gyro_Full_Rate 2.5f
+#define Gyro_Min_Deflection 0.15f
+#define Gyro_Deadzone 0.012f // rad/s once the bias is removed
+#define Gyro_Still 0.05f     // rad/s, below this on every axis the controller counts as resting
+
+static int16_t gyro_deflection(float rate) {
+    float magnitude = fabsf(rate);
+    if (magnitude < Gyro_Deadzone)
+        return 0;
+    float deflection = Gyro_Min_Deflection + (1.0f - Gyro_Min_Deflection) * fminf((magnitude - Gyro_Deadzone) / Gyro_Full_Rate, 1.0f);
+    return (int16_t)copysignf(deflection * 32767.0f, rate);
+}
+
+static int16_t add_stick(int16_t stick, int16_t extra) {
+    int sum = stick + extra;
+    return sum > 32767 ? 32767 : sum < -32768 ? -32768 : (int16_t)sum;
+}
+
+// runs on input_queue for every gyro reading (about 250 a second from a DualSense)
+API_AVAILABLE(macos(11.3))
+static void gyro_update(bridged_pad *pad, GCMotion *motion) {
+    GCRotationRate r = motion.rotationRate;
+    float rate[3] = { (float)r.x, (float)r.y, (float)r.z };
+    // at rest the gyro reads a small constant rate (about 0.02 rad/s on x on one DualSense), which would slowly
+    // turn the view: learn it quickly at first, then slowly, whenever the controller is still
+    bool still = true;
+    for (int i = 0; i < 3; i++)
+        still = still && fabsf(rate[i] - pad->gyro_bias[i]) < Gyro_Still;
+    if (still || pad->gyro_samples < 50) {
+        float rate_of_learning = pad->gyro_samples < 250 ? 0.05f : 0.002f;
+        for (int i = 0; i < 3; i++)
+            pad->gyro_bias[i] += (rate[i] - pad->gyro_bias[i]) * rate_of_learning;
+    }
+    pad->gyro_samples++;
+    // turning the controller left (about its up axis, y) looks left; tilting its front up (about x) looks up
+    float yaw = -(rate[1] - pad->gyro_bias[1]) * gyro_scale, pitch = (rate[0] - pad->gyro_bias[0]) * gyro_scale;
+    if (gyro_invert & 1)
+        pitch = -pitch;
+    if (gyro_invert & 2)
+        yaw = -yaw;
+    pad->gyro_smooth[0] += (yaw - pad->gyro_smooth[0]) * 0.35f;
+    pad->gyro_smooth[1] += (pitch - pad->gyro_smooth[1]) * 0.35f;
+    int16_t x = pad->gyro_samples < 250 ? 0 : gyro_deflection(pad->gyro_smooth[0]);
+    int16_t y = pad->gyro_samples < 250 ? 0 : gyro_deflection(pad->gyro_smooth[1]);
+    os_unfair_lock_lock(&pads_lock);
+    if (pad->controller == motion.controller && (pad->gyro[0] != x || pad->gyro[1] != y)) {
+        pad->gyro[0] = x;
+        pad->gyro[1] = y;
+        pad->state.dwPacketNumber++;
+    }
+    os_unfair_lock_unlock(&pads_lock);
+}
+
+// AdaptiveTriggers: a trigger break on R2 like a gun's, and light resistance on L2 for aiming down sights
+API_AVAILABLE(macos(11.3))
+static void set_adaptive_triggers(GCController *controller, bool on) {
+    if (![controller.extendedGamepad isKindOfClass:[GCDualSenseGamepad class]])
+        return;
+    GCDualSenseGamepad *dualsense = (GCDualSenseGamepad *)controller.extendedGamepad;
+    if (on) {
+        [dualsense.rightTrigger setModeWeaponWithStartPosition:0.25f endPosition:0.55f resistiveStrength:0.5f];
+        [dualsense.leftTrigger setModeFeedbackWithStartPosition:0.15f resistiveStrength:0.25f];
+    } else {
+        [dualsense.rightTrigger setModeOff];
+        [dualsense.leftTrigger setModeOff];
+    }
+}
+
 // DWORD XInputGetState(DWORD dwUserIndex, XINPUT_STATE *pState)
 install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STATE *state) {
     if (enabled && user_index < XUSER_MAX_COUNT) {
@@ -199,10 +279,16 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
         if (pad != NULL) {
             // like Aspyr's, a neutral state while XInput is disabled, and also while the game isn't focused
             bool active = atomic_load(&app_active) && (*(volatile uint8_t *)(base_address + ADDR_ASL_XInputEnabled) & 1);
-            if (active)
+            if (active) {
                 *state = pad->state;
-            else
+                // GyroAim = 2 only aims with the gyro while L2 (aim down sights) is held
+                if (gyro_mode == 1 || (gyro_mode == 2 && state->Gamepad.bLeftTrigger > 30)) {
+                    state->Gamepad.sThumbRX = add_stick(state->Gamepad.sThumbRX, pad->gyro[0]);
+                    state->Gamepad.sThumbRY = add_stick(state->Gamepad.sThumbRY, pad->gyro[1]);
+                }
+            } else {
                 memset(state, 0, sizeof(*state));
+            }
             os_unfair_lock_unlock(&pads_lock);
             return ERROR_SUCCESS;
         }
@@ -484,6 +570,7 @@ static void controller_connected(GCController *controller) {
     }
     memset(&pad->state, 0, sizeof(pad->state));
     pad->wanted_motors[0] = pad->wanted_motors[1] = 0;
+    pad->gyro[0] = pad->gyro[1] = 0;
     pad->kind = kind;
     pad->user_index = first_free_user_index();
     pad->controller = [controller retain];
@@ -518,8 +605,28 @@ static void controller_connected(GCController *controller) {
     gamepad.valueChangedHandler = ^(GCExtendedGamepad *changed, GCControllerElement *element) {
         update_state(pad, changed);
     };
+    GCMotion *motion = controller.motion;
+    if (gyro_mode != 0 && motion != nil && motion.hasRotationRate) {
+        if (motion.sensorsRequireManualActivation)
+            motion.sensorsActive = YES;
+        motion.valueChangedHandler = ^(GCMotion *changed) {
+            gyro_update(pad, changed);
+        };
+        printf("GameController bridge: gyro aim on for player %i (%s, sensitivity %.0f%%)\n", user_index + 1,
+               gyro_mode == 2 ? "while L2 is held" : "always", gyro_scale * 100.0f);
+    } else if (gyro_mode != 0) {
+        printf("GameController bridge: this %s has no gyro macOS can read\n", kind);
+    }
+    if (adaptive_triggers && [gamepad isKindOfClass:[GCDualSenseGamepad class]]) {
+        set_adaptive_triggers(controller, true);
+        GCDualSenseGamepad *dualsense = (GCDualSenseGamepad *)gamepad;
+        printf("GameController bridge: adaptive triggers on (R2 mode %ld, L2 mode %ld)\n", (long)dualsense.rightTrigger.mode,
+               (long)dualsense.leftTrigger.mode);
+    }
     dispatch_async(input_queue, ^{
         @autoreleasepool {
+            pad->gyro_samples = 0;
+            pad->gyro_smooth[0] = pad->gyro_smooth[1] = 0.0f;
             update_state(pad, gamepad);
             start_haptics(pad, controller, user_index);
         }
@@ -539,6 +646,7 @@ static void controller_disconnected(GCController *controller) {
         if (!match)
             continue;
         controller.extendedGamepad.valueChangedHandler = nil;
+        controller.motion.valueChangedHandler = nil;
         if (user_index >= 0)
             printf("GameController bridge: %s on player %i disconnected\n", pad->kind, user_index + 1);
         else
@@ -571,6 +679,8 @@ static void app_focus_changed(bool active) {
                 if (active)
                     update_state(pad, controller.extendedGamepad);
                 apply_motors(pad);
+                if (adaptive_triggers)
+                    set_adaptive_triggers(controller, active);
                 [controller release];
             }
         }
@@ -611,6 +721,17 @@ bool gc_bridge_is_playstation_user(int user_index) {
     bool playstation = pad_for_user(user_index) != NULL; // only PlayStation controllers are bridged
     os_unfair_lock_unlock(&pads_lock);
     return playstation;
+}
+
+void gc_bridge_set_dualsense_options(int gyro, int gyro_sensitivity, int gyro_invert_axes, int triggers) {
+    const char *env = getenv("BO3MACFIX_GYROAIM");
+    gyro_mode = env != NULL ? atoi(env) : gyro;
+    env = getenv("BO3MACFIX_GYROSENSITIVITY");
+    gyro_scale = (env != NULL ? atoi(env) : gyro_sensitivity) / 100.0f;
+    env = getenv("BO3MACFIX_GYROINVERT");
+    gyro_invert = env != NULL ? atoi(env) : gyro_invert_axes;
+    env = getenv("BO3MACFIX_ADAPTIVETRIGGERS");
+    adaptive_triggers = (env != NULL ? atoi(env) : triggers) != 0;
 }
 
 static int parse_rgb(const char *text) {
