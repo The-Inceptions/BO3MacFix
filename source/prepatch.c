@@ -83,6 +83,7 @@ typedef struct {
 static const value_def_t value_defs[] = {
     { ADDR_JobThreadsDvar_DefaultInstr, { 0xBA, 0x02, 0x00, 0x00, 0x00 } },      // mov edx, 2
     { ADDR_JQ_IdleWait_TimeoutInstr, { 0xBE, 0x01, 0x00, 0x00, 0x00 } },         // mov esi, 1
+    { ADDR_RenderThread_WaitTimeoutInstr, { 0xBF, 0x01, 0x00, 0x00, 0x00 } },    // mov edi, 1
     { ADDR_ASL_FramesInFlightSemaphoreInstr, { 0xBF, 0x02, 0x00, 0x00, 0x00 } }, // mov edi, 2
 };
 

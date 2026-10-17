@@ -22,6 +22,7 @@ BO3MacFix reads `BO3MacFix/settings.ini` in the game's folder when the game star
 | `JobThreads` | 2 | How many job worker threads the game uses, 2 to 4. |
 | `ThreadQoS` | 1 | Runs the game's main, render and job threads at the highest scheduling priority. |
 | `JobIdleFix` | 1 | Lets idle job threads sleep instead of spinning. |
+| `RenderIdleFix` | 1 | Lets the render thread sleep while it waits for the next frame, instead of spinning. |
 | `YieldSleep0` | 0 | Makes `Sleep(0)` yield like on Windows. |
 | `FastSetjmp` | 1 | Makes the script VMs' `setjmp`/`longjmp` skip saving the signal mask, a syscall each time. |
 | `FramesInFlight` | 2 | How many frames the CPU may queue ahead of the GPU, 1 to 3 (`MaxFrameLatency` in config.ini does nothing on Mac). |

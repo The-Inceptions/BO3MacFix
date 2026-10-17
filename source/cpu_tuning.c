@@ -65,6 +65,16 @@ static void job_idle_wait_patch(void) {
         printf("job workers wait when idle\n");
 }
 
+// The render thread waits for work the same way: WaitForSingleObject(event, 1 ms), then Sleep(0) (a ~6 us nanosleep)
+// if nothing came, over and over, so it spins whenever it's idle. A 2 ms wait really blocks, and the main thread
+// sets the event when it hands over a frame, so the render thread still wakes straight away.
+static void render_idle_wait_patch(void) {
+    static const uint8_t mov_edi_1[] = { 0xBF, 0x01, 0x00, 0x00, 0x00 };
+    uint8_t mov_edi_2[] = { 0xBF, 0x02, 0x00, 0x00, 0x00 };
+    if (cpu_checked_code_patch(ADDR_RenderThread_WaitTimeoutInstr, mov_edi_1, mov_edi_2, sizeof(mov_edi_2)))
+        printf("render thread waits when idle\n");
+}
+
 // The game's setjmp and longjmp also save and restore the signal mask, which is a system call each time: about
 // 200 ns under Rosetta, against 7 ns for _setjmp, which only saves registers. The GSC script VM calls setjmp for
 // every script thread it runs, and HavokScript for every protected call. Nothing in the game longjmps out of a
@@ -98,13 +108,16 @@ static int env_override(const char *name, int value) {
     return env != NULL ? atoi(env) : value;
 }
 
-void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fix, int yield_sleep0, int fast_setjmp) {
+void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fix, int yield_sleep0, int fast_setjmp,
+                     int render_idle_fix) {
     base_address = game_base_address;
     thread_qos_enabled = env_override("BO3MACFIX_THREADQOS", thread_qos) != 0;
     if (thread_qos_enabled)
         printf("game threads use user-interactive QoS\n");
     if (env_override("BO3MACFIX_JOBIDLEFIX", job_idle_fix) != 0)
         job_idle_wait_patch();
+    if (env_override("BO3MACFIX_RENDERIDLEFIX", render_idle_fix) != 0)
+        render_idle_wait_patch();
     if (env_override("BO3MACFIX_YIELDSLEEP0", yield_sleep0) != 0) {
         install_hook_ASL_SleepEx((void *)(base_address + ADDR_ASL_SleepEx));
         printf("Sleep(0) yields\n");
