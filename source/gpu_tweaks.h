@@ -12,4 +12,7 @@ void gpu_tweaks_init(int frames_in_flight, int pacing_fps, code_patch_fn checked
 // metalfx_upscale: 1 upscales to the screen's native size with MetalFX when the game runs at a lower resolution, 0 = off
 void gpu_tweaks_metalfx_init(int metalfx_upscale, code_patch_fn checked_code_patch);
 
+// seconds: how often to log the frame rate, 1% low and worst frame time, 0 = off
+void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch);
+
 #endif

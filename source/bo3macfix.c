@@ -926,11 +926,11 @@ __attribute__((constructor)) static void dylib_main() {
     // started from Steam our log goes nowhere, so keep it in BO3MacFix/log.txt (replaced every launch)
     struct stat out_stat;
     if (!isatty(STDOUT_FILENO) && (fstat(STDOUT_FILENO, &out_stat) != 0 || !S_ISREG(out_stat.st_mode))) {
-        if (freopen(Macfix_Path "/log.txt", "w", stdout) != NULL) {
-            setvbuf(stdout, NULL, _IOLBF, 0);
+        if (freopen(Macfix_Path "/log.txt", "w", stdout) != NULL)
             dup2(fileno(stdout), STDERR_FILENO);
-        }
     }
+    // write the log out line by line, so nothing is lost if the game crashes or is killed
+    setvbuf(stdout, NULL, _IOLBF, 0);
 
     // get the base address of the binary
     game_base_address = get_base_address();
@@ -1048,6 +1048,9 @@ __attribute__((constructor)) static void dylib_main() {
 
     // MetalFX upscaling when the game runs below the screen's resolution (MetalFXUpscale, 0 = off), see metalfx.m
     gpu_tweaks_metalfx_init(read_int_setting("MetalFXUpscale", 0), checked_code_patch);
+
+    // log the frame rate every FrameStats seconds (0 = off), see gpu_tweaks.c
+    gpu_tweaks_frame_stats_init(read_int_setting("FrameStats", 0), checked_code_patch);
 
     // pre-fetch the wine path so we don't need to search earlier
     get_wine_path();
