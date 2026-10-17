@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <pthread/qos.h>
 #include <sched.h>
+#include <setjmp.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,12 +65,40 @@ static void job_idle_wait_patch(void) {
         printf("job workers wait when idle\n");
 }
 
+// The game's setjmp and longjmp also save and restore the signal mask, which is a system call each time: about
+// 200 ns under Rosetta, against 7 ns for _setjmp, which only saves registers. The GSC script VM calls setjmp for
+// every script thread it runs, and HavokScript for every protected call. Nothing in the game longjmps out of a
+// signal handler (its only handlers, SDL's, just set a flag), so it doesn't need the mask: point its setjmp and
+// longjmp imports at _setjmp and _longjmp. That writes its lazy symbol pointers, which are data, so the
+// pre-patched executable keeps its ahead-of-time translation.
+static void **import_pointer(uint32_t stub) {
+    const uint8_t *code = (const uint8_t *)(base_address + stub);
+    if (code[0] != 0xFF || code[1] != 0x25) // jmp qword ptr [rip + pointer]
+        return NULL;
+    int32_t disp;
+    memcpy(&disp, code + 2, sizeof(disp));
+    return (void **)(code + 6 + disp);
+}
+
+static void fast_setjmp_patch(void) {
+    void **setjmp_pointer = import_pointer(ADDR_Stub_setjmp);
+    void **longjmp_pointer = import_pointer(ADDR_Stub_longjmp);
+    // both or neither, a jmp_buf from _setjmp has no signal mask for longjmp to restore
+    if (setjmp_pointer == NULL || longjmp_pointer == NULL) {
+        printf("unexpected code at %08x or %08x, not changing setjmp\n", ADDR_Stub_setjmp, ADDR_Stub_longjmp);
+        return;
+    }
+    *setjmp_pointer = (void *)_setjmp;
+    *longjmp_pointer = (void *)_longjmp;
+    printf("game setjmp/longjmp skip the signal mask\n");
+}
+
 static int env_override(const char *name, int value) {
     const char *env = getenv(name);
     return env != NULL ? atoi(env) : value;
 }
 
-void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fix, int yield_sleep0) {
+void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fix, int yield_sleep0, int fast_setjmp) {
     base_address = game_base_address;
     thread_qos_enabled = env_override("BO3MACFIX_THREADQOS", thread_qos) != 0;
     if (thread_qos_enabled)
@@ -80,4 +109,6 @@ void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fi
         install_hook_ASL_SleepEx((void *)(base_address + ADDR_ASL_SleepEx));
         printf("Sleep(0) yields\n");
     }
+    if (env_override("BO3MACFIX_FASTSETJMP", fast_setjmp) != 0)
+        fast_setjmp_patch();
 }

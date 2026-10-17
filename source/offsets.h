@@ -37,6 +37,8 @@
 #define ADDR_hks_pushnamedcclosure 0x1476385 // func
 #define ADDR_R_TrackTextureMemory 0x126dad2 // func - name is a guess
 #define ADDR_ASL_SleepEx 0x111752 // func - Aspyr's Sleep/SleepEx(milliseconds, alertable)
+#define ADDR_Stub_setjmp 0x1627c20 // __stubs entry for setjmp, jmp [lazy symbol pointer]
+#define ADDR_Stub_longjmp 0x16279b0 // __stubs entry for longjmp, jmp [lazy symbol pointer]
 #define ADDR_SDL_SetWindowTitle 0x1944d0 // func
 #define ADDR_LiveSteam_RunEveryFrame 0x1434f3e // func
 #define ADDR_SomeControllerTypeFunc 0x122f78d // func
