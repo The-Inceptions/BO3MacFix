@@ -32,6 +32,10 @@ BO3MacFix reads `BO3MacFix/settings.ini` in the game's folder when the game star
 | `ControllerBridge` | 0 | Reads DualShock 4 and DualSense controllers through macOS instead: Bluetooth and USB, rumble and lightbar. Turn Steam Input off for the game. Needs macOS 11.3. |
 | `ButtonPrompts` | 0 | 0 shows PlayStation buttons with a PlayStation controller, 1 always Xbox, 2 always PlayStation. |
 | `LightbarColor` | -1 | The lightbar colour as RRGGBB, with `ControllerBridge`. -1 leaves it alone. |
+| `GyroAim` | 0 | Experimental: aims with the DualSense's gyro on top of the right stick, 1 always, 2 while L2 is held. With `ControllerBridge`. `GyroSensitivity` (percent) and `GyroInvert` (1 vertical, 2 horizontal, 3 both) tune it. |
+| `AdaptiveTriggers` | 0 | Experimental: gives the DualSense's R2 a weapon-style break and L2 light resistance. With `ControllerBridge`. |
+| `RawMouse` | 0 | Experimental: aims with raw mouse counts instead of macOS's accelerated movement. `RawMouseScale` (percent) sets the speed. |
+| `AAEOnline` | 0 | Lets All-around Enhancement fetch its version notes and weather (HTTPS GET only, to raw.githubusercontent.com and wttr.in). |
 | `ExitFix` | 1 | Quits without the crash (and crash report) Aspyr's shutdown causes every time. |
 | `AudioFollowsDefault` | 1 | Moves the game's audio to the new default output device, e.g. when AirPods connect or disconnect. |
 | `FrameStats` | 0 | Logs the frame rate, 1% low and worst frame time every N seconds. |
