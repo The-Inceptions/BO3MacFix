@@ -1,15 +1,16 @@
-// GpuDiagnostics = 1: logs how the game's frames get to the screen (its window, the display mode and the Metal layer)
-// whenever that changes, for example whether Fullscreen switched the display's mode.
+// GpuDiagnostics = 1: logs how the game's frames get to the screen (its window, the display and its mode, the Metal layer
+// and MetalFX) whenever that changes, for example when the game window moves to another display.
 //
-// FullScreenMode = 1 (Fullscreen) is SDL 2.0.7's real fullscreen: it captures the displays, puts the window at the
-// shielding level and switches the display to a mode of the game's resolution (Cocoa_SetDisplayMode at 0x100147770,
-// Cocoa_SetWindowFullscreen at 0x10014e5e0). FullScreenMode = 2 (Fullscreen Window) is a fullscreen Space at the
-// desktop's mode (toggleFullScreen: at 0x10014a261).
+// In this port both FullScreenModes keep the display at the desktop's mode: Aspyr sets SDL_ALLOW_TOPMOST and
+// SDL_VIDEO_MAC_FULLSCREEN_SPACES to 0 (0x100100dea) and only asks SDL for FULLSCREEN_DESKTOP (0x1000edc4e), so SDL never
+// captures the displays, switches their mode or uses a fullscreen Space.
 #import <AppKit/AppKit.h>
 #import <QuartzCore/CAMetalLayer.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "gpu_diag.h"
+#include "metalfx.h"
 
 static NSString *last_state = nil;
 static CAMetalLayer *find_metal_layer(CALayer *layer) {
@@ -36,6 +37,7 @@ static void log_state(void) {
             NSString *mode_text = mode == NULL ? @"?" :
                 [NSString stringWithFormat:@"%zux%zu (%zux%zu pixels)", CGDisplayModeGetWidth(mode), CGDisplayModeGetHeight(mode),
                     CGDisplayModeGetPixelWidth(mode), CGDisplayModeGetPixelHeight(mode)];
+            double mode_refresh = mode != NULL ? CGDisplayModeGetRefreshRate(mode) : 0;
             if (mode != NULL)
                 CGDisplayModeRelease(mode);
             NSString *level = window.level == CGShieldingWindowLevel() ? @"shielding (displays captured)" :
@@ -56,6 +58,14 @@ static void log_state(void) {
                 layer.drawableSize.width, layer.drawableSize.height, layer.opaque ? @"opaque" : @"transparent",
                 layer.framebufferOnly ? @"framebuffer only" : @"not framebuffer only", (unsigned long)layer.pixelFormat,
                 layer.displaySyncEnabled ? @"on" : @"off", drawables];
+            int fps = (int)lround(mode_refresh), variable = 0;
+            if (@available(macOS 12.0, *)) {
+                fps = (int)screen.maximumFramesPerSecond;
+                variable = screen.minimumRefreshInterval < screen.maximumRefreshInterval;
+            }
+            char present[96];
+            present_describe(present, sizeof(present));
+            [state appendFormat:@"; display %u, %i Hz%@, %s", display, fps, variable ? @" (variable)" : @"", present];
         }
         if (state.length > 0 && ![state isEqualToString:last_state]) {
             printf("GPU: %s\n", state.UTF8String);
@@ -78,5 +88,16 @@ void gpu_diag_init(int enabled) {
         log_state();
     });
     dispatch_resume(timer);
+    // and straight away when the game window moves to another screen or gets another backing scale, or a screen changes,
+    // once whatever else is told about it (MetalFX resizing the drawable) has run
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    for (NSString *name in @[NSWindowDidChangeScreenNotification, NSWindowDidChangeBackingPropertiesNotification,
+                             NSApplicationDidChangeScreenParametersNotification]) {
+        [center addObserverForName:name object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *notification) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                log_state();
+            });
+        }];
+    }
     printf("GPU diagnostics on, logging how frames get to the screen\n");
 }

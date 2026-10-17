@@ -4,6 +4,9 @@
 // Core Animation stretches it to the screen. With this on, the drawable stays at the screen's native size instead,
 // Aspyr's 1:1 copy of the backbuffer into the drawable copies into our own texture, and right before the drawable is
 // presented MetalFX upscales that into the drawable. If the game already renders at the screen's size nothing changes.
+//
+// Aspyr's view only resizes the drawable when its own size changes, so this also does it when the game window moves to
+// another screen or gets another backing scale (a Retina screen and a 1x one can be the same size in points).
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -12,8 +15,13 @@
 #include <math.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
+#include "display_follow.h"
 #include "metalfx.h"
 
 // MetalFX needs macOS 13 and is weak-linked, metalfx_init checks it's there before anything here uses it
@@ -22,45 +30,104 @@
 typedef void (*copy_texture_fn)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
 
 static int metalfx_ready = 0; // MetalFX is there and the drawable size hook is installed
-static int metalfx_failed = 0; // the scaler couldn't be made, so stop keeping the drawable at native size
 
 // ASL_MetalView
-static IMP orig_updateDrawableSize = NULL;
+static IMP orig_updateDrawableSize = NULL, nsview_viewDidChangeBackingProperties = NULL;
 static ptrdiff_t view_size_offset, forced_width_offset, forced_height_offset;
-static SEL sel_contentScaleFactor, sel_metalLayer;
-static id last_view = nil; // not retained, only used to put the drawable size back if MetalFX fails
+static SEL sel_metalLayer, sel_updateDrawableSize;
+static id game_view = nil; // a weak reference (objc_storeWeak), the view whose drawable we size
+
+// the game window's screen as the main thread last saw it. Aspyr also sizes the drawable from its render thread, where
+// AppKit can't be asked, so that goes by the scale from here.
+static _Atomic double screen_scale = 0; // 0 until the main thread has seen the view in a window
+static atomic_int screen_max_fps = 0, screen_variable_refresh = 0;
+
+// sizes packed 16 bits each (pack_sizes): the game's size and drawable size MetalFX couldn't do, which keep the drawable
+// at the game's size until either changes, the last ones we sized the drawable for, and the last frame's upscale for
+// present_describe (0 when it wasn't upscaled)
+static _Atomic uint64_t failed_sizes = 0, resized_sizes = 0, frame_sizes = 0;
+static atomic_uint frame_drawable_size = 0; // width << 16 | height of the last frame's drawable
+static atomic_uint view_points = 0; // width << 16 | height of the view in points
 
 // only touched on Aspyr's render thread, in its present function
 static id<MTLFXSpatialScaler> scaler = nil;
 static id<MTLTexture> input_texture = nil, output_texture = nil;
 static NSUInteger input_width, input_height, output_width, output_height;
 static MTLPixelFormat input_format, output_format;
+static NSMutableArray *retired = nil; // the scaler and textures from before a resize, until the GPU is done with them
 static id<MTLTexture> pending_input = nil, pending_drawable_texture = nil; // set by the copy, used by the present
+static MTLOrigin pending_origin; // where the upscaled frame goes in the drawable
+
+static uint64_t pack_sizes(NSUInteger width1, NSUInteger height1, NSUInteger width2, NSUInteger height2) {
+    return (uint64_t)(width1 & 0xFFFF) << 48 | (uint64_t)(height1 & 0xFFFF) << 32 | (uint64_t)(width2 & 0xFFFF) << 16 |
+           (uint64_t)(height2 & 0xFFFF);
+}
+
+// what the main thread knows about the game window's screen, with a line in the log whenever that changes
+static void remember_screen(NSView *view) {
+    NSWindow *window = view.window;
+    NSScreen *screen = window.screen;
+    if (screen == nil) // between screens, keep what we had
+        return;
+    atomic_store(&screen_scale, window.backingScaleFactor);
+    CGDirectDisplayID display = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
+    int fps = 0, variable = 0;
+    if (@available(macOS 12.0, *)) {
+        fps = (int)screen.maximumFramesPerSecond;
+        variable = screen.minimumRefreshInterval < screen.maximumRefreshInterval;
+    }
+    if (fps <= 0) {
+        CGDisplayModeRef mode = CGDisplayCopyDisplayMode(display);
+        if (mode != NULL) {
+            fps = (int)lround(CGDisplayModeGetRefreshRate(mode));
+            CGDisplayModeRelease(mode);
+        }
+    }
+    atomic_store(&screen_max_fps, fps > 0 ? fps : 60);
+    atomic_store(&screen_variable_refresh, variable);
+
+    static char last[128];
+    char line[128];
+    snprintf(line, sizeof(line), "present: the game window is on display %u, %.0fx%.0f pixels at %.0fx, %i Hz%s", display,
+             view.bounds.size.width * window.backingScaleFactor, view.bounds.size.height * window.backingScaleFactor,
+             window.backingScaleFactor, fps > 0 ? fps : 60, variable ? " (variable)" : "");
+    if (strcmp(line, last) != 0) {
+        printf("%s\n", line);
+        strcpy(last, line);
+    }
+}
+
+// the view's size in pixels. Aspyr's _viewSize and contentScaleFactor are in points (1728x1117 with a scale of 1 on a
+// 3456x2234 MacBook Pro), so go by its window's backing scale. AppKit is asked on the main thread; Aspyr's render thread
+// also sizes the drawable (when the game changes resolution) and goes by the scale the main thread saw last.
+static void view_pixels(NSView *view, CGSize view_size, int *width, int *height) {
+    double scale = 1; // not in a window yet
+    if (view.window != nil) {
+        scale = pthread_main_np() ? view.window.backingScaleFactor : atomic_load(&screen_scale);
+        if (scale <= 0) // the main thread hasn't seen the window on a screen yet
+            scale = view.window.backingScaleFactor;
+    }
+    *width = (int)lround(view_size.width * scale);
+    *height = (int)lround(view_size.height * scale);
+}
 
 // Aspyr's updateDrawableSize sets the drawable to the forced size (the game's resolution) when there is one, and to
-// the view's size times its scale factor otherwise. Keep the forced size for everything else that reads it, but give
-// the layer the view's native pixels when they're bigger, so MetalFX can upscale into them.
+// the view's size in points otherwise. Keep the forced size for everything else that reads it, but give the layer the
+// view's native pixels when they're bigger, so MetalFX can upscale into them. Unforced drawables are left alone here:
+// Aspyr unforces, reads the drawable back and forces it again unless it's the game's size (enlarge_unforced_drawable).
 static void updateDrawableSize_hook(id self, SEL sel) {
     ((void (*)(id, SEL))orig_updateDrawableSize)(self, sel);
-    if (metalfx_failed)
-        return;
+    objc_storeWeak(&game_view, self);
+    if (pthread_main_np() && ((NSView *)self).window != nil)
+        remember_screen(self);
+    CGSize view_size = *(CGSize *)((char *)self + view_size_offset);
+    atomic_store(&view_points, (unsigned int)lround(view_size.width) << 16 | (unsigned int)lround(view_size.height));
     int forced_width = *(int *)((char *)self + forced_width_offset);
     int forced_height = *(int *)((char *)self + forced_height_offset);
     if (forced_width <= 0 || forced_height <= 0)
         return;
-    // the view's size in pixels. Aspyr's _viewSize and contentScaleFactor are in points here (1728x1117 with a
-    // scale of 1 on a 3456x2234 MacBook Pro), so go by the view's bounds and its window's backing scale instead.
     int native_width, native_height;
-    if ([self isKindOfClass:[NSView class]] && ((NSView *)self).window != nil) {
-        NSRect backing = [(NSView *)self convertRectToBacking:((NSView *)self).bounds];
-        native_width = (int)lround(backing.size.width);
-        native_height = (int)lround(backing.size.height);
-    } else {
-        CGSize view_size = *(CGSize *)((char *)self + view_size_offset);
-        double scale = ((double (*)(id, SEL))objc_msgSend)(self, sel_contentScaleFactor);
-        native_width = (int)lround(view_size.width * scale);
-        native_height = (int)lround(view_size.height * scale);
-    }
+    view_pixels(self, view_size, &native_width, &native_height);
 
     static int last_forced_width = -1, last_forced_height = -1, last_native_width = -1, last_native_height = -1;
     int changed = forced_width != last_forced_width || forced_height != last_forced_height ||
@@ -70,20 +137,41 @@ static void updateDrawableSize_hook(id self, SEL sel) {
 
     if (native_width < forced_width || native_height < forced_height ||
         (native_width == forced_width && native_height == forced_height)) {
-        if (changed) {
+        if (changed)
             printf("MetalFX: the game's resolution %ix%i already fills the %ix%i screen, nothing to upscale\n",
                    forced_width, forced_height, native_width, native_height);
-            // FullScreenMode = 1 captures the display and switches it to a mode of the game's resolution
-            NSWindow *window = [self isKindOfClass:[NSView class]] ? ((NSView *)self).window : nil;
-            if (window != nil && window.level == CGShieldingWindowLevel() && native_width == forced_width)
-                printf("MetalFX: in Fullscreen the display itself switches to the game's resolution, use "
-                       "FullScreenMode = 2 (Fullscreen Window) in config.ini to upscale with MetalFX\n");
-        }
         return;
     }
-    last_view = self;
+    uint64_t sizes = pack_sizes(forced_width, forced_height, native_width, native_height);
+    if (sizes == atomic_load(&failed_sizes))
+        return;
+    atomic_store(&resized_sizes, sizes);
     CAMetalLayer *layer = ((id (*)(id, SEL))objc_msgSend)(self, sel_metalLayer);
     layer.drawableSize = CGSizeMake(native_width, native_height);
+}
+
+// AppKit calls this on the main thread when the view's window gets another backing scale. Its size in points can stay
+// the same, and then Aspyr's view wouldn't resize the drawable.
+static void viewDidChangeBackingProperties_new(id self, SEL sel) {
+    ((void (*)(id, SEL))nsview_viewDidChangeBackingProperties)(self, sel);
+    ((void (*)(id, SEL))objc_msgSend)(self, sel_updateDrawableSize);
+}
+
+// resizes the drawable when the game window moves to another screen, or a screen changes (resolution, scale or refresh)
+static void watch_screens(void) {
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center addObserverForName:NSWindowDidChangeScreenNotification object:nil queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *notification) {
+        NSView *view = objc_loadWeak(&game_view);
+        if (view != nil && notification.object == view.window)
+            ((void (*)(id, SEL))objc_msgSend)(view, sel_updateDrawableSize);
+    }];
+    [center addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil
+                         queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *notification) {
+        NSView *view = objc_loadWeak(&game_view);
+        if (view != nil)
+            ((void (*)(id, SEL))objc_msgSend)(view, sel_updateDrawableSize);
+    }];
 }
 
 // (re)makes the scaler and its textures for these sizes and formats, returns 0 if MetalFX can't do it
@@ -92,6 +180,15 @@ static int ensure_resources(id<MTLDevice> device, NSUInteger in_width, NSUIntege
     if (scaler != nil && in_width == input_width && in_height == input_height && in_format == input_format &&
         out_width == output_width && out_height == output_height && out_format == output_format)
         return 1;
+    // frames still on the GPU can be using these, so they go once a later frame is done (metalfx_before_present)
+    if (retired == nil)
+        retired = [[NSMutableArray alloc] init];
+    if (scaler != nil)
+        [retired addObject:scaler];
+    if (input_texture != nil)
+        [retired addObject:input_texture];
+    if (output_texture != nil)
+        [retired addObject:output_texture];
     [scaler release];
     [input_texture release];
     [output_texture release];
@@ -141,28 +238,67 @@ static int ensure_resources(id<MTLDevice> device, NSUInteger in_width, NSUIntege
     return 1;
 }
 
+// Aspyr leaves the drawable unforced, at the view's size in points, when that's the game's resolution (1920x1080 on a 4K
+// screen that looks like 1080p). Once a frame of that size has gone into it, give it the view's native pixels for the
+// next frames, after Aspyr has decided not to force it.
+static void enlarge_unforced_drawable(NSUInteger width, NSUInteger height) {
+    double scale = atomic_load(&screen_scale);
+    unsigned int points = atomic_load(&view_points);
+    if (scale <= 1 || points != ((unsigned int)(width & 0xFFFF) << 16 | (unsigned int)(height & 0xFFFF)))
+        return;
+    id view = objc_loadWeak(&game_view);
+    if (view == nil || *(int *)((char *)view + forced_width_offset) > 0 || *(int *)((char *)view + forced_height_offset) > 0)
+        return;
+    NSUInteger native_width = (NSUInteger)lround(width * scale), native_height = (NSUInteger)lround(height * scale);
+    uint64_t sizes = pack_sizes(width, height, native_width, native_height);
+    if (sizes == atomic_load(&failed_sizes))
+        return;
+    atomic_store(&resized_sizes, sizes);
+    CAMetalLayer *layer = ((id (*)(id, SEL))objc_msgSend)(view, sel_metalLayer);
+    layer.drawableSize = CGSizeMake(native_width, native_height);
+}
+
 // called instead of objc_msgSend for Aspyr's [blitEncoder copyFromTexture:backbuffer ... toTexture:drawable.texture ...]
 static void copy_to_drawable(id<MTLBlitCommandEncoder> encoder, SEL sel, id<MTLTexture> source, NSUInteger source_slice,
                              NSUInteger source_level, MTLOrigin source_origin, MTLSize size, id<MTLTexture> drawable_texture,
                              NSUInteger destination_slice, NSUInteger destination_level, MTLOrigin destination_origin) {
     pending_input = pending_drawable_texture = nil;
     NSUInteger drawable_width = drawable_texture.width, drawable_height = drawable_texture.height;
-    int upscale = metalfx_ready && !metalfx_failed && size.width <= drawable_width && size.height <= drawable_height &&
-                  (size.width < drawable_width || size.height < drawable_height) && source_slice == 0 && source_level == 0 &&
-                  source_origin.x == 0 && source_origin.y == 0 && destination_origin.x == 0 && destination_origin.y == 0;
+    atomic_store(&frame_drawable_size, (unsigned int)(drawable_width & 0xFFFF) << 16 | (unsigned int)(drawable_height & 0xFFFF));
+    // when Aspyr letterboxes, its drawable is the frame with a black bar on each side and the frame goes in the middle.
+    // The drawable is bigger than that now, so the frame and the bars are scaled up with it.
+    NSUInteger out_width = drawable_width, out_height = drawable_height;
+    MTLOrigin origin = MTLOriginMake(0, 0, 0);
+    if (destination_origin.x != 0 || destination_origin.y != 0) {
+        double scale_x = (double)drawable_width / (size.width + 2 * destination_origin.x);
+        double scale_y = (double)drawable_height / (size.height + 2 * destination_origin.y);
+        out_width = (NSUInteger)lround(size.width * scale_x);
+        out_height = (NSUInteger)lround(size.height * scale_y);
+        origin = MTLOriginMake((NSUInteger)lround(destination_origin.x * scale_x),
+                               (NSUInteger)lround(destination_origin.y * scale_y), 0);
+    }
+    int upscale = metalfx_ready && size.width <= out_width && size.height <= out_height &&
+                  (size.width < out_width || size.height < out_height) && origin.x + out_width <= drawable_width &&
+                  origin.y + out_height <= drawable_height && source_slice == 0 && source_level == 0 &&
+                  source_origin.x == 0 && source_origin.y == 0;
     if (!upscale) {
+        atomic_store(&frame_sizes, 0);
         ((copy_texture_fn)objc_msgSend)(encoder, sel, source, source_slice, source_level, source_origin, size, drawable_texture,
                                         destination_slice, destination_level, destination_origin);
+        if (metalfx_ready && size.width == drawable_width && size.height == drawable_height)
+            enlarge_unforced_drawable(drawable_width, drawable_height);
         return;
     }
-    if (!ensure_resources(encoder.device, size.width, size.height, source.pixelFormat, drawable_width, drawable_height,
+    if (!ensure_resources(encoder.device, size.width, size.height, source.pixelFormat, out_width, out_height,
                           drawable_texture.pixelFormat)) {
-        printf("MetalFX couldn't upscale %lux%lu to %lux%lu, not upscaling\n", (unsigned long)size.width,
-               (unsigned long)size.height, (unsigned long)drawable_width, (unsigned long)drawable_height);
-        metalfx_failed = 1;
-        // this frame goes out un-scaled in the corner, put the drawable back to the game's size for the next ones
-        if (last_view != nil)
-            ((void (*)(id, SEL))orig_updateDrawableSize)(last_view, sel_registerName("updateDrawableSize"));
+        printf("MetalFX couldn't upscale %lux%lu to %lux%lu, not upscaling at these sizes\n", (unsigned long)size.width,
+               (unsigned long)size.height, (unsigned long)out_width, (unsigned long)out_height);
+        // this frame goes out un-scaled in the corner, put the drawable back to the game's size until the sizes change
+        atomic_store(&frame_sizes, 0);
+        atomic_store(&failed_sizes, atomic_load(&resized_sizes));
+        id view = objc_loadWeak(&game_view);
+        if (view != nil)
+            ((void (*)(id, SEL))orig_updateDrawableSize)(view, sel_updateDrawableSize);
         ((copy_texture_fn)objc_msgSend)(encoder, sel, source, source_slice, source_level, source_origin, size, drawable_texture,
                                         destination_slice, destination_level, destination_origin);
         return;
@@ -178,6 +314,8 @@ static void copy_to_drawable(id<MTLBlitCommandEncoder> encoder, SEL sel, id<MTLT
         pending_input = input_texture;
     }
     pending_drawable_texture = drawable_texture;
+    pending_origin = origin;
+    atomic_store(&frame_sizes, pack_sizes(size.width, size.height, out_width, out_height));
 }
 
 void *metalfx_copy_function(void) {
@@ -187,6 +325,14 @@ void *metalfx_copy_function(void) {
 // Aspyr has ended its blit encoder by now, so MetalFX and our copy into the drawable can go in the command buffer
 void metalfx_before_present(void *command_buffer) {
     id<MTLCommandBuffer> cb = (id<MTLCommandBuffer>)command_buffer;
+    // the scaler and textures from before a resize go when this frame is done, and the frames before it are done by then
+    if (retired.count > 0) {
+        NSArray *objects = [retired copy];
+        [retired removeAllObjects];
+        [cb addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+            [objects release];
+        }];
+    }
     id<MTLTexture> input = pending_input, drawable_texture = pending_drawable_texture;
     pending_input = pending_drawable_texture = nil;
     if (input == nil || drawable_texture == nil || scaler == nil)
@@ -199,8 +345,54 @@ void metalfx_before_present(void *command_buffer) {
     id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
     [blit copyFromTexture:output_texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
                sourceSize:MTLSizeMake(output_width, output_height, 1) toTexture:drawable_texture destinationSlice:0
-         destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+         destinationLevel:0 destinationOrigin:pending_origin];
     [blit endEncoding];
+}
+
+int present_display_max_fps(void) {
+    DisplayInfo display;
+    if (display_follow_current(&display) == 1 && display.refresh > 0)
+        return display.refresh;
+    return atomic_load(&screen_max_fps);
+}
+
+int present_display_variable_refresh(void) {
+    DisplayInfo display;
+    if (display_follow_current(&display) == 1 && display.refresh > 0)
+        return display.variable_refresh;
+    return atomic_load(&screen_variable_refresh);
+}
+
+// the game's Metal layer on the main thread: the view we size, or Aspyr's view in one of the app's windows when MetalFX
+// is off
+static CAMetalLayer *game_layer(void) {
+    NSView *view = objc_loadWeak(&game_view);
+    Class view_class = objc_getClass("ASL_MetalView");
+    for (NSWindow *window in [NSApp windows]) {
+        for (NSView *subview in window.contentView.subviews) {
+            if (view == nil && view_class != Nil && [subview isKindOfClass:view_class])
+                view = subview;
+        }
+    }
+    return view != nil ? ((id (*)(id, SEL))objc_msgSend)(view, sel_registerName("metalLayer")) : nil;
+}
+
+void present_describe(char *buf, size_t n) {
+    unsigned int drawable = atomic_load(&frame_drawable_size);
+    if (pthread_main_np()) {
+        CAMetalLayer *layer = game_layer();
+        if (layer != nil)
+            drawable = (unsigned int)lround(layer.drawableSize.width) << 16 | (unsigned int)lround(layer.drawableSize.height);
+    }
+    char drawable_text[24] = "?";
+    if (drawable != 0)
+        snprintf(drawable_text, sizeof(drawable_text), "%ux%u", drawable >> 16, drawable & 0xFFFF);
+    uint64_t sizes = atomic_load(&frame_sizes);
+    if (sizes != 0)
+        snprintf(buf, n, "drawable=%s metalfx=%ux%u->%ux%u", drawable_text, (unsigned int)(sizes >> 48),
+                 (unsigned int)(sizes >> 32) & 0xFFFF, (unsigned int)(sizes >> 16) & 0xFFFF, (unsigned int)sizes & 0xFFFF);
+    else
+        snprintf(buf, n, "drawable=%s metalfx=off", drawable_text);
 }
 
 static ptrdiff_t ivar_offset(Class cls, const char *name) {
@@ -223,18 +415,23 @@ int metalfx_init(void) {
         }
 
         Class view = objc_getClass("ASL_MetalView");
-        sel_contentScaleFactor = sel_registerName("contentScaleFactor");
         sel_metalLayer = sel_registerName("metalLayer");
-        Method update = view != Nil ? class_getInstanceMethod(view, sel_registerName("updateDrawableSize")) : NULL;
+        sel_updateDrawableSize = sel_registerName("updateDrawableSize");
+        Method update = view != Nil ? class_getInstanceMethod(view, sel_updateDrawableSize) : NULL;
         view_size_offset = view != Nil ? ivar_offset(view, "_viewSize") : -1;
         forced_width_offset = view != Nil ? ivar_offset(view, "_forcedDrawableSizeWidth") : -1;
         forced_height_offset = view != Nil ? ivar_offset(view, "_forcedDrawableSizeHeight") : -1;
         if (update == NULL || view_size_offset < 0 || forced_width_offset < 0 || forced_height_offset < 0 ||
-            class_getInstanceMethod(view, sel_contentScaleFactor) == NULL || class_getInstanceMethod(view, sel_metalLayer) == NULL) {
+            class_getInstanceMethod(view, sel_metalLayer) == NULL) {
             printf("MetalFX: couldn't find Aspyr's Metal view, not upscaling\n");
             return 0;
         }
         orig_updateDrawableSize = method_setImplementation(update, (IMP)updateDrawableSize_hook);
+        // Aspyr's view doesn't have this, and NSView's does nothing
+        SEL backing_changed = sel_registerName("viewDidChangeBackingProperties");
+        nsview_viewDidChangeBackingProperties = class_getMethodImplementation([NSView class], backing_changed);
+        class_addMethod(view, backing_changed, (IMP)viewDidChangeBackingProperties_new, "v@:");
+        watch_screens();
         metalfx_ready = 1;
         printf("MetalFX upscaling is on, it upscales when the game's resolution is lower than the screen's\n");
         return 1;

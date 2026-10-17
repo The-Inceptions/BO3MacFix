@@ -25,7 +25,10 @@
 #include "bo3macnative.h"
 #include "codhavoktypes.h"
 #include "cpu_tuning.h"
+#include "display_follow.h"
+#include "display_testhooks.h"
 #include "dobby.h"
+#include "engine_display.h"
 #include "gpu_diag.h"
 #include "gpu_tweaks.h"
 #include "havok.h"
@@ -34,6 +37,7 @@
 #include "prepatch.h"
 #include "qol.h"
 #include "rawmouse.h"
+#include "sdl_displays.h"
 #include "settings_menu.h"
 #include "steam.h"
 #include "stream_stall_recovery.h"
@@ -638,6 +642,16 @@ static int read_hex_setting(const char *name, int fallback) {
     return read_setting(name, fallback, 16);
 }
 
+// a number from BO3MACFIX_<NAME> at env if it's set, else from settings.ini
+static int read_int_setting_or_env(const char *name, int fallback) {
+    char env_name[64];
+    snprintf(env_name, sizeof(env_name), "BO3MACFIX_%s", name);
+    for (char *p = env_name; *p != '\0'; p++)
+        *p = toupper((unsigned char)*p);
+    const char *env = getenv(env_name);
+    return env != NULL ? atoi(env) : read_int_setting(name, fallback);
+}
+
 // the job system's worker thread count comes from a dvar that allows 2 to 4, which the Mac version leaves at 2
 static void job_threads_patch(int threads) {
     static const uint8_t mov_edx_2[] = { 0xBA, 0x02, 0x00, 0x00, 0x00 };
@@ -1088,6 +1102,22 @@ __attribute__((constructor)) static void dylib_main() {
 
     // logs how frames get to the screen when GpuDiagnostics = 1, see gpu_diag.m
     gpu_diag_init(read_int_setting("GpuDiagnostics", 0));
+
+    // the display the game uses (GameDisplay), following it when displays change, with the resolution and refresh
+    // rate it had there (see display_follow.m). This runs before the game's main(), whose ASL_BuildModeTable
+    // sdl_displays.c hooks to put that display first in SDL's list; engine_display.c does the engine's side.
+    display_follow_set_option("GameDisplay", read_int_setting_or_env("GameDisplay", 0));
+    display_follow_set_option("DisplayMemory", read_int_setting_or_env("DisplayMemory", 1));
+    display_follow_set_option("MatchRefreshRate", read_int_setting_or_env("MatchRefreshRate", 1));
+    display_follow_set_option("ConfineCursor", read_int_setting_or_env("ConfineCursor", 1));
+    display_follow_init(read_int_setting_or_env("DisplayFollow", 1));
+    sdl_displays_init();
+    engine_display_init();
+
+    // Darwin notifications the display tests drive the game with (BO3MACFIX_TESTHOOKS=1), see display_testhooks.m
+    const char *test_hooks_env = getenv("BO3MACFIX_TESTHOOKS");
+    if (test_hooks_env != NULL && atoi(test_hooks_env) != 0)
+        display_testhooks_init(game_base_address);
 
     // pre-fetch the wine path so we don't need to search earlier
     get_wine_path();

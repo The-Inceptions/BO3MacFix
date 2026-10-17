@@ -1,7 +1,7 @@
 # Modified by Mickael DE LA ROQUE on 2026-09-08 to build and test the
 # unofficial custom-map stream-stall workaround.
 TARGET = BO3MacFix.dylib
-TEST_TARGET = tests/test_stream_stall_recovery
+TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -42,13 +42,31 @@ SOURCES += source/qol.c source/rawmouse.c
 FRAMEWORKS += -framework AudioToolbox -framework CoreAudio
 FRAMEWORKS += -framework Metal -framework QuartzCore -framework AppKit -weak_framework MetalFX
 
+# following display changes (display_follow.m, display_policy.c), with SDL's display list (sdl_displays.c and its
+# AppKit half sdl_displays_cocoa.m) and the engine's video code (engine_display.c) doing the moving, and the display
+# tests' hooks (display_testhooks.m)
+SOURCES += source/display_follow.m source/display_policy.c source/sdl_displays.c source/sdl_displays_cocoa.m
+SOURCES += source/engine_display.c source/display_testhooks.m
+# ColorSync for display UUIDs, CoreVideo for the refresh rate of SDL's display modes
+FRAMEWORKS += -framework ColorSync -framework CoreVideo
+
 all: $(TARGET)
 
-test: $(TEST_TARGET)
-	./$(TEST_TARGET)
+test: $(TEST_TARGETS)
+	for test in $(TEST_TARGETS); do ./$$test || exit 1; done
 
-$(TEST_TARGET): tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
+tests/test_stream_stall_recovery: tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_stream_stall_recovery.c source/stream_stall_recovery.c
+
+# display_policy.c's decisions are plain C, so they're tested with made-up displays, without the game
+tests/test_display_policy: tests/test_display_policy.c source/display_policy.c source/display_policy.h source/display_follow.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_display_policy.c source/display_policy.c
+
+# sdl_displays.c against a fake SDL device (the test includes the source itself), for the dylib's macOS version since
+# the CVDisplayLink calls it makes are deprecated from macOS 15
+tests/test_sdl_displays: tests/test_sdl_displays.c source/sdl_displays.c source/sdl_displays.h source/engine_display.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -mmacosx-version-min=$(OSXVER) -framework CoreFoundation \
+		-framework CoreGraphics -framework CoreVideo -o $@ tests/test_sdl_displays.c
 
 $(TARGET): $(SOURCES) source/t7overcharged_lua.h source/settings_menu_lua.h
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(DEFINES) $(LDFLAGS) -o $@ $(SOURCES)
@@ -62,6 +80,6 @@ source/settings_menu_lua.h: source/settings_menu.lua
 	cd source && xxd -i settings_menu.lua > settings_menu_lua.h
 
 clean:
-	rm -f -- $(TARGET) $(TEST_TARGET) source/t7overcharged_lua.h source/settings_menu_lua.h
+	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h
 
 .PHONY: all clean test

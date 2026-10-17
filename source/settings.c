@@ -5,9 +5,9 @@
 //   BO3MacFix.SetSetting(name, value) -> restart_needed
 //   BO3MacFix.RestartGame()
 //   BO3MacFix.RestartPending() -> true if a setting that needs a restart changed this session
-// Some settings apply right away (live = true): the frame rate ones, the controller ones, RawMouseScale, AAEOnline
-// and ExitFix, plus JobIdleFix and RenderIdleFix from the pre-patched executable. The rest are read once at startup,
-// so changing them asks for a restart.
+// Some settings apply right away (live = true): the frame rate ones, the display ones, the controller ones,
+// RawMouseScale, AAEOnline and ExitFix, plus JobIdleFix and RenderIdleFix from the pre-patched executable. The rest
+// are read once at startup, so changing them asks for a restart.
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include "controllers.h"
 #include "cpu_tuning.h"
+#include "display_follow.h"
 #include "gc_bridge.h"
 #include "gpu_tweaks.h"
 #include "offsets.h"
@@ -62,8 +63,13 @@ static const setting_t settings[] = {
     { "FramesInFlight", "Frames in flight", "How many frames the CPU may queue ahead of the GPU: fewer means less input lag.", "Graphics", false, 3, { 1, 2, 3 }, { "1 (least lag)", "2 (normal)", "3 (smoothest)" }, 2, false },
     { "FramePacingFPS", "Frame pacing", "Keeps each frame on screen for a minimum time, for even pacing below the refresh rate.", "Graphics", false, 6, { 0, 30, 45, 60, 90, 120 }, { "Off", "30", "45", "60", "90", "120" }, 0, Live_Present },
     { "BatteryFPS", "Battery frame limit", "Limits the frame rate only while the Mac runs on battery, to save power.", "Graphics", false, 5, { 0, 30, 45, 60, 90 }, { "Off", "30", "45", "60", "90" }, 0, Live_Present },
-    { "MetalFXUpscale", "MetalFX upscaling", "Upscales with MetalFX when the game runs below the screen's resolution (use Fullscreen Window).", "Graphics", Toggle(0) },
+    { "MetalFXUpscale", "MetalFX upscaling", "Upscales with MetalFX when the game runs below the screen's resolution.", "Graphics", Toggle(0) },
     { "MetalHUD", "Metal performance HUD", "Shows macOS's Metal HUD with the frame rate and GPU time.", "Graphics", Toggle(0) },
+    { "DisplayFollow", "Follow display changes", "Moves the game when displays are plugged in or unplugged, and adapts its resolution and refresh rate to the new display.", "Display", Toggle_Live(1, Live_Always) },
+    { "GameDisplay", "Game display", "Which display the game uses: the main display (with the menu bar), the MacBook's screen, or an external monitor when one is connected.", "Display", false, 3, { 0, 1, 2 }, { "Main display", "Built-in", "External" }, 0, Live_Always },
+    { "DisplayMemory", "Remember each display", "Remembers the resolution and refresh rate the game used on each display.", "Display", Toggle_Live(1, Live_Always) },
+    { "MatchRefreshRate", "Match refresh rate", "Uses each display's own refresh rate, like 240 Hz on a gaming monitor and 120 Hz on the MacBook.", "Display", Toggle_Live(1, Live_Always) },
+    { "ConfineCursor", "Keep cursor on game display", "Stops the pointer leaving the game's display in fullscreen menus, so a stray click can't drop out.", "Display", Toggle_Live(1, Live_Always) },
     { "ControllerMappings", "PlayStation controllers over USB", "Lets DualShock 4, DualSense and DualSense Edge controllers work over USB.", "Controller", Toggle(1) },
     { "ControllerBridge", "macOS controller support", "Reads PlayStation controllers through macOS: Bluetooth and USB, rumble and lightbar. Turn Steam Input off.", "Controller", Toggle(0) },
     { "ButtonPrompts", "Button prompts", "Which button icons the game shows.", "Controller", false, 3, { 0, 1, 2 }, { "Automatic", "Xbox", "PlayStation" }, 0, Live_Prompts },
@@ -104,6 +110,8 @@ static bool live_now(const setting_t *t) {
 // applies a live setting's new value, false if it couldn't be (then it needs a restart)
 static bool apply_live(const setting_t *t, int value) {
     const char *n = t->name;
+    if (display_follow_owns(n))
+        return display_follow_set_option(n, value) != 0;
     if (strcmp(n, "FramePacingFPS") == 0)
         return gpu_tweaks_set_pacing(value);
     if (strcmp(n, "BatteryFPS") == 0)

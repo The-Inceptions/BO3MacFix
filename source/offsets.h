@@ -104,4 +104,46 @@
 #define ADDRS_TUVersion 0x016AA513, 0x017251FB, 0x01725209, 0x0172529C, 0x017252AB, 0x017252B7
 #define ADDR_JQ_IdleWait_TimeoutInstr 0x11a7551 // mid-func - mov esi, 1 (idle job workers' WaitForSingleObject timeout in ms)
 #define ADDR_RenderThread_WaitTimeoutInstr 0xfeb491 // mid-func - mov edi, 1 (render thread's wait for work, in ms)
+// following display changes: the engine's video code (engine_display.c)
+#define ADDR_R_CheckVidRestart 0xdce17e // func - per frame on the engine's Main thread, applies pending video dvar changes
+#define ADDR_R_SetWndParms 0xdcca9a // func - fills the window parameters from r_fullscreen, r_monitor, r_mode, r_refreshRate
+#define ADDR_R_EnumDisplayModes 0xdcc7c6 // func - bool (IDXGIAdapter *), fills the monitor table, only R_InitHardware calls it
+#define ADDR_R_EnterFullscreen 0xdccd55 // func - SetFullscreenState(TRUE, output r_monitor - 1) on the window thread (message 0x8044)
+#define ADDR_R_CheckVideoDvarsModified 0xdce0ad // func - vid_restart: marks a restart pending if a video dvar has a latched value
+#define ADDR_Dvar_FindByHash 0xf9fffa // func - dvar_t *(uint32_t hash)
+#define ADDR_Dvar_GetInt 0xfa0252 // func
+#define ADDR_Dvar_GetFloat 0xfa036d // func
+#define ADDR_Dvar_GetString 0xfa0474 // func
+#define ADDR_Dvar_SetFromString 0xfa2ef7 // func - (dvar, value, source), sources 1 and 2 only set a latched dvar's latched value
+#define ADDR_Dvar_SetInt 0xfa2d59 // func - (dvar, value)
+#define ADDR_CritSec_ScopedLock 0xd14710 // func - (lock *, critical section, 0), r_mode's critical section is 0x33 - name is a guess
+#define ADDR_CritSec_ScopedUnlock 0xd7da30 // func - (lock *) - name is a guess
+#define ADDR_ASL_Window_UpdateLetterbox 0xee14c // func - void (Window *), Window_SetMode calls it last, with ASL's window mutex held
+#define ADDR_ASL_Window_UpdateClientRect 0xee352 // func - void (Window *), takes ASL's window mutex itself
+#define ADDR_ASL_WindowList 0x104c9bf8 // std::vector<Window *> { begin, end, capacity } - ASL's windows
+#define ADDR_R_MonitorTable 0x113c0df8 // { uint32_t count; uint32_t modeCounts[8]; DXGI_MODE_DESC *modes[8]; }, modes from new[]
+#define ADDR_R_MonitorSize 0x113c0da4 // { bool valid; int width, height; } - the monitor size fullscreen takes its aspect ratio from
+#define ADDR_R_VidRestartPending 0x113c0df0 // bool - set by R_CheckVideoDvarsModified, cleared by R_CheckVidRestart
+#define ADDR_R_SwapChain 0x113c0e78 // IDXGISwapChain *
+#define ADDR_vidConfig_DisplaySize 0x113c0aec // int[2] - the game's resolution, as applied
+#define ADDR_IID_IDXGIDevice 0x104c9a88 // GUID - filled at startup (0x1000cb900)
+#define ADDR_IID_IDXGIAdapter 0x104c9a78 // GUID - filled at startup (0x1000cb900)
+#define ADDR_dvar_r_fullscreen 0x159ad088 // dvar_t * - FullScreenMode, NULL until the dvar is registered
+#define ADDR_dvar_r_fullscreenLast 0x159ad090 // dvar_t * - int 0-2, r_fullscreen's value before it last changed from non-zero (hash 0x847596d0, name unknown)
+#define ADDR_R_RestoreFullscreen 0x113c0df4 // bool - fullscreen was left on deactivate (alt-tab) and comes back on activate
+// -- end engine_display
+// following display changes: SDL 2.0.7 and Aspyr's display layer (sdl_displays.c)
+#define ADDR_ASL_BuildModeTable 0x6f076 // func - builds ASL's mode table for SDL display 0, once at startup on the main thread
+#define ADDR_ASL_ModeTable 0x2105710 // std::vector<std::vector<mode>> { begin, end, capacity } - ASL's modes, one entry (display 0)
+#define ADDR_ASL_WindowMutex 0x104c9bb8 // std::recursive_mutex - held by Window_SetMode while it waits for the main thread, and by present
+#define ADDR_SDL_VideoDevice 0x210b1f8 // SDL_VideoDevice * - SDL 2.0.7's _this
+#define ADDR_Cocoa_GetDisplayMode 0x146fe0 // func - SDL 2.0.7's static GetDisplayMode(CGDisplayModeRef, CFArrayRef modelist, CVDisplayLinkRef, SDL_DisplayMode *), no _this
+#define ADDR_Cocoa_SetWindowFullscreen 0x14e5e0 // func - SDL 2.0.7 (_this, window, display, fullscreen)
+#define ADDR_SDL_SetWindowPosition 0x195580 // func - SDL 2.0.7
+#define ADDR_SDL_SetWindowSize 0x195830 // func - SDL 2.0.7
+#define ADDR_SDL_GetTicks 0x144230 // func - SDL 2.0.7
+#define ADDR_SDL_s_moveHack 0x210b1e8 // Uint32 - SDL_cocoawindow.m's s_moveHack: SDL_GetTicks() when SDL last went fullscreen; windowDidMove: undoes moves within 500 ms of it
+// -- end sdl_displays
+// following display changes: the present path (metalfx.m, gpu_tweaks.c, gpu_diag.m)
+// -- end present
 // -- END OFFSETS

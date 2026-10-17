@@ -8,6 +8,7 @@
 // - FrameStats: logs the frame rate, 1% low and worst frame time every few seconds, for benchmarking.
 // - BatteryFPS: paces frames to that rate only while the Mac runs on battery, to save power.
 // - MetalHUD: turns on macOS's Metal performance HUD.
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,10 +66,31 @@ static void frame_stats_tick(void) {
         return;
     qsort(frame_ms, stored, sizeof(frame_ms[0]), compare_floats);
     float low_1 = frame_ms[(int)(stored * 0.99)];
-    printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s)\n",
-           frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds);
+    char display[24] = "";
+    int display_fps = present_display_max_fps();
+    if (display_fps > 0)
+        snprintf(display, sizeof(display), ", display %i Hz", display_fps);
+    printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s%s)\n",
+           frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds, display);
     frames = stored = 0;
     window_start = now;
+}
+
+// FramePacingFPS and BatteryFPS keep each frame on screen for at least 1/fps seconds, which a display with a fixed refresh
+// rate rounds up to whole refreshes: 120 fps on a 144 Hz display shows each frame for 2 refreshes, so 72 fps. Says so
+// when the game's display or the rate changes to one like that.
+static void check_pacing(double min_duration) {
+    static int last_fps = 0, last_display_fps = 0;
+    int fps = (int)lround(1.0 / min_duration), display_fps = present_display_max_fps();
+    if (display_fps <= 0 || (fps == last_fps && display_fps == last_display_fps))
+        return;
+    last_fps = fps;
+    last_display_fps = display_fps;
+    if (fps >= display_fps || display_fps % fps == 0 || present_display_variable_refresh())
+        return;
+    int refreshes = (display_fps + fps - 1) / fps;
+    printf("pacing at %i fps comes out at %i fps on this %i Hz display, %i or %i fps would be even\n", fps,
+           display_fps / refreshes, display_fps, display_fps / refreshes, display_fps / (refreshes - 1));
 }
 
 // called instead of objc_msgSend for Aspyr's [commandBuffer presentDrawable:drawable]
@@ -80,6 +102,9 @@ static void present_drawable(id command_buffer, SEL sel, id drawable) {
     double min_duration = present_min_duration;
     if (battery_min_duration > min_duration && atomic_load(&on_battery))
         min_duration = battery_min_duration;
+    static unsigned int paced_frames = 0;
+    if (min_duration > 0 && paced_frames++ % 120 == 0)
+        check_pacing(min_duration);
     static int supported = -1;
     if (min_duration > 0 && supported == -1)
         supported = class_respondsToSelector(object_getClass(command_buffer), sel_present_after_minimum_duration);
