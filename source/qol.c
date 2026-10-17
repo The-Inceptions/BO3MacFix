@@ -191,3 +191,7 @@ void qol_init(int exit_fix_setting, int audio_follow_setting) {
         }
     }
 }
+
+void qol_set_exit_fix(int on) {
+    exit_fix = on != 0;
+}

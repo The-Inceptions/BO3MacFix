@@ -4,3 +4,6 @@
 // exit_fix: quit without Aspyr's shutdown crash. audio_follow: game audio follows the default output device.
 // Each can be overridden at env (BO3MACFIX_EXITFIX, BO3MACFIX_AUDIOFOLLOWSDEFAULT).
 void qol_init(int exit_fix, int audio_follow);
+
+// ExitFix changed while the game runs
+void qol_set_exit_fix(int on);

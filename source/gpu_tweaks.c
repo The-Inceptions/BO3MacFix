@@ -129,13 +129,16 @@ static int redirect_objc_msgSend_call(uint32_t address, const uint8_t *expected,
 }
 
 // pacing and MetalFX both need Aspyr's presentDrawable: call to go through present_drawable
+static int present_redirected = -1; // -1 not tried yet, 1 present goes through present_drawable
+static code_patch_fn saved_code_patch = NULL;
+
 static int redirect_present(code_patch_fn checked_code_patch) {
-    static int redirected = -1;
     static const uint8_t call_objc_msgSend[] = { 0xFF, 0x15, 0xD9, 0xDB, 0x87, 0x01 };
-    if (redirected == -1)
-        redirected = redirect_objc_msgSend_call(ADDR_ASL_Present_PresentDrawableCall, call_objc_msgSend,
-                                                (void *)present_drawable, checked_code_patch);
-    return redirected;
+    saved_code_patch = checked_code_patch;
+    if (present_redirected == -1)
+        present_redirected = redirect_objc_msgSend_call(ADDR_ASL_Present_PresentDrawableCall, call_objc_msgSend,
+                                                        (void *)present_drawable, checked_code_patch);
+    return present_redirected;
 }
 
 static void frames_in_flight_patch(int frames, code_patch_fn checked_code_patch) {
@@ -216,6 +219,22 @@ static bool running_on_battery(void) {
     return battery;
 }
 
+// checks the power source now and then every 5 seconds (once, however often it's asked)
+static void start_battery_watch(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        atomic_store(&on_battery, running_on_battery());
+        dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+        dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC);
+        dispatch_source_set_event_handler(timer, ^{
+            bool battery = running_on_battery();
+            if (battery != atomic_exchange(&on_battery, battery) && battery_min_duration > 0)
+                printf("%s, %s\n", battery ? "running on battery" : "plugged in", battery ? "limiting the frame rate" : "frame rate unlimited");
+        });
+        dispatch_resume(timer);
+    });
+}
+
 void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch) {
     const char *env = getenv("BO3MACFIX_BATTERYFPS");
     if (env != NULL)
@@ -228,16 +247,7 @@ void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch) {
     }
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
     battery_min_duration = 1.0 / fps;
-    atomic_store(&on_battery, running_on_battery());
-    // check the power source every 5 seconds
-    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC);
-    dispatch_source_set_event_handler(timer, ^{
-        bool battery = running_on_battery();
-        if (battery != atomic_exchange(&on_battery, battery))
-            printf("%s, %s\n", battery ? "running on battery" : "plugged in", battery ? "limiting the frame rate" : "frame rate unlimited");
-    });
-    dispatch_resume(timer);
+    start_battery_watch();
     printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&on_battery) ? "on battery" : "plugged in");
 }
 
@@ -250,4 +260,57 @@ void gpu_tweaks_metal_hud_init(int enabled) {
         setenv("MTL_HUD_ENABLED", "1", 1);
         printf("Metal performance HUD on\n");
     }
+}
+
+#pragma mark - changes from the settings menu
+
+// whether present goes through present_drawable already, or can be made to without writing the game's code (the
+// pre-patched executable calls it through a slot)
+bool gpu_tweaks_live_possible(void) {
+    return present_redirected == 1 || prepatch_active();
+}
+
+static bool present_live(void) {
+    if (present_redirected == 1)
+        return true;
+    if (!prepatch_active() || present_redirected == 0)
+        return false;
+    return redirect_present(saved_code_patch) == 1;
+}
+
+bool gpu_tweaks_set_pacing(int fps) {
+    if (fps != 0 && (fps < 30 || fps > 240))
+        return false;
+    if (fps != 0 && !present_live())
+        return false;
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    present_min_duration = fps != 0 ? 1.0 / fps : 0;
+    printf(fps != 0 ? "pacing frames at %i fps\n" : "not pacing frames\n", fps);
+    return true;
+}
+
+bool gpu_tweaks_set_battery_fps(int fps) {
+    if (fps != 0 && (fps < 30 || fps > 240))
+        return false;
+    if (fps != 0 && !present_live())
+        return false;
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    if (fps != 0)
+        start_battery_watch();
+    battery_min_duration = fps != 0 ? 1.0 / fps : 0;
+    if (fps != 0)
+        printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&on_battery) ? "on battery" : "plugged in");
+    else
+        printf("not limiting the frame rate on battery\n");
+    return true;
+}
+
+bool gpu_tweaks_set_frame_stats(int seconds) {
+    if (seconds < 0)
+        return false;
+    if (seconds > 0 && !present_live())
+        return false;
+    frame_stats_seconds = seconds;
+    printf(seconds > 0 ? "logging frame stats every %i s\n" : "not logging frame stats\n", seconds);
+    return true;
 }

@@ -294,8 +294,9 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     uint32_t offset = (uint32_t)((uint64_t)address - base);
     for (uint32_t i = 0; i < header->hook_count; i++) {
         if (hooks[i].function == offset) {
-            *(void **)(base + hooks[i].slot) = fake_func;
+            // the original first: a hook installed while the game runs can be called as soon as its slot is set
             *out_origin_func = (void *)(base + hooks[i].trampoline);
+            *(void *volatile *)(base + hooks[i].slot) = fake_func;
             hooks_set++;
             return 0;
         }
@@ -344,6 +345,18 @@ int BO3MacFix_CodePatch(void *address, uint8_t *buffer, uint32_t buffer_size) {
     in_memory++;
     printf("BO3MacFix: the pre-patched executable doesn't have the patch at %08x, patching it in memory\n", offset);
     return DobbyCodePatch(address, buffer, buffer_size);
+}
+
+bool prepatch_set_value(uint32_t site, uint32_t value) {
+    if (!prepatch_active())
+        return false;
+    for (uint32_t i = 0; i < header->value_count; i++) {
+        if (values[i].site == site) {
+            *(volatile uint32_t *)(base + values[i].slot) = value;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool prepatch_redirect_call(uint32_t offset, void *function) {

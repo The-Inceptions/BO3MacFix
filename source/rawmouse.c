@@ -86,3 +86,7 @@ void rawmouse_init(uint64_t base, int enabled, int scale_percent) {
     install_hook_Cocoa_HandleMouseEvent((void *)(base + ADDR_Cocoa_HandleMouseEvent));
     printf("BO3MacFix: aiming uses raw mouse input (RawMouse), scale %.2f\n", scale);
 }
+
+void rawmouse_set_scale(int scale_percent) {
+    scale = (scale_percent > 0 ? scale_percent : 100) / 100.0;
+}

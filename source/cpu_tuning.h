@@ -2,6 +2,7 @@
 #ifndef CPU_TUNING_H
 #define CPU_TUNING_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 // thread_qos: run the game's own threads at user-interactive QoS
@@ -12,5 +13,8 @@
 // render_idle_fix: make the idle render thread really wait for work instead of spinning (BO3MACFIX_RENDERIDLEFIX)
 void cpu_tuning_init(uint64_t base_address, int thread_qos, int job_idle_fix, int yield_sleep0, int fast_setjmp,
                      int render_idle_fix);
+
+// JobIdleFix (render_thread false) or RenderIdleFix (true) changed while the game runs; false if it needs a restart
+bool cpu_tuning_set_idle_fix(bool render_thread, int on);
 
 #endif

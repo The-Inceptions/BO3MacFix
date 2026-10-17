@@ -1,0 +1,359 @@
+// BO3MacFix's settings: every settings.ini option with what an in-game menu needs to show it, a writer that changes
+// one line of settings.ini, restarting the game, and the BO3MacFix Lua table:
+//   BO3MacFix.GetSettings() -> { { name, label, description, category, kind = "toggle"|"choice", values, labels,
+//                                  value, default, live }, ... }
+//   BO3MacFix.SetSetting(name, value) -> restart_needed
+//   BO3MacFix.RestartGame()
+//   BO3MacFix.RestartPending() -> true if a setting that needs a restart changed this session
+// Some settings apply right away (live = true): the frame rate ones, the controller ones, RawMouseScale, AAEOnline
+// and ExitFix, plus JobIdleFix and RenderIdleFix from the pre-patched executable. The rest are read once at startup,
+// so changing them asks for a restart.
+#include <spawn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include "controllers.h"
+#include "cpu_tuning.h"
+#include "gc_bridge.h"
+#include "gpu_tweaks.h"
+#include "offsets.h"
+#include "prepatch.h"
+#include "qol.h"
+#include "rawmouse.h"
+#include "settings.h"
+#include "t7overcharged.h"
+
+#define Settings_File "../../../BO3MacFix/settings.ini"
+#define Max_Choices 8
+
+extern char **environ;
+extern uint64_t game_base_address;
+
+// when a change applies without a restart
+enum {
+    Live_Never,     // read once at startup
+    Live_Always,
+    Live_Present,   // needs Aspyr's present hooked: already, or late from the pre-patched executable
+    Live_Prepatch,  // a value slot of the pre-patched executable
+    Live_Prompts,   // needs the prompts hook: already, or late from the pre-patched executable
+};
+
+typedef struct {
+    const char *name, *label, *description, *category;
+    bool hex;                       // written as RRGGBB
+    int count;                      // 0 = toggle (0/1)
+    int values[Max_Choices];
+    const char *labels[Max_Choices];
+    int fallback;                   // the default
+    int live;                       // Live_*
+} setting_t;
+
+#define Toggle(def) false, 0, { 0 }, { 0 }, def, Live_Never
+#define Toggle_Live(def, live) false, 0, { 0 }, { 0 }, def, live
+static const setting_t settings[] = {
+    { "PrePatchedExe", "Pre-patched executable", "Starts a copy of the game with BO3MacFix's changes in the file, so Rosetta runs it from its faster translation.", "Performance", Toggle(1) },
+    { "JobThreads", "Job threads", "How many worker threads the game's job system uses; 4 measured about 8% faster.", "Performance", false, 3, { 2, 3, 4 }, { "2", "3", "4" }, 2, false },
+    { "ThreadQoS", "Thread priority", "Runs the game's main, render and job threads at macOS's highest scheduling priority.", "Performance", Toggle(1) },
+    { "JobIdleFix", "Idle job threads sleep", "Lets idle job threads sleep instead of spinning while they wait for work.", "Performance", Toggle_Live(1, Live_Prepatch) },
+    { "RenderIdleFix", "Idle render thread sleeps", "Lets the render thread sleep while it waits for the next frame instead of spinning.", "Performance", Toggle_Live(1, Live_Prepatch) },
+    { "FastSetjmp", "Fast script calls", "Makes the script engines skip a slow system call they make constantly.", "Performance", Toggle(1) },
+    { "YieldSleep0", "Yielding Sleep(0)", "Makes Sleep(0) yield like on Windows: a little more FPS for more CPU.", "Performance", Toggle(0) },
+    { "FramesInFlight", "Frames in flight", "How many frames the CPU may queue ahead of the GPU: fewer means less input lag.", "Graphics", false, 3, { 1, 2, 3 }, { "1 (least lag)", "2 (normal)", "3 (smoothest)" }, 2, false },
+    { "FramePacingFPS", "Frame pacing", "Keeps each frame on screen for a minimum time, for even pacing below the refresh rate.", "Graphics", false, 6, { 0, 30, 45, 60, 90, 120 }, { "Off", "30", "45", "60", "90", "120" }, 0, Live_Present },
+    { "BatteryFPS", "Battery frame limit", "Limits the frame rate only while the Mac runs on battery, to save power.", "Graphics", false, 5, { 0, 30, 45, 60, 90 }, { "Off", "30", "45", "60", "90" }, 0, Live_Present },
+    { "MetalFXUpscale", "MetalFX upscaling", "Upscales with MetalFX when the game runs below the screen's resolution (use Fullscreen Window).", "Graphics", Toggle(0) },
+    { "MetalHUD", "Metal performance HUD", "Shows macOS's Metal HUD with the frame rate and GPU time.", "Graphics", Toggle(0) },
+    { "ControllerMappings", "PlayStation controllers over USB", "Lets DualShock 4, DualSense and DualSense Edge controllers work over USB.", "Controller", Toggle(1) },
+    { "ControllerBridge", "macOS controller support", "Reads PlayStation controllers through macOS: Bluetooth and USB, rumble and lightbar. Turn Steam Input off.", "Controller", Toggle(0) },
+    { "ButtonPrompts", "Button prompts", "Which button icons the game shows.", "Controller", false, 3, { 0, 1, 2 }, { "Automatic", "Xbox", "PlayStation" }, 0, Live_Prompts },
+    { "LightbarColor", "Lightbar colour", "The DualSense or DualShock 4 lightbar colour (with macOS controller support).", "Controller", true, 7, { -1, 0xFF0000, 0x0040FF, 0x00C000, 0xFF00FF, 0xFFA000, 0xFFFFFF }, { "Leave alone", "Red", "Blue", "Green", "Pink", "Orange", "White" }, -1, Live_Always },
+    { "GyroAim", "Gyro aiming", "Aims with the DualSense's gyro on top of the right stick (with macOS controller support).", "Controller", false, 3, { 0, 1, 2 }, { "Off", "Always", "While aiming (L2)" }, 0, Live_Always },
+    { "GyroSensitivity", "Gyro sensitivity", "How strongly the gyro turns the view, in percent.", "Controller", false, 7, { 25, 50, 75, 100, 150, 200, 300 }, { "25%", "50%", "75%", "100%", "150%", "200%", "300%" }, 100, Live_Always },
+    { "GyroInvert", "Gyro invert", "Inverts the gyro's vertical and/or horizontal direction.", "Controller", false, 4, { 0, 1, 2, 3 }, { "Off", "Vertical", "Horizontal", "Both" }, 0, Live_Always },
+    { "AdaptiveTriggers", "Adaptive triggers", "Gives the DualSense's R2 a weapon-style break and L2 light resistance.", "Controller", Toggle_Live(0, Live_Always) },
+    { "RawMouse", "Raw mouse input", "Aims with raw mouse movement instead of macOS's accelerated movement.", "Mouse", Toggle(0) },
+    { "RawMouseScale", "Raw mouse speed", "The speed of raw mouse aiming, in percent.", "Mouse", false, 7, { 25, 50, 75, 100, 150, 200, 300 }, { "25%", "50%", "75%", "100%", "150%", "200%", "300%" }, 100, Live_Always },
+    { "ExitFix", "Quit without crashing", "Quits without the crash (and crash report) every quit used to end in.", "Game", Toggle_Live(1, Live_Always) },
+    { "AudioFollowsDefault", "Audio follows output device", "Moves the game's sound to the new output device, for example when AirPods connect.", "Game", Toggle(1) },
+    { "AAEOnline", "AAE online notes", "Lets All-around Enhancement show its version notes and weather (GitHub and wttr.in only).", "Game", Toggle_Live(0, Live_Always) },
+    { "FrameStats", "Frame stats in the log", "Logs the frame rate, 1% low and worst frame time to BO3MacFix/log.txt.", "Advanced", false, 4, { 0, 5, 10, 30 }, { "Off", "Every 5 s", "Every 10 s", "Every 30 s" }, 0, Live_Present },
+    { "GpuDiagnostics", "GPU diagnostics in the log", "Logs the window, display mode and Metal layer whenever they change.", "Advanced", Toggle(0) },
+    { "NoCodePatches", "No code patches (testing)", "Leaves the game's code exactly as shipped, without any of the fixes. Solo play only.", "Advanced", Toggle(0) },
+};
+#define Setting_Count (sizeof(settings) / sizeof(settings[0]))
+
+static bool restart_pending = false;
+
+// whether changing this setting now takes effect without a restart
+static bool live_now(const setting_t *t) {
+    switch (t->live) {
+    case Live_Always:
+        return true;
+    case Live_Present:
+        return gpu_tweaks_live_possible();
+    case Live_Prepatch:
+        return prepatch_active();
+    case Live_Prompts:
+        return controllers_prompts_live();
+    default:
+        return false;
+    }
+}
+
+// applies a live setting's new value, false if it couldn't be (then it needs a restart)
+static bool apply_live(const setting_t *t, int value) {
+    const char *n = t->name;
+    if (strcmp(n, "FramePacingFPS") == 0)
+        return gpu_tweaks_set_pacing(value);
+    if (strcmp(n, "BatteryFPS") == 0)
+        return gpu_tweaks_set_battery_fps(value);
+    if (strcmp(n, "FrameStats") == 0)
+        return gpu_tweaks_set_frame_stats(value);
+    if (strcmp(n, "JobIdleFix") == 0)
+        return cpu_tuning_set_idle_fix(false, value);
+    if (strcmp(n, "RenderIdleFix") == 0)
+        return cpu_tuning_set_idle_fix(true, value);
+    if (strcmp(n, "ButtonPrompts") == 0)
+        return controllers_set_button_prompts(value);
+    if (strcmp(n, "GyroAim") == 0)
+        gc_bridge_set_gyro_mode(value);
+    else if (strcmp(n, "GyroSensitivity") == 0)
+        gc_bridge_set_gyro_sensitivity(value);
+    else if (strcmp(n, "GyroInvert") == 0)
+        gc_bridge_set_gyro_invert(value);
+    else if (strcmp(n, "AdaptiveTriggers") == 0)
+        gc_bridge_set_adaptive_triggers(value);
+    else if (strcmp(n, "LightbarColor") == 0)
+        gc_bridge_set_lightbar(value);
+    else if (strcmp(n, "RawMouseScale") == 0)
+        rawmouse_set_scale(value);
+    else if (strcmp(n, "AAEOnline") == 0)
+        t7o_set_online(value);
+    else if (strcmp(n, "ExitFix") == 0)
+        qol_set_exit_fix(value);
+    else
+        return false;
+    return true;
+}
+
+static const setting_t *find_setting(const char *name) {
+    for (size_t i = 0; i < Setting_Count; i++) {
+        if (strcmp(settings[i].name, name) == 0)
+            return &settings[i];
+    }
+    return NULL;
+}
+
+// the value of Name in settings.ini, or fallback (the same parsing as read_setting in bo3macfix.c)
+static int read_value(const setting_t *setting) {
+    FILE *fp = fopen(Settings_File, "r");
+    int value = setting->fallback;
+    if (fp == NULL)
+        return value;
+    size_t name_len = strlen(setting->name);
+    char line[512];
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        char *p = line + strspn(line, " \t");
+        if (strncmp(p, setting->name, name_len) != 0)
+            continue;
+        p += name_len;
+        p += strspn(p, " \t");
+        if (*p != '=')
+            continue;
+        p++;
+        p += strspn(p, " \t\"");
+        if (setting->hex && *p == '#')
+            p++;
+        value = (int)strtol(p, NULL, setting->hex ? 16 : 10);
+    }
+    fclose(fp);
+    return value;
+}
+
+// does this line set name (Name = ...)?
+static bool line_sets(const char *line, const char *name) {
+    const char *p = line + strspn(line, " \t");
+    size_t name_len = strlen(name);
+    if (strncmp(p, name, name_len) != 0)
+        return false;
+    p += name_len;
+    p += strspn(p, " \t");
+    return *p == '=';
+}
+
+bool settings_write(const char *name, const char *value) {
+    FILE *in = fopen(Settings_File, "r");
+    char temp[1024];
+    snprintf(temp, sizeof(temp), "%s.tmp%d", Settings_File, (int)getpid());
+    FILE *out = fopen(temp, "w");
+    if (out == NULL) {
+        if (in != NULL)
+            fclose(in);
+        return false;
+    }
+    bool written = false, ends_with_newline = true;
+    char line[1024];
+    while (in != NULL && fgets(line, sizeof(line), in) != NULL) {
+        size_t len = strlen(line);
+        ends_with_newline = len > 0 && line[len - 1] == '\n';
+        if (line_sets(line, name)) {
+            // replace the last line that sets it (read_setting uses the last), drop earlier duplicates
+            if (!written) {
+                fprintf(out, "%s = %s\n", name, value);
+                written = true;
+            }
+            continue;
+        }
+        fputs(line, out);
+    }
+    if (in != NULL)
+        fclose(in);
+    if (!written)
+        fprintf(out, "%s%s = %s\n", ends_with_newline ? "" : "\n", name, value);
+    bool ok = fflush(out) == 0 && fsync(fileno(out)) == 0;
+    ok = fclose(out) == 0 && ok;
+    if (!ok || rename(temp, Settings_File) != 0) {
+        unlink(temp);
+        return false;
+    }
+    return true;
+}
+
+#pragma mark - restarting
+
+static void (*Cbuf_AddText)(int localClientNum, const char *text);
+
+// Starts the game again through Steam once this process has gone, then quits through the game's own quit path (so
+// config.ini is saved). Going through Steam keeps its launch options and session; the launcher it runs makes or
+// reuses the pre-patched executable, and the game reloads the last mod (AAE) by itself.
+static void restart_game(void) {
+    char command[256];
+    snprintf(command, sizeof(command), "while kill -0 %d 2>/dev/null; do sleep 0.5; done; sleep 1; open steam://rungameid/311210",
+             (int)getpid());
+    char *argv[] = { "/bin/sh", "-c", command, NULL };
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+    pid_t pid;
+    int spawned = posix_spawn(&pid, "/bin/sh", NULL, &attr, argv, environ);
+    posix_spawnattr_destroy(&attr);
+    printf("BO3MacFix: restarting the game%s\n", spawned == 0 ? "" : " (couldn't start the relaunch, quitting only)");
+    Cbuf_AddText = (void *)(game_base_address + ADDR_Cbuf_AddText);
+    Cbuf_AddText(0, "quit\n");
+}
+
+#pragma mark - Lua
+
+// one line per setting: name, label, description, category, kind, values, labels, value, default, live, separated
+// by \x1f, with values and labels separated by \x1e (the Lua half turns this into tables)
+static int lua_list(lua_State *s) {
+    size_t size = 16384, used = 0;
+    char *text = calloc(1, size);
+    for (size_t i = 0; text != NULL && i < Setting_Count; i++) {
+        const setting_t *t = &settings[i];
+        char values[256] = "", labels[512] = "";
+        int count = t->count;
+        for (int c = 0; c < count; c++) {
+            char v[32];
+            snprintf(v, sizeof(v), "%s%d", c ? "\x1e" : "", t->values[c]);
+            strlcat(values, v, sizeof(values));
+            if (c)
+                strlcat(labels, "\x1e", sizeof(labels));
+            strlcat(labels, t->labels[c], sizeof(labels));
+        }
+        used += snprintf(text + used, size - used, "%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%d\x1f%d\x1f%d\n", t->name, t->label,
+                         t->description, t->category, count ? "choice" : "toggle", values, labels, read_value(t), t->fallback,
+                         live_now(t) ? 1 : 0);
+        if (used >= size)
+            break;
+    }
+    hks_push_string(s, text != NULL ? text : "");
+    free(text);
+    return 1;
+}
+
+// SetSetting(name, value as a string): saves it, returns whether the game needs a restart for it
+static int lua_set(lua_State *s) {
+    const char *name = hks_check_string(s, 1), *value_text = hks_check_string(s, 2);
+    const setting_t *t = name != NULL ? find_setting(name) : NULL;
+    if (t == NULL || value_text == NULL) {
+        hks_push_nil(s);
+        return 1;
+    }
+    int value = (int)strtod(value_text, NULL);
+    int before = read_value(t);
+    char text[32];
+    if (t->hex && value >= 0)
+        snprintf(text, sizeof(text), "%06X", value);
+    else
+        snprintf(text, sizeof(text), "%d", value);
+    if (!settings_write(t->name, text)) {
+        printf("BO3MacFix: couldn't save %s to settings.ini\n", t->name);
+        hks_push_nil(s);
+        return 1;
+    }
+    bool applied = live_now(t) && apply_live(t, value);
+    bool restart = !applied && value != before;
+    printf("BO3MacFix: set %s = %s%s\n", t->name, text, applied ? "" : restart ? " (takes effect after a restart)" : "");
+    if (restart)
+        restart_pending = true;
+    hks_push_boolean(s, restart);
+    return 1;
+}
+
+static int lua_restart(lua_State *s) {
+    restart_game();
+    return 0;
+}
+
+static int lua_pending(lua_State *s) {
+    hks_push_boolean(s, restart_pending);
+    return 1;
+}
+
+static const char settings_lua[] =
+    "local list, set, restart, pending = ...\n"
+    "local function split(text, separator)\n"
+    "  local parts, start = {}, 1\n"
+    "  while true do\n"
+    "    local at = string.find(text, separator, start, true)\n"
+    "    if not at then table.insert(parts, string.sub(text, start)) return parts end\n"
+    "    table.insert(parts, string.sub(text, start, at - 1))\n"
+    "    start = at + 1\n"
+    "  end\n"
+    "end\n"
+    "BO3MacFix = BO3MacFix or {}\n"
+    "function BO3MacFix.GetSettings()\n"
+    "  local result = {}\n"
+    "  for _, line in ipairs(split(list(), \"\\n\")) do\n"
+    "    if line ~= \"\" then\n"
+    "      local f = split(line, \"\\31\")\n"
+    "      local values, labels = {}, {}\n"
+    "      if f[6] ~= \"\" then for _, v in ipairs(split(f[6], \"\\30\")) do table.insert(values, tonumber(v)) end end\n"
+    "      if f[7] ~= \"\" then labels = split(f[7], \"\\30\") end\n"
+    "      table.insert(result, { name = f[1], label = f[2], description = f[3], category = f[4], kind = f[5],\n"
+    "        values = values, labels = labels, value = tonumber(f[8]), default = tonumber(f[9]), live = f[10] == \"1\" })\n"
+    "    end\n"
+    "  end\n"
+    "  return result\n"
+    "end\n"
+    "function BO3MacFix.SetSetting(name, value)\n"
+    "  if type(value) == \"boolean\" then value = value and 1 or 0 end\n"
+    "  return set(name, tostring(value))\n"
+    "end\n"
+    "function BO3MacFix.RestartGame() restart() end\n"
+    "function BO3MacFix.RestartPending() return pending() end\n";
+
+void settings_lua_install(lua_State *s) {
+    // the stack can be reallocated while our Lua runs, so remember the top as an index
+    ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
+    if (hks_load_source(s, settings_lua, sizeof(settings_lua) - 1, "=BO3MacFix settings table")) {
+        hks_push_cfunction(s, lua_list, "SettingsList");
+        hks_push_cfunction(s, lua_set, "SettingsSet");
+        hks_push_cfunction(s, lua_restart, "SettingsRestart");
+        hks_push_cfunction(s, lua_pending, "SettingsPending");
+        hks_pcall(s, 4, 0);
+    }
+    HKS_TOP(s) = HKS_BASE(s) + top;
+}

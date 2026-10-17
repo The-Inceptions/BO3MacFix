@@ -125,3 +125,9 @@ void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fi
     if (env_override("BO3MACFIX_FASTSETJMP", fast_setjmp) != 0)
         fast_setjmp_patch();
 }
+
+// JobIdleFix / RenderIdleFix changed while the game runs: the pre-patched executable's instructions read their
+// timeout from a slot, otherwise it's a code write and needs a restart
+bool cpu_tuning_set_idle_fix(bool render_thread, int on) {
+    return prepatch_set_value(render_thread ? ADDR_RenderThread_WaitTimeoutInstr : ADDR_JQ_IdleWait_TimeoutInstr, on ? 2 : 0);
+}

@@ -19,3 +19,10 @@ bool gc_bridge_enabled(void);
 
 // is a PlayStation controller from the bridge on this XInput user index? for ButtonPrompts = 0
 bool gc_bridge_is_playstation_user(int user_index);
+
+// changes from the settings menu while the game runs, applied to connected controllers right away
+void gc_bridge_set_gyro_mode(int mode);
+void gc_bridge_set_gyro_sensitivity(int percent);
+void gc_bridge_set_gyro_invert(int axes);
+void gc_bridge_set_adaptive_triggers(int on);
+void gc_bridge_set_lightbar(int rgb);

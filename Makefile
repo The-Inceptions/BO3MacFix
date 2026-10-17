@@ -32,6 +32,9 @@ SOURCES += source/metalfx.m source/gpu_diag.m
 # the pre-patched executable (prepatch.c), the launcher builds it with BO3MacFix_BuildPrepatched
 SOURCES += source/prepatch.c
 
+# settings.ini's options for an in-game menu, the settings.ini writer and restarting (settings.c)
+SOURCES += source/settings.c
+
 # quitting without a crash and audio following the default output device (qol.c)
 SOURCES += source/qol.c source/rawmouse.c
 FRAMEWORKS += -framework AudioToolbox -framework CoreAudio

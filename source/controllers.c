@@ -208,6 +208,21 @@ install_hook_name(GPad_GetGamepadType, int, int controllerIndex) {
     return type;
 }
 
+static bool prompts_hooked = false;
+
+static bool install_prompts_hook(void) {
+    // push rbp; mov rbp, rsp; movsxd rax, edi; imul rax, rax, 0x70
+    static const uint8_t expected[] = { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xC7, 0x48, 0x6B, 0xC0, 0x70 };
+    void *func = (void *)(base_address + ADDR_GPad_GetGamepadType);
+    if (memcmp(prepatch_original_code(func, sizeof(expected)), expected, sizeof(expected)) != 0) {
+        printf("unexpected code at %08x, not hooking\n", ADDR_GPad_GetGamepadType);
+        return false;
+    }
+    install_hook_GPad_GetGamepadType(func);
+    prompts_hooked = true;
+    return true;
+}
+
 void controllers_init(uint64_t base, int add_mappings, int button_prompts) {
     base_address = base;
     if (add_mappings) {
@@ -215,13 +230,22 @@ void controllers_init(uint64_t base, int add_mappings, int button_prompts) {
         add_sdl_mappings();
     }
     button_prompts_mode = button_prompts;
-    if (button_prompts != 1) {
-        // push rbp; mov rbp, rsp; movsxd rax, edi; imul rax, rax, 0x70
-        static const uint8_t expected[] = { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xC7, 0x48, 0x6B, 0xC0, 0x70 };
-        void *func = (void *)(base + ADDR_GPad_GetGamepadType);
-        if (memcmp(prepatch_original_code(func, sizeof(expected)), expected, sizeof(expected)) == 0)
-            install_hook_GPad_GetGamepadType(func);
-        else
-            printf("unexpected code at %08x, not hooking\n", ADDR_GPad_GetGamepadType);
-    }
+    if (button_prompts != 1)
+        install_prompts_hook();
+}
+
+// ButtonPrompts changed while the game runs. Started with Xbox prompts (1), the hook isn't in place, and adding it
+// now is only a data write from the pre-patched executable; otherwise that needs a restart.
+bool controllers_prompts_live(void) {
+    return prompts_hooked || prepatch_active();
+}
+
+bool controllers_set_button_prompts(int mode) {
+    if (mode < 0 || mode > 2)
+        return false;
+    if (!prompts_hooked && mode != 1 && (!prepatch_active() || !install_prompts_hook()))
+        return false;
+    button_prompts_mode = mode;
+    printf("BO3MacFix: button prompts now %s\n", mode == 0 ? "automatic" : mode == 1 ? "Xbox" : "PlayStation");
+    return true;
 }

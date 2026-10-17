@@ -26,6 +26,10 @@ const void *prepatch_original_code(const void *address, size_t size);
 // slot. Returns false when not running from the copy, or it has no such call.
 bool prepatch_redirect_call(uint32_t offset, void *function);
 
+// sets the value the pre-patched copy's "mov r32, imm32" at offset loads (0 = the instruction's own value), for
+// settings changed while the game runs. Returns false when not running from the copy, or it has no such site.
+bool prepatch_set_value(uint32_t offset, uint32_t value);
+
 // prints what was set up from the pre-patched copy, and whether any game code page was written
 void prepatch_report(void);
 

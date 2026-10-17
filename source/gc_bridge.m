@@ -812,3 +812,105 @@ void gc_bridge_init(uint64_t base, int mode, int lightbar_rgb) {
         printf("GameController bridge: needs macOS 11.3 or newer, staying off\n");
     }
 }
+
+#pragma mark - changes from the settings menu
+
+// GyroAim switched on or off while the game runs: start or stop the connected controllers' motion sensors
+static void apply_gyro_mode(int mode) {
+    if (!enabled)
+        return;
+    if (@available(macOS 11.3, *)) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                for (int i = 0; i < XUSER_MAX_COUNT; i++) {
+                    bridged_pad *pad = &pads[i];
+                    os_unfair_lock_lock(&pads_lock);
+                    GCController *controller = [pad->controller retain];
+                    os_unfair_lock_unlock(&pads_lock);
+                    GCMotion *motion = controller.motion;
+                    if (motion == nil || !motion.hasRotationRate) {
+                        [controller release];
+                        continue;
+                    }
+                    if (mode != 0) {
+                        dispatch_async(input_queue, ^{
+                            pad->gyro_samples = 0;
+                            pad->gyro_smooth[0] = pad->gyro_smooth[1] = 0.0f;
+                        });
+                        if (motion.sensorsRequireManualActivation)
+                            motion.sensorsActive = YES;
+                        motion.valueChangedHandler = ^(GCMotion *changed) {
+                            gyro_update(pad, changed);
+                        };
+                    } else {
+                        motion.valueChangedHandler = nil;
+                        if (motion.sensorsRequireManualActivation)
+                            motion.sensorsActive = NO;
+                    }
+                    [controller release];
+                }
+            }
+        });
+    }
+}
+
+void gc_bridge_set_gyro_mode(int mode) {
+    int was = gyro_mode;
+    gyro_mode = mode;
+    if ((was != 0) != (mode != 0))
+        apply_gyro_mode(mode);
+    printf("GameController bridge: gyro aim %s\n", mode == 0 ? "off" : mode == 2 ? "on while L2 is held" : "on");
+}
+
+void gc_bridge_set_gyro_sensitivity(int percent) {
+    gyro_scale = (percent > 0 ? percent : 100) / 100.0f;
+}
+
+void gc_bridge_set_gyro_invert(int axes) {
+    gyro_invert = axes;
+}
+
+void gc_bridge_set_adaptive_triggers(int on) {
+    adaptive_triggers = on != 0;
+    if (!enabled)
+        return;
+    if (@available(macOS 11.3, *)) {
+        dispatch_async(input_queue, ^{
+            @autoreleasepool {
+                for (int i = 0; i < XUSER_MAX_COUNT; i++) {
+                    os_unfair_lock_lock(&pads_lock);
+                    GCController *controller = [pads[i].controller retain];
+                    os_unfair_lock_unlock(&pads_lock);
+                    if (controller != nil)
+                        set_adaptive_triggers(controller, on != 0 && atomic_load(&app_active));
+                    [controller release];
+                }
+            }
+        });
+    }
+}
+
+// -1 means leave the lightbar alone, which can't bring back a colour already set, so it only stops changing it
+void gc_bridge_set_lightbar(int rgb) {
+    lightbar_color = rgb > 0xFFFFFF ? -1 : rgb;
+    if (!enabled || lightbar_color < 0)
+        return;
+    int color = lightbar_color;
+    if (@available(macOS 11.3, *)) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                for (int i = 0; i < XUSER_MAX_COUNT; i++) {
+                    os_unfair_lock_lock(&pads_lock);
+                    GCController *controller = [pads[i].controller retain];
+                    os_unfair_lock_unlock(&pads_lock);
+                    if (controller.light != nil)
+                        controller.light.color = [[[GCColor alloc] initWithRed:((color >> 16) & 0xFF) / 255.0f
+                                                                         green:((color >> 8) & 0xFF) / 255.0f
+                                                                          blue:(color & 0xFF) / 255.0f] autorelease];
+                    [controller release];
+                }
+            }
+        });
+    }
+    printf("GameController bridge: lightbar set to %06X\n", color);
+}

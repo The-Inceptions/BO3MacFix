@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDDevice.h>
@@ -9,3 +10,7 @@ void controllers_init(uint64_t base_address, int add_mappings, int button_prompt
 
 // called from the IOHIDDeviceGetProperty interposer, returns the value BO3's SDL 2.0.7 should see
 CFTypeRef controllers_hid_property(IOHIDDeviceRef device, CFStringRef key, CFTypeRef value);
+
+// ButtonPrompts changed while the game runs (false: needs a restart), and whether that can happen now
+bool controllers_set_button_prompts(int mode);
+bool controllers_prompts_live(void);
