@@ -53,6 +53,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_ASL_XInputGetState, Push_R14 },
     { ADDR_ASL_XInputSetState, Push_R14 },
     { ADDR_CL_FirstSnapshot, Push_R15 },
+    { ADDR_Cocoa_HandleMouseEvent, Push_R15 },
     { ADDR_CL_SetCGameTime, Push_R15 },
     { ADDR_Com_GetBuildIntField, 5, 4, { 0x83, 0xFF, 0x02, 0x74, 0x11 } }, // cmp edi, 2; je +0x11
     { ADDR_CSteamAPIContext_Init, Push_R15 },

@@ -18,6 +18,8 @@ void lua_correct_path(const char *in_path, char *out_path, size_t out_path_len);
 // defined in bo3macnative.m
 char *copy_clipboard_text();
 void set_clipboard_text(const char *text);
+bool http_get_async(const char *url, const char *key);
+char *http_copy_result(const char *key);
 
 #define ASSET_TYPE_COUNT 0x6B
 #define MAX_ASSET_LIMIT 100000
@@ -121,6 +123,32 @@ static int lua_clipboard_set(lua_State *s) {
     return 0;
 }
 
+static int aae_online = 0;
+
+void t7o_set_online(int enabled) {
+    aae_online = enabled;
+}
+
+// Axios.GetUpdate(url, key): only with AAEOnline = 1, and only to the hosts http_get_async allows
+static int lua_http_get(lua_State *s) {
+    const char *url = hks_check_string(s, 1), *key = hks_check_string(s, 2);
+    bool started = aae_online && url != NULL && key != NULL && http_get_async(url, key);
+    hks_push_boolean(s, started);
+    return 1;
+}
+
+// Axios.GetRetrieve(key): the response text, or nil until there is one
+static int lua_http_result(lua_State *s) {
+    const char *key = hks_check_string(s, 1);
+    char *text = key != NULL ? http_copy_result(key) : NULL;
+    if (text != NULL)
+        hks_push_string(s, text);
+    else
+        hks_push_nil(s);
+    free(text);
+    return 1;
+}
+
 static int lua_print(lua_State *s) {
     printf("%s\n", hks_check_string(s, 1));
     return 0;
@@ -137,7 +165,9 @@ static int t7o_init(lua_State *s) {
         hks_push_cfunction(s, lua_clipboard_get, "ClipboardGet");
         hks_push_cfunction(s, lua_clipboard_set, "ClipboardSet");
         hks_push_cfunction(s, lua_print, "Print");
-        hks_pcall(s, 5, 0);
+        hks_push_cfunction(s, lua_http_get, "HttpGet");
+        hks_push_cfunction(s, lua_http_result, "HttpResult");
+        hks_pcall(s, 7, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;

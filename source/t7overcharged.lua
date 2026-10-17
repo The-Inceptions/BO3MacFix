@@ -1,7 +1,8 @@
 -- BO3MacFix's stand-in for T7Overcharged, a Windows-only DLL that workshop mods
 -- (e.g. All-around Enhancement) load for extra Lua libraries.
 -- BO3MacFix runs this when a mod loads the DLL, passing in a few native helpers.
-local nativeCreateDirectory, nativeDirectoryExists, nativeClipboardGet, nativeClipboardSet, nativePrint = ...
+local nativeCreateDirectory, nativeDirectoryExists, nativeClipboardGet, nativeClipboardSet, nativePrint,
+    nativeHttpGet, nativeHttpResult = ...
 
 if EnableGlobals then
     EnableGlobals()
@@ -121,8 +122,22 @@ local function setup()
         ShowExternalConsole = noop,
     })
 
-    -- no network or Discord support, so requests never return anything
-    Axios = provide(Axios or {}, {})
+    -- Axios: GET requests for AAE's version notes and weather when AAEOnline = 1 (BO3MacFix only fetches from a few
+    -- public hosts). Posting to Discord webhooks and anything needing T7Overcharged's built-in keys does nothing.
+    Axios = provide(Axios or {}, {
+        GetUpdate = function(url, key)
+            if type(url) == "string" and type(key) == "string" then
+                return nativeHttpGet(url, key)
+            end
+            return false
+        end,
+        GetRetrieve = function(key)
+            if type(key) == "string" then
+                return nativeHttpResult(key)
+            end
+            return nil
+        end,
+    })
     DiscordRPC = provide(DiscordRPC or {}, {
         IsAvailable = function()
             return false

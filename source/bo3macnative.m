@@ -118,6 +118,61 @@ void set_clipboard_text(const char *text) {
     }
 }
 
+// AAE's online requests (T7Overcharged's Axios): plain HTTPS GETs to a few public hosts, results kept by key
+static NSMutableDictionary<NSString *, NSString *> *http_results = nil;
+
+static bool http_host_allowed(NSURL *url) {
+    NSArray *hosts = @[ @"raw.githubusercontent.com", @"wttr.in" ];
+    return url != nil && [url.scheme isEqualToString:@"https"] && [hosts containsObject:url.host.lowercaseString];
+}
+
+// starts fetching url, keeping the response text under key. Returns false for anything but an allowed host.
+bool http_get_async(const char *url_string, const char *key_string) {
+    @autoreleasepool {
+        NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:url_string]];
+        NSString *key = [NSString stringWithUTF8String:key_string];
+        if (!http_host_allowed(url) || key == nil) {
+            printf("BO3MacFix: AAE online: not fetching %s (only HTTPS to a few hosts is allowed)\n", url_string);
+            return false;
+        }
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            http_results = [[NSMutableDictionary alloc] init];
+        });
+        NSURLRequest *request = [NSURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                             timeoutInterval:10];
+        [[[NSURLSession sharedSession] dataTaskWithRequest:request
+                                         completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            NSInteger code = [response isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+            printf("BO3MacFix: AAE online: %s from %s (%lu bytes)\n", error != nil ? "failed" : code == 200 ? "got" : "HTTP error",
+                   url.host.UTF8String ?: "?", (unsigned long)data.length);
+            if (error != nil || code != 200 || data.length == 0 || data.length > 512 * 1024)
+                return;
+            NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            if (text == nil)
+                return;
+            @synchronized (http_results) {
+                http_results[key] = text;
+            }
+            [text release];
+        }] resume];
+        return true;
+    }
+}
+
+// the text fetched for key, which the caller frees, or NULL while there's none yet
+char *http_copy_result(const char *key_string) {
+    @autoreleasepool {
+        if (http_results == nil)
+            return NULL;
+        NSString *key = [NSString stringWithUTF8String:key_string];
+        @synchronized (http_results) {
+            NSString *text = key != nil ? http_results[key] : nil;
+            return text != nil ? strdup(text.UTF8String) : NULL;
+        }
+    }
+}
+
 void add_menu_bar() {
     dispatch_async(dispatch_get_main_queue(), ^(void) {
         [MacFixNativeDelegate setUpMenuBar];

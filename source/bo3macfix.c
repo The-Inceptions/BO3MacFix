@@ -33,6 +33,7 @@
 #include "offsets.h"
 #include "prepatch.h"
 #include "qol.h"
+#include "rawmouse.h"
 #include "steam.h"
 #include "stream_stall_recovery.h"
 #include "t7overcharged.h"
@@ -1059,6 +1060,13 @@ __attribute__((constructor)) static void dylib_main() {
 
     // quitting without Aspyr's shutdown crash, and game audio following the default output device (see qol.c)
     qol_init(read_int_setting("ExitFix", 1), read_int_setting("AudioFollowsDefault", 1));
+
+    // aiming with the mouse's raw movement instead of macOS's accelerated one (RawMouse, off by default)
+    rawmouse_init(game_base_address, read_int_setting("RawMouse", 0), read_int_setting("RawMouseScale", 100));
+
+    // AAE's online version notes and weather (AAEOnline = 1, off by default), see t7overcharged.c
+    const char *aae_online_env = getenv("BO3MACFIX_AAEONLINE");
+    t7o_set_online(aae_online_env != NULL ? atoi(aae_online_env) : read_int_setting("AAEOnline", 0));
 
     // logs how frames get to the screen when GpuDiagnostics = 1, see gpu_diag.m
     gpu_diag_init(read_int_setting("GpuDiagnostics", 0));

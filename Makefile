@@ -33,7 +33,7 @@ SOURCES += source/metalfx.m source/gpu_diag.m
 SOURCES += source/prepatch.c
 
 # quitting without a crash and audio following the default output device (qol.c)
-SOURCES += source/qol.c
+SOURCES += source/qol.c source/rawmouse.c
 FRAMEWORKS += -framework AudioToolbox -framework CoreAudio
 FRAMEWORKS += -framework Metal -framework QuartzCore -framework AppKit -weak_framework MetalFX
 

@@ -37,6 +37,9 @@
 #define ADDR_hks_pushnamedcclosure 0x1476385 // func
 #define ADDR_R_TrackTextureMemory 0x126dad2 // func - name is a guess
 #define ADDR_ASL_SleepEx 0x111752 // func - Aspyr's Sleep/SleepEx(milliseconds, alertable)
+#define ADDR_Cocoa_HandleMouseEvent 0x148470 // func - SDL 2.0.7, relative mode motion from [NSEvent deltaX/deltaY]
+#define ADDR_SDL_GetMouse 0x1355b0 // func - SDL 2.0.7
+#define ADDR_SDL_SendMouseMotion 0x135870 // func - SDL 2.0.7 (window, mouseID, relative, x, y)
 #define ADDR_Stub_setjmp 0x1627c20 // __stubs entry for setjmp, jmp [lazy symbol pointer]
 #define ADDR_Stub_longjmp 0x16279b0 // __stubs entry for longjmp, jmp [lazy symbol pointer]
 #define ADDR_SDL_SetWindowTitle 0x1944d0 // func
