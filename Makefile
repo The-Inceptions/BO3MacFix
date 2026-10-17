@@ -31,6 +31,10 @@ SOURCES += source/metalfx.m source/gpu_diag.m
 
 # the pre-patched executable (prepatch.c), the launcher builds it with BO3MacFix_BuildPrepatched
 SOURCES += source/prepatch.c
+
+# quitting without a crash and audio following the default output device (qol.c)
+SOURCES += source/qol.c
+FRAMEWORKS += -framework AudioToolbox -framework CoreAudio
 FRAMEWORKS += -framework Metal -framework QuartzCore -framework AppKit -weak_framework MetalFX
 
 all: $(TARGET)

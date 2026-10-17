@@ -32,6 +32,7 @@
 #include "utilities.h"
 #include "offsets.h"
 #include "prepatch.h"
+#include "qol.h"
 #include "steam.h"
 #include "stream_stall_recovery.h"
 #include "t7overcharged.h"
@@ -1052,6 +1053,9 @@ __attribute__((constructor)) static void dylib_main() {
 
     // log the frame rate every FrameStats seconds (0 = off), see gpu_tweaks.c
     gpu_tweaks_frame_stats_init(read_int_setting("FrameStats", 0), checked_code_patch);
+
+    // quitting without Aspyr's shutdown crash, and game audio following the default output device (see qol.c)
+    qol_init(read_int_setting("ExitFix", 1), read_int_setting("AudioFollowsDefault", 1));
 
     // logs how frames get to the screen when GpuDiagnostics = 1, see gpu_diag.m
     gpu_diag_init(read_int_setting("GpuDiagnostics", 0));

@@ -30,6 +30,8 @@ BO3MacFix reads `BO3MacFix/settings.ini` in the game's folder when the game star
 | `ControllerBridge` | 0 | Reads DualShock 4 and DualSense controllers through macOS instead: Bluetooth and USB, rumble and lightbar. Turn Steam Input off for the game. Needs macOS 11.3. |
 | `ButtonPrompts` | 0 | 0 shows PlayStation buttons with a PlayStation controller, 1 always Xbox, 2 always PlayStation. |
 | `LightbarColor` | -1 | The lightbar colour as RRGGBB, with `ControllerBridge`. -1 leaves it alone. |
+| `ExitFix` | 1 | Quits without the crash (and crash report) Aspyr's shutdown causes every time. |
+| `AudioFollowsDefault` | 1 | Moves the game's audio to the new default output device, e.g. when AirPods connect or disconnect. |
 | `NoCodePatches` | 0 | For testing only: leaves the game's code exactly as shipped, without any of the fixes. Solo play only. |
 
 Most can also be set with an environment variable, `BO3MACFIX_` and the name in capitals. When the game is started
