@@ -309,6 +309,14 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
 
 #pragma mark - rumble
 
+// CoreHaptics throws an Objective-C exception, instead of returning an error, when a player's engine isn't
+// running (it stopped on its own, or the controller just went away), so every call into it is wrapped
+static void haptics_exception(NSException *exception, const char *where) {
+    static int said = 0;
+    if (said++ < 5)
+        printf("GameController bridge: rumble %s failed: %s\n", where, exception.reason.UTF8String ?: "?");
+}
+
 API_AVAILABLE(macos(11.3))
 static id make_player(CHHapticEngine *engine) {
     // a continuous event that never ends, or if CoreHaptics won't take that, a 30 second one. (Not an advanced
@@ -324,7 +332,12 @@ static id make_player(CHHapticEngine *engine) {
                                                             relativeTime:0
                                                                 duration:durations[i]] autorelease];
         CHHapticPattern *pattern = [[[CHHapticPattern alloc] initWithEvents:@[ event ] parameters:@[] error:&error] autorelease];
-        id<CHHapticPatternPlayer> player = pattern != nil ? [engine createPlayerWithPattern:pattern error:&error] : nil;
+        id<CHHapticPatternPlayer> player = nil;
+        @try {
+            player = pattern != nil ? [engine createPlayerWithPattern:pattern error:&error] : nil;
+        } @catch (NSException *exception) {
+            haptics_exception(exception, "setup");
+        }
         if (player != nil)
             return [player retain];
         printf("GameController bridge: couldn't make the %s rumble pattern: %s\n", i == 0 ? "endless" : "30 second",
@@ -332,6 +345,7 @@ static id make_player(CHHapticEngine *engine) {
     }
     return nil;
 }
+
 
 // the motors run as continuous events at full strength, scaled by a dynamic intensity, so speed changes don't
 // restart anything
@@ -345,6 +359,7 @@ static void set_motors(bridged_pad *pad, uint16_t left, uint16_t right) {
         if (player == nil || pad->motors[i] == speeds[i])
             continue;
         NSError *error = nil;
+        @try {
         if (speeds[i] == 0) {
             [player stopAtTime:CHHapticTimeImmediate error:&error];
         } else {
@@ -363,6 +378,9 @@ static void set_motors(bridged_pad *pad, uint16_t left, uint16_t right) {
                        sent ? "playing" : error.localizedDescription.UTF8String ?: "failed");
                 said = true;
             }
+        }
+        } @catch (NSException *exception) {
+            haptics_exception(exception, "change");
         }
         pad->motors[i] = speeds[i];
     }
@@ -396,8 +414,12 @@ static void restart_haptics(bridged_pad *pad) {
     for (int i = 0; i < pad->engine_count; i++) {
         [pad->players[i] release];
         pad->players[i] = nil;
-        if ([pad->engines[i] startAndReturnError:nil])
-            pad->players[i] = make_player(pad->engines[i]);
+        @try {
+            if ([pad->engines[i] startAndReturnError:nil])
+                pad->players[i] = make_player(pad->engines[i]);
+        } @catch (NSException *exception) {
+            haptics_exception(exception, "restart");
+        }
     }
     pad->motors[0] = pad->motors[1] = 0;
     apply_motors(pad);
@@ -467,9 +489,13 @@ static void start_haptics(bridged_pad *pad, GCController *controller, int user_i
 API_AVAILABLE(macos(11.3))
 static void stop_haptics(bridged_pad *pad) {
     for (int i = 0; i < pad->engine_count; i++) {
-        [pad->players[i] stopAtTime:CHHapticTimeImmediate error:nil];
+        @try {
+            [pad->players[i] stopAtTime:CHHapticTimeImmediate error:nil];
+            [pad->engines[i] stopWithCompletionHandler:nil];
+        } @catch (NSException *exception) {
+            haptics_exception(exception, "stop");
+        }
         [pad->players[i] release];
-        [pad->engines[i] stopWithCompletionHandler:nil];
         [pad->engines[i] release];
         pad->players[i] = nil;
         pad->engines[i] = nil;
