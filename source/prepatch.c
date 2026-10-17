@@ -468,6 +468,7 @@ static int check_layout(build_t *b) {
         sizeof(*mh) + mh->sizeofcmds > b->size)
         return fail(b->message, b->message_size, "it isn't the x86_64 game executable");
     uint64_t text_file_end = 0, text_sections_end = 0, data_start = 0, data_end = 0, data_sections_end = 0;
+    uint64_t data_fileoff = 0, data_filesize = 0;
     const uint8_t *p = b->data + sizeof(*mh);
     for (uint32_t i = 0; i < mh->ncmds; i++) {
         const struct load_command *lc = (const struct load_command *)p;
@@ -488,6 +489,8 @@ static int check_layout(build_t *b) {
                 data_start = seg->vmaddr - Game_Base;
                 data_end = data_start + seg->vmsize;
                 data_sections_end = sections_end - Game_Base;
+                data_fileoff = seg->fileoff;
+                data_filesize = seg->filesize;
             }
         }
         p += lc->cmdsize;
@@ -499,6 +502,12 @@ static int check_layout(build_t *b) {
     for (uint32_t o = ADDR_Prepatch_Header; o < ADDR_Prepatch_CodeEnd; o++) {
         if (b->data[o] != 0)
             return fail(b->message, b->message_size, "the padding after its code isn't empty");
+    }
+    // an unset slot has to read as 0: past __DATA's file-backed part it's zero-filled when loaded, inside it the file
+    // must hold zeros there
+    for (uint64_t o = ADDR_Prepatch_Slots - data_start; o < ADDR_Prepatch_SlotsEnd - data_start && o < data_filesize; o++) {
+        if (data_fileoff + o >= b->size || b->data[data_fileoff + o] != 0)
+            return fail(b->message, b->message_size, "its data where the slots go isn't empty");
     }
     return 0;
 }

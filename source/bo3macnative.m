@@ -126,10 +126,22 @@ static bool http_host_allowed(NSURL *url) {
     return url != nil && [url.scheme isEqualToString:@"https"] && [hosts containsObject:url.host.lowercaseString];
 }
 
+// only follows redirects that stay on the allowed hosts
+@interface MacFixHTTPDelegate : NSObject <NSURLSessionTaskDelegate>
+@end
+@implementation MacFixHTTPDelegate
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task willPerformHTTPRedirection:(NSHTTPURLResponse *)response
+        newRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURLRequest *))completionHandler {
+    completionHandler(http_host_allowed(request.URL) ? request : nil);
+}
+@end
+static NSURLSession *http_session = nil;
+
 // starts fetching url, keeping the response text under key. Returns false for anything but an allowed host.
 bool http_get_async(const char *url_string, const char *key_string) {
     @autoreleasepool {
-        NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:url_string]];
+        NSString *url_text = [NSString stringWithUTF8String:url_string];
+        NSURL *url = url_text != nil ? [NSURL URLWithString:url_text] : nil;
         NSString *key = [NSString stringWithUTF8String:key_string];
         if (!http_host_allowed(url) || key == nil) {
             printf("BO3MacFix: AAE online: not fetching %s (only HTTPS to a few hosts is allowed)\n", url_string);
@@ -138,10 +150,14 @@ bool http_get_async(const char *url_string, const char *key_string) {
         static dispatch_once_t once;
         dispatch_once(&once, ^{
             http_results = [[NSMutableDictionary alloc] init];
+            // ephemeral: no cookies or cache kept on disk
+            MacFixHTTPDelegate *delegate = [[[MacFixHTTPDelegate alloc] init] autorelease];
+            http_session = [[NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]
+                                                          delegate:delegate delegateQueue:nil] retain];
         });
         NSURLRequest *request = [NSURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                              timeoutInterval:10];
-        [[[NSURLSession sharedSession] dataTaskWithRequest:request
+        [[http_session dataTaskWithRequest:request
                                          completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
             NSInteger code = [response isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)response).statusCode : 0;
             printf("BO3MacFix: AAE online: %s from %s (%lu bytes)\n", error != nil ? "failed" : code == 200 ? "got" : "HTTP error",

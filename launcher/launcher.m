@@ -52,7 +52,7 @@ static BOOL codesign(NSArray<NSString *> *arguments) {
 static NSURL *prepatched_executable(NSURL *gameDir, NSURL *dylibUrl, FILE *log) {
     NSString *original = [gameDir URLByAppendingPathComponent:@"CoDBlkOps3_Exe"].path;
     NSString *copy = [gameDir URLByAppendingPathComponent:@"CoDBlkOps3_Exe.bo3macfix"].path;
-    NSString *temp = [copy stringByAppendingString:@".tmp"];
+    NSString *temp = [copy stringByAppendingFormat:@".tmp%d", (int)getpid()];
     char message[512];
 
     // BO3MacFix makes the copy, it knows what to change
@@ -138,7 +138,8 @@ int main(int argc, char **argv) {
     int prepatched = prepatched_env != NULL ? atoi(prepatched_env) : read_setting(settingsPath, "PrePatchedExe", 1);
     if (prepatched == 0) {
         fprintf(log, "PrePatchedExe is off\n");
-    } else if (read_setting(settingsPath, "NoCodePatches", 0) != 0 || getenv("BO3MACFIX_NOCODEPATCHES") != NULL) {
+    } else if (getenv("BO3MACFIX_NOCODEPATCHES") != NULL ? atoi(getenv("BO3MACFIX_NOCODEPATCHES")) != 0
+                                                          : read_setting(settingsPath, "NoCodePatches", 0) != 0) {
         fprintf(log, "NoCodePatches is on, so the game's code stays as shipped\n");
     } else {
         NSURL *copyUrl = prepatched_executable(gameProc.currentDirectoryURL, dylibUrl, log);

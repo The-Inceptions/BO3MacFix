@@ -48,23 +48,26 @@ static void frame_stats_tick(void) {
     static mach_timebase_info_data_t timebase;
     static uint64_t last_present = 0, window_start = 0;
     static float frame_ms[8192];
-    static int frames = 0;
+    static int frames = 0, stored = 0;
     if (timebase.denom == 0)
         mach_timebase_info(&timebase);
     uint64_t now = mach_absolute_time();
-    if (last_present != 0 && frames < (int)(sizeof(frame_ms) / sizeof(frame_ms[0])))
-        frame_ms[frames++] = (float)((double)(now - last_present) * timebase.numer / timebase.denom / 1e6);
+    if (last_present != 0) {
+        if (stored < (int)(sizeof(frame_ms) / sizeof(frame_ms[0])))
+            frame_ms[stored++] = (float)((double)(now - last_present) * timebase.numer / timebase.denom / 1e6);
+        frames++;
+    }
     last_present = now;
     if (window_start == 0)
         window_start = now;
     double seconds = (double)(now - window_start) * timebase.numer / timebase.denom / 1e9;
     if (seconds < frame_stats_seconds || frames == 0)
         return;
-    qsort(frame_ms, frames, sizeof(frame_ms[0]), compare_floats);
-    float low_1 = frame_ms[(int)(frames * 0.99)];
+    qsort(frame_ms, stored, sizeof(frame_ms[0]), compare_floats);
+    float low_1 = frame_ms[(int)(stored * 0.99)];
     printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s)\n",
-           frames / seconds, 1000.0f / low_1, frame_ms[frames - 1], frames, seconds);
-    frames = 0;
+           frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds);
+    frames = stored = 0;
     window_start = now;
 }
 

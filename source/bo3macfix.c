@@ -943,7 +943,8 @@ __attribute__((constructor)) static void dylib_main() {
     // patching code in memory makes Rosetta run the game through its JIT instead of its ahead-of-time translation.
     // The game then runs stock: no AAE, map loading fix, previews, native resolutions, controllers or CPU/GPU tweaks.
     // Only the data-only DYLD_INTERPOSE replacements stay active.
-    if (read_int_setting("NoCodePatches", 0) != 0 || getenv("BO3MACFIX_NOCODEPATCHES") != NULL) {
+    const char *no_code_patches_env = getenv("BO3MACFIX_NOCODEPATCHES");
+    if (no_code_patches_env != NULL ? atoi(no_code_patches_env) != 0 : read_int_setting("NoCodePatches", 0) != 0) {
         printf("BO3MacFix: NoCodePatches is on, not changing any game code\n");
         return;
     }

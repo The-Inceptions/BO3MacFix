@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <objc/message.h>
 #include <IOKit/hid/IOHIDManager.h>
 #include <IOKit/hid/IOHIDUsageTables.h>
@@ -17,10 +18,12 @@
 static uint64_t base_address = 0;
 static _Atomic int raw_x = 0, raw_y = 0;
 static double scale = 1.0, rest_x = 0, rest_y = 0;
+static uint64_t last_event_ns = 0;
 
 static void raw_input(void *context, IOReturn result, void *sender, IOHIDValueRef value) {
     IOHIDElementRef element = IOHIDValueGetElement(value);
-    if (IOHIDElementGetUsagePage(element) != kHIDPage_GenericDesktop)
+    // only relative movement: a tablet or other absolute pointer reports positions, which would add up to huge jumps
+    if (IOHIDElementGetUsagePage(element) != kHIDPage_GenericDesktop || !IOHIDElementIsRelative(element))
         return;
     int amount = (int)IOHIDValueGetIntegerValue(value);
     if (IOHIDElementGetUsage(element) == kHIDUsage_GD_X)
@@ -36,6 +39,15 @@ install_hook_name(Cocoa_HandleMouseEvent, void, void *video, void *event) {
     if (type != 5 && type != 6 && type != 7 && type != 27)
         return;
     uint8_t *mouse = ((uint8_t *(*)(void))(base_address + ADDR_SDL_GetMouse))();
+    // raw counts keep adding up while nothing is aiming (in menus, or with the game in the background), so after a
+    // gap start over instead of turning the view by all of that movement at once
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (now - last_event_ns > 100000000ULL) {
+        atomic_store(&raw_x, 0);
+        atomic_store(&raw_y, 0);
+        rest_x = rest_y = 0;
+    }
+    last_event_ns = now;
     double x = atomic_exchange(&raw_x, 0) * scale + rest_x, y = atomic_exchange(&raw_y, 0) * scale + rest_y;
     int send_x = (int)trunc(x), send_y = (int)trunc(y);
     rest_x = x - send_x;

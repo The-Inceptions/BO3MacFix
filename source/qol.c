@@ -7,7 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dlfcn.h>
 #include <os/lock.h>
+#include <mach-o/dyld.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudio.h>
 #include "dyld-interposing.h"
@@ -147,10 +149,17 @@ OSStatus AudioQueueAllocateBuffer_new(AudioQueueRef queue, UInt32 size, AudioQue
 }
 DYLD_INTERPOSE(AudioQueueAllocateBuffer_new, AudioQueueAllocateBuffer);
 
+// whether the code that called us is the game's (its SDL), not a system framework the game uses
+static bool called_by_game(const void *return_address) {
+    Dl_info info;
+    return dladdr(return_address, &info) != 0 && info.dli_fbase == (const void *)_dyld_get_image_header(0);
+}
+
 // SDL listens for its device dying to mark audio as unplugged for good, which we don't want any more
 OSStatus AudioObjectAddPropertyListener_new(AudioObjectID object, const AudioObjectPropertyAddress *address,
                                             AudioObjectPropertyListenerProc listener, void *client_data) {
-    if (atomic_load(&audio_follow) && address != NULL && address->mSelector == kAudioDevicePropertyDeviceIsAlive)
+    if (atomic_load(&audio_follow) && address != NULL && address->mSelector == kAudioDevicePropertyDeviceIsAlive &&
+        called_by_game(__builtin_return_address(0)))
         return noErr;
     return AudioObjectAddPropertyListener(object, address, listener, client_data);
 }
@@ -158,7 +167,8 @@ DYLD_INTERPOSE(AudioObjectAddPropertyListener_new, AudioObjectAddPropertyListene
 
 OSStatus AudioObjectRemovePropertyListener_new(AudioObjectID object, const AudioObjectPropertyAddress *address,
                                                AudioObjectPropertyListenerProc listener, void *client_data) {
-    if (atomic_load(&audio_follow) && address != NULL && address->mSelector == kAudioDevicePropertyDeviceIsAlive)
+    if (atomic_load(&audio_follow) && address != NULL && address->mSelector == kAudioDevicePropertyDeviceIsAlive &&
+        called_by_game(__builtin_return_address(0)))
         return noErr;
     return AudioObjectRemovePropertyListener(object, address, listener, client_data);
 }
