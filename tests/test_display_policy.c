@@ -100,6 +100,19 @@ static void test_chosen(void) {
     strcpy(monitor.chosen, Gaming_UUID);
     DisplayInfo moved[] = { builtin, tv, another(&gaming, 9, "22222222-0000-0000-0000-000000000009") };
     assert(display_policy_target(moved, 3, 3, &monitor) == 2);
+
+    // the chosen TV mirrors the built-in (so it's not in the list): the game goes where its picture shows on the TV,
+    // the built-in, not to the gaming monitor by the External rule
+    MirrorInfo tv_mirrors_builtin = { .key = TV_UUID, .primary = 1 };
+    assert(display_policy_target_mirrored(no_tv, 2, 3, &store, &tv_mirrors_builtin, 1) == 0);
+    assert(display_policy_target_mirrored(no_tv, 2, 3, &store, NULL, 0) == 1);
+    // mirroring a display that isn't in the list either, or another display mirroring: the rules as before
+    MirrorInfo elsewhere = { .key = TV_UUID, .primary = 42 }, other = { .key = Gaming_UUID, .primary = 1 };
+    assert(display_policy_target_mirrored(no_tv, 2, 3, &store, &elsewhere, 1) == 1);
+    assert(display_policy_target_mirrored(no_tv, 2, 3, &store, &other, 1) == 1);
+    // connected and not mirroring: the chosen display; the other rules don't look at mirrors
+    assert(display_policy_target_mirrored(all, 3, 3, &store, &tv_mirrors_builtin, 1) == 2);
+    assert(display_policy_target_mirrored(no_tv, 2, 2, &store, &tv_mirrors_builtin, 1) == 1);
 }
 
 static void test_choices(void) {

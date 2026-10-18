@@ -75,6 +75,18 @@ void display_slots_update(DisplaySlots *table, const DisplayInfo *displays, int 
 // the display a GameDisplay value of Game_Display_Pick or more stands for, NULL if none
 const DisplayInfo *display_slots_pick(const DisplaySlots *table, int value);
 
+// a display that's mirroring another (macOS shows the other's picture on it, so it isn't in the list of displays), by
+// its UUID, and the display it mirrors
+typedef struct MirrorInfo {
+    char key[52];
+    uint32_t primary;
+} MirrorInfo;
+
+// display_policy_target with mirroring: a chosen display that's mirroring another stands for the one it mirrors, where
+// the game's picture has to be for it to show
+int display_policy_target_mirrored(const DisplayInfo *displays, int count, int game_display, const DisplayStore *store,
+                                   const MirrorInfo *mirrors, int mirror_count);
+
 // the settings page's GameDisplay choices: the three rules, then each display as Game_Display_Pick + its slot (slots
 // NULL: its index), named (a second "XB273K GP" is "XB273K GP (2)"). Returns how many.
 int display_policy_choices(const DisplayInfo *displays, int count, const int *slots, int *values, char labels[][64], int max);

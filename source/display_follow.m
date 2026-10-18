@@ -104,11 +104,31 @@ static void native_size(CGDirectDisplayID id, int *width, int *height) {
 // the online displays in SDL 2.0.7's order: the main display first, then the rest, leaving out mirror secondaries and
 // displays without a mode (SDL_cocoamodes.m:236-262), so the indices match SDL's. AppKit adds the names, the maximum
 // refresh rate and the camera housing, on the main thread once NSApp exists.
-static int take_snapshot(DisplayInfo *out, int max) {
+static void uuid_text(CGDirectDisplayID id, char *buf, size_t n) {
+    buf[0] = '\0';
+    CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(id);
+    if (uuid != NULL) {
+        CFStringRef text = CFUUIDCreateString(NULL, uuid);
+        CFStringGetCString(text, buf, (CFIndex)n, kCFStringEncodingASCII);
+        CFRelease(text);
+        CFRelease(uuid);
+    }
+}
+
+static int take_snapshot(DisplayInfo *out, int max, MirrorInfo *mirrored, int *mirrored_count) {
     uint32_t count = 0;
     CGDirectDisplayID online[64], ids[64];
+    *mirrored_count = 0;
     if (CGGetOnlineDisplayList(64, online, &count) != kCGErrorSuccess)
         return 0;
+    for (uint32_t i = 0; i < count && *mirrored_count < max; i++) {
+        CGDirectDisplayID primary = CGDisplayMirrorsDisplay(online[i]);
+        if (primary != kCGNullDirectDisplay) {
+            MirrorInfo *m = &mirrored[(*mirrored_count)++];
+            uuid_text(online[i], m->key, sizeof(m->key));
+            m->primary = primary;
+        }
+    }
     int candidates = 0;
     for (int pass = 0; pass < 2; pass++)
         for (uint32_t i = 0; i < count; i++)
@@ -133,13 +153,7 @@ static int take_snapshot(DisplayInfo *out, int max) {
             DisplayInfo *d = &out[n++];
             memset(d, 0, sizeof(*d));
             d->id = id;
-            CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(id);
-            if (uuid != NULL) {
-                CFStringRef text = CFUUIDCreateString(NULL, uuid);
-                CFStringGetCString(text, d->uuid, sizeof(d->uuid), kCFStringEncodingASCII);
-                CFRelease(text);
-                CFRelease(uuid);
-            }
+            uuid_text(id, d->uuid, sizeof(d->uuid));
             d->builtin = CGDisplayIsBuiltin(id) != 0;
             d->main = CGDisplayIsMain(id) != 0;
             d->vendor = CGDisplayVendorNumber(id);
@@ -475,7 +489,9 @@ static void evaluate(void) {
         return;
     }
     DisplayInfo current[Display_Max], before[Display_Max];
-    int count = take_snapshot(current, Display_Max);
+    MirrorInfo mirrored[Display_Max];
+    int mirrored_count;
+    int count = take_snapshot(current, Display_Max, mirrored, &mirrored_count);
     if (count <= 0)
         return;
     uint32_t sdl_first = sdl_displays_id(0);
@@ -507,7 +523,7 @@ static void evaluate(void) {
         target = display_policy_find(current, count, window_display);
     } else {
         pthread_mutex_lock(&lock);
-        target = display_policy_target(current, count, game_display, &store);
+        target = display_policy_target_mirrored(current, count, game_display, &store, mirrored, mirrored_count);
         pthread_mutex_unlock(&lock);
     }
     int here = display_policy_find(current, count, game);
@@ -655,7 +671,9 @@ static void start_appkit(void) {
     appkit_started = 1;
     // AppKit's names and refresh rates, without treating them as a change
     DisplayInfo current[Display_Max];
-    int count = take_snapshot(current, Display_Max);
+    MirrorInfo mirrored[Display_Max];
+    int mirrored_count;
+    int count = take_snapshot(current, Display_Max, mirrored, &mirrored_count);
     if (count > 0)
         use_snapshot(current, count, NULL, NULL);
     pthread_mutex_lock(&lock);
@@ -736,11 +754,13 @@ uint32_t display_follow_launch_target(void) {
     if (!started)
         return 0;
     DisplayInfo current[Display_Max];
-    int count = take_snapshot(current, Display_Max);
+    MirrorInfo mirrored[Display_Max];
+    int mirrored_count;
+    int count = take_snapshot(current, Display_Max, mirrored, &mirrored_count);
     if (count > 0)
         use_snapshot(current, count, NULL, NULL);
     pthread_mutex_lock(&lock);
-    int target = follow ? display_policy_target(current, count, game_display, &store) : -1;
+    int target = follow ? display_policy_target_mirrored(current, count, game_display, &store, mirrored, mirrored_count) : -1;
     game_id = target >= 0 ? current[target].id : CGMainDisplayID();
     int i = display_policy_find(current, count, game_id);
     if (i >= 0)

@@ -120,6 +120,19 @@ int display_policy_target(const DisplayInfo *displays, int count, int game_displ
     return find_main(displays, count);
 }
 
+int display_policy_target_mirrored(const DisplayInfo *displays, int count, int game_display, const DisplayStore *store,
+                                   const MirrorInfo *mirrors, int mirror_count) {
+    if (game_display == Game_Display_Chosen && store->chosen[0] != '\0' &&
+        display_policy_find_remembered(displays, count, store, store->chosen) < 0) {
+        for (int m = 0; m < mirror_count; m++) {
+            int primary = strcmp(mirrors[m].key, store->chosen) == 0 ? display_policy_find(displays, count, mirrors[m].primary) : -1;
+            if (primary >= 0)
+                return primary;
+        }
+    }
+    return display_policy_target(displays, count, game_display, store);
+}
+
 void display_slots_update(DisplaySlots *table, const DisplayInfo *displays, int count, int *slots) {
     for (int i = 0; i < count; i++) {
         int slot = -1;
