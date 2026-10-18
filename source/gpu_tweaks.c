@@ -36,6 +36,7 @@ static double present_min_duration; // 0 when not pacing
 static SEL sel_present_after_minimum_duration;
 static int metalfx_active = 0;
 static int frame_stats_seconds = 0; // 0 when not logging frame stats
+static atomic_uint frame_stats_session = 0; // goes up each time FrameStats is turned on from the menu
 static double battery_min_duration = 0; // 1/BatteryFPS, 0 when not limiting on battery
 static atomic_bool on_battery = false;
 
@@ -51,9 +52,17 @@ static void frame_stats_tick(void) {
     static uint64_t last_present = 0, window_start = 0;
     static float frame_ms[8192];
     static int frames = 0, stored = 0;
+    static unsigned int session = 0;
     if (timebase.denom == 0)
         mach_timebase_info(&timebase);
     uint64_t now = mach_absolute_time();
+    // turned off and on again from the menu: the time since the last present before that isn't a frame
+    unsigned int current = atomic_load(&frame_stats_session);
+    if (current != session) {
+        session = current;
+        last_present = window_start = 0;
+        frames = stored = 0;
+    }
     if (last_present != 0) {
         if (stored < (int)(sizeof(frame_ms) / sizeof(frame_ms[0])))
             frame_ms[stored++] = (float)((double)(now - last_present) * timebase.numer / timebase.denom / 1e6);
@@ -94,6 +103,29 @@ static void check_pacing(double min_duration) {
            display_fps / refreshes, display_fps, display_fps / refreshes, display_fps / (refreshes - 1));
 }
 
+// presentDrawable:afterMinimumDuration: alone doesn't always hold the game back: on the built-in ProMotion panel with
+// macOS 27, a plain Metal loop presenting with a minimum duration of 1/30 s still ran at 120 fps, and Kino with
+// BatteryFPS 60 at 70-110 fps. So the render thread also waits here for the frame's turn, which is what saves power on
+// battery. The turns are counted from the first paced frame (start + n / fps), so a late wake-up doesn't push back the
+// frames after it, and the rate is exactly fps on average. A frame that's a whole turn late starts the count again.
+static void wait_for_turn(double min_duration) {
+    static mach_timebase_info_data_t timebase;
+    static uint64_t next = 0;
+    static double counted_duration = 0;
+    if (timebase.denom == 0)
+        mach_timebase_info(&timebase);
+    uint64_t interval = (uint64_t)(min_duration * 1e9 * timebase.denom / timebase.numer);
+    uint64_t now = mach_absolute_time();
+    if (min_duration != counted_duration || next == 0 || now >= next + interval) {
+        counted_duration = min_duration;
+        next = now + interval;
+        return;
+    }
+    if (now < next)
+        mach_wait_until(next);
+    next += interval;
+}
+
 // called instead of objc_msgSend for Aspyr's [commandBuffer presentDrawable:drawable]
 static void present_drawable(id command_buffer, SEL sel, id drawable) {
     if (frame_stats_seconds > 0)
@@ -109,6 +141,8 @@ static void present_drawable(id command_buffer, SEL sel, id drawable) {
     static int supported = -1;
     if (min_duration > 0 && supported == -1)
         supported = class_respondsToSelector(object_getClass(command_buffer), sel_present_after_minimum_duration);
+    if (min_duration > 0)
+        wait_for_turn(min_duration);
     if (min_duration > 0 && supported)
         ((void (*)(id, SEL, id, double))objc_msgSend)(command_buffer, sel_present_after_minimum_duration, drawable, min_duration);
     else
@@ -156,11 +190,9 @@ static int redirect_objc_msgSend_call(uint32_t address, const uint8_t *expected,
 
 // pacing and MetalFX both need Aspyr's presentDrawable: call to go through present_drawable
 static int present_redirected = -1; // -1 not tried yet, 1 present goes through present_drawable
-static code_patch_fn saved_code_patch = NULL;
 
 static int redirect_present(code_patch_fn checked_code_patch) {
     static const uint8_t call_objc_msgSend[] = { 0xFF, 0x15, 0xD9, 0xDB, 0x87, 0x01 };
-    saved_code_patch = checked_code_patch;
     if (present_redirected == -1)
         present_redirected = redirect_objc_msgSend_call(ADDR_ASL_Present_PresentDrawableCall, call_objc_msgSend,
                                                         (void *)present_drawable, checked_code_patch);
@@ -296,12 +328,15 @@ bool gpu_tweaks_live_possible(void) {
     return present_redirected == 1 || prepatch_active();
 }
 
+// present going through present_drawable now, for a change from the menu. While the game runs only the pre-patched
+// executable's slot may be set: patching the call in memory now would write code the render thread is running.
 static bool present_live(void) {
     if (present_redirected == 1)
         return true;
-    if (!prepatch_active() || present_redirected == 0)
+    if (present_redirected == 0 || !prepatch_redirect_call(ADDR_ASL_Present_PresentDrawableCall, (void *)present_drawable))
         return false;
-    return redirect_present(saved_code_patch) == 1;
+    present_redirected = 1;
+    return true;
 }
 
 bool gpu_tweaks_set_pacing(int fps) {
@@ -336,6 +371,8 @@ bool gpu_tweaks_set_frame_stats(int seconds) {
         return false;
     if (seconds > 0 && !present_live())
         return false;
+    if (seconds > 0 && frame_stats_seconds == 0)
+        atomic_fetch_add(&frame_stats_session, 1);
     frame_stats_seconds = seconds;
     printf(seconds > 0 ? "logging frame stats every %i s\n" : "not logging frame stats\n", seconds);
     return true;

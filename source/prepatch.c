@@ -30,6 +30,8 @@
 #define EXPORT __attribute__((visibility("default")))
 
 #define Prepatch_Magic "BO3MFPP1"
+// table_id only covers the tables below, so bump this whenever BO3MacFix_BuildPrepatched writes anything differently
+// (the stubs, the header or the records): a copy with the same version and table_id counts as up to date
 #define Prepatch_Version 2
 #define Game_Base 0x100000000ULL
 
@@ -130,7 +132,7 @@ static const patch_def_t patch_defs[] = {
 static const uint32_t netver_addresses[] = { ADDRS_NetworkVersion };
 static const uint32_t tuver_addresses[] = { ADDRS_TUVersion };
 static const uint16_t netver_original = 18530, netver_patched = 18532;
-static const char tuver_original[4] = "tu30", tuver_patched[4] = "tu32";
+static const char tuver_original[4] = { 't', 'u', '3', '0' }, tuver_patched[4] = { 't', 'u', '3', '2' };
 
 #pragma mark - the copy's header
 
@@ -283,6 +285,34 @@ const void *prepatch_original_code(const void *address, size_t size) {
     return o.changed ? buffer : address;
 }
 
+// whether the copy changed any of these bytes (of any size, unlike prepatch_original_code)
+static bool copy_changed(const void *address, size_t size) {
+    uint64_t start = (uint64_t)address, end = start + size;
+#define Overlaps(at, length) ((at) < end && start < (at) + (length))
+    for (uint32_t i = 0; i < header->hook_count; i++) {
+        if (Overlaps(base + hooks[i].function, hooks[i].length))
+            return true;
+    }
+    for (uint32_t i = 0; i < header->value_count; i++) {
+        if (Overlaps(base + values[i].site, values[i].length))
+            return true;
+    }
+    for (uint32_t i = 0; i < header->call_count; i++) {
+        if (Overlaps(base + calls[i].site, calls[i].length))
+            return true;
+    }
+    const uint8_t *p = (const uint8_t *)(base + header->patches_offset);
+    for (uint32_t i = 0; i < header->patch_count; i++) {
+        uint32_t offset;
+        memcpy(&offset, p, sizeof(offset));
+        if (Overlaps(base + offset, p[4]))
+            return true;
+        p += 5 + p[4];
+    }
+#undef Overlaps
+    return false;
+}
+
 static bool in_game_code(const void *address) {
     return (uint64_t)address >= base && (uint64_t)address < text_end;
 }
@@ -298,15 +328,17 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     uint32_t offset = (uint32_t)((uint64_t)address - base);
     for (uint32_t i = 0; i < header->hook_count; i++) {
         if (hooks[i].function == offset) {
-            // the original first: a hook installed while the game runs can be called as soon as its slot is set
+            // the original first: a hook installed while the game runs can be called as soon as its slot is set.
+            // The stub reads the slot twice (cmp, then jmp), so a slot must never go back to 0 once it's set.
             *out_origin_func = (void *)(base + hooks[i].trampoline);
-            *(void *volatile *)(base + hooks[i].slot) = fake_func;
+            __atomic_store_n((void **)(base + hooks[i].slot), fake_func, __ATOMIC_RELEASE);
             hooks_set++;
             return 0;
         }
     }
-    // a hook the copy doesn't have: hooking it in memory still works, but brings back Rosetta's JIT
-    if (prepatch_original_code(address, 16) != address) {
+    // a hook the copy doesn't have: hooking it in memory still works, but brings back Rosetta's JIT. Dobby's jump is
+    // at most 14 bytes.
+    if (copy_changed(address, 16)) {
         refused++;
         printf("BO3MacFix: can't hook %08x, the pre-patched executable changed that code\n", offset);
         return -1;
@@ -335,13 +367,13 @@ int BO3MacFix_CodePatch(void *address, uint8_t *buffer, uint32_t buffer_size) {
         if (v->site == offset && buffer_size == v->length && buffer[0] == v->original[0]) {
             uint32_t value;
             memcpy(&value, buffer + 1, sizeof(value));
-            *(uint32_t *)(base + v->slot) = value;
+            __atomic_store_n((uint32_t *)(base + v->slot), value, __ATOMIC_RELAXED);
             values_set++;
             return 0;
         }
     }
     // a patch the copy doesn't have: making it in memory still works, but brings back Rosetta's JIT
-    if (prepatch_original_code(address, buffer_size) != address) {
+    if (copy_changed(address, buffer_size)) {
         refused++;
         printf("BO3MacFix: can't patch %08x, the pre-patched executable changed that code\n", offset);
         return -1;
@@ -356,7 +388,7 @@ bool prepatch_set_value(uint32_t site, uint32_t value) {
         return false;
     for (uint32_t i = 0; i < header->value_count; i++) {
         if (values[i].site == site) {
-            *(volatile uint32_t *)(base + values[i].slot) = value;
+            __atomic_store_n((uint32_t *)(base + values[i].slot), value, __ATOMIC_RELAXED);
             return true;
         }
     }
@@ -368,7 +400,8 @@ bool prepatch_redirect_call(uint32_t offset, void *function) {
         return false;
     for (uint32_t i = 0; i < header->call_count; i++) {
         if (calls[i].site == offset) {
-            *(void **)(base + calls[i].slot) = function;
+            // can be set while the game runs (from the settings menu); like a hook's, never back to 0
+            __atomic_store_n((void **)(base + calls[i].slot), function, __ATOMIC_RELEASE);
             calls_set++;
             return true;
         }
@@ -401,6 +434,13 @@ void prepatch_report(void) {
            "already in place, %i done in memory, %i refused, game code pages written: %i\n",
            hooks_set, header->hook_count, values_set, calls_set, patches_in_place, in_memory, refused,
            written_code_pages());
+}
+
+void prepatch_report_at_quit(void) {
+    if (!prepatch_active())
+        return;
+    printf("BO3MacFix: pre-patched executable at quit: %i of %u hooks set, %i done in memory, %i refused, game code "
+           "pages written: %i\n", hooks_set, header->hook_count, in_memory, refused, written_code_pages());
 }
 
 #pragma mark - building the copy
@@ -463,7 +503,7 @@ static int patch_near(build_t *b, const uint32_t *addresses, size_t count, const
                       uint32_t length) {
     for (size_t i = 0; i < count; i++) {
         int o = 0;
-        while (o < 16 && memcmp(b->data + addresses[i] + o, original, length) != 0)
+        while (o < 16 && (addresses[i] + o + length > b->size || memcmp(b->data + addresses[i] + o, original, length) != 0))
             o++;
         if (o == 16)
             return fail(b->message, b->message_size, "unexpected code near %08x", addresses[i]);
@@ -494,6 +534,11 @@ static int check_layout(build_t *b) {
         if (lc->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
             const struct section_64 *sections = (const struct section_64 *)(seg + 1);
+            // a damaged or cut-off file (an interrupted update) mustn't make us read past what we read in
+            if (lc->cmdsize < sizeof(*seg) || seg->nsects > (lc->cmdsize - sizeof(*seg)) / sizeof(*sections))
+                return fail(b->message, b->message_size, "its load commands are damaged");
+            if (seg->fileoff > b->size || seg->filesize > b->size - seg->fileoff)
+                return fail(b->message, b->message_size, "it's shorter than its load commands say (%zu bytes)", b->size);
             uint64_t sections_end = 0;
             for (uint32_t s = 0; s < seg->nsects; s++) {
                 if (sections[s].addr + sections[s].size > sections_end)
@@ -634,7 +679,7 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
     for (size_t i = 0; i < hook_count; i++) {
         const hook_def_t *def = &hook_defs[i];
         uint32_t f = def->function, tramp = code + 16;
-        if (memcmp(b->data + f, def->stolen, def->length) != 0 || def->length < 5) {
+        if (f + 16 > ADDR_Prepatch_Header || memcmp(b->data + f, def->stolen, def->length) != 0 || def->length < 5) {
             fail(message, message_size, "unexpected code at %08x", f);
             goto done;
         }
@@ -676,7 +721,8 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         const value_def_t *def = &value_defs[i];
         uint32_t site = def->site;
         uint8_t reg = def->original[0] - 0xB8;
-        if (memcmp(b->data + site, def->original, 5) != 0 || def->original[0] < 0xB8 || def->original[0] > 0xBF) {
+        if (site + 5 > ADDR_Prepatch_Header || memcmp(b->data + site, def->original, 5) != 0 || def->original[0] < 0xB8 ||
+            def->original[0] > 0xBF) {
             fail(message, message_size, "unexpected code at %08x", site);
             goto done;
         }
@@ -703,7 +749,7 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
     for (size_t i = 0; i < call_count; i++) {
         const call_def_t *def = &call_defs[i];
         uint32_t site = def->site;
-        if (memcmp(b->data + site, def->original, 6) != 0) {
+        if (site + 6 > ADDR_Prepatch_Header || memcmp(b->data + site, def->original, 6) != 0) {
             fail(message, message_size, "unexpected code at %08x", site);
             goto done;
         }
