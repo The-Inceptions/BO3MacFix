@@ -36,6 +36,7 @@ static double present_min_duration; // 0 when not pacing
 static SEL sel_present_after_minimum_duration;
 static int metalfx_active = 0;
 static int frame_stats_seconds = 0; // 0 when not logging frame stats
+static atomic_uint frame_stats_session = 0; // goes up each time FrameStats is turned on from the menu
 static double battery_min_duration = 0; // 1/BatteryFPS, 0 when not limiting on battery
 static atomic_bool on_battery = false;
 
@@ -51,9 +52,17 @@ static void frame_stats_tick(void) {
     static uint64_t last_present = 0, window_start = 0;
     static float frame_ms[8192];
     static int frames = 0, stored = 0;
+    static unsigned int session = 0;
     if (timebase.denom == 0)
         mach_timebase_info(&timebase);
     uint64_t now = mach_absolute_time();
+    // turned off and on again from the menu: the time since the last present before that isn't a frame
+    unsigned int current = atomic_load(&frame_stats_session);
+    if (current != session) {
+        session = current;
+        last_present = window_start = 0;
+        frames = stored = 0;
+    }
     if (last_present != 0) {
         if (stored < (int)(sizeof(frame_ms) / sizeof(frame_ms[0])))
             frame_ms[stored++] = (float)((double)(now - last_present) * timebase.numer / timebase.denom / 1e6);
@@ -156,11 +165,9 @@ static int redirect_objc_msgSend_call(uint32_t address, const uint8_t *expected,
 
 // pacing and MetalFX both need Aspyr's presentDrawable: call to go through present_drawable
 static int present_redirected = -1; // -1 not tried yet, 1 present goes through present_drawable
-static code_patch_fn saved_code_patch = NULL;
 
 static int redirect_present(code_patch_fn checked_code_patch) {
     static const uint8_t call_objc_msgSend[] = { 0xFF, 0x15, 0xD9, 0xDB, 0x87, 0x01 };
-    saved_code_patch = checked_code_patch;
     if (present_redirected == -1)
         present_redirected = redirect_objc_msgSend_call(ADDR_ASL_Present_PresentDrawableCall, call_objc_msgSend,
                                                         (void *)present_drawable, checked_code_patch);
@@ -296,12 +303,15 @@ bool gpu_tweaks_live_possible(void) {
     return present_redirected == 1 || prepatch_active();
 }
 
+// present going through present_drawable now, for a change from the menu. While the game runs only the pre-patched
+// executable's slot may be set: patching the call in memory now would write code the render thread is running.
 static bool present_live(void) {
     if (present_redirected == 1)
         return true;
-    if (!prepatch_active() || present_redirected == 0)
+    if (present_redirected == 0 || !prepatch_redirect_call(ADDR_ASL_Present_PresentDrawableCall, (void *)present_drawable))
         return false;
-    return redirect_present(saved_code_patch) == 1;
+    present_redirected = 1;
+    return true;
 }
 
 bool gpu_tweaks_set_pacing(int fps) {
@@ -336,6 +346,8 @@ bool gpu_tweaks_set_frame_stats(int seconds) {
         return false;
     if (seconds > 0 && !present_live())
         return false;
+    if (seconds > 0 && frame_stats_seconds == 0)
+        atomic_fetch_add(&frame_stats_session, 1);
     frame_stats_seconds = seconds;
     printf(seconds > 0 ? "logging frame stats every %i s\n" : "not logging frame stats\n", seconds);
     return true;
