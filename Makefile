@@ -57,6 +57,8 @@ all: $(TARGET)
 
 test: $(TEST_TARGETS)
 	for test in $(TEST_TARGETS); do ./$$test || exit 1; done
+	@# notices.lua against a made-up LUI, with any Lua 5.x
+	if command -v lua >/dev/null; then lua tests/test_notices.lua; else echo "no lua, skipping tests/test_notices.lua"; fi
 
 tests/test_stream_stall_recovery: tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_stream_stall_recovery.c source/stream_stall_recovery.c
