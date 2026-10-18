@@ -21,3 +21,5 @@ tests/test_sdl_displays
 tests/test_prepatch
 tests/test_settings_ini
 tests/test_notice_queue
+tests/test_controllers
+tests/test_gc_bridge

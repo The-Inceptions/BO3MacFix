@@ -14,6 +14,7 @@
 #include <CoreAudio/CoreAudio.h>
 #include "display_follow.h"
 #include "dyld-interposing.h"
+#include "gc_bridge.h"
 #include "prepatch.h"
 #include "qol.h"
 
@@ -27,12 +28,13 @@ static atomic_bool audio_follow = false;
 // config, stats and loadouts are all saved before that exit() (Com_Quit saves the config, then Sys_Quit exits), so
 // when exit() comes from any thread but the main one, flush what's buffered and end the process without the
 // destructors, like Aspyr's own exit path on the main thread can. Nothing registered with atexit runs then either,
-// so save what display_follow remembers about each display first.
+// so save what display_follow remembers about each display first, and turn the DualSense's adaptive triggers off.
 __attribute__((noreturn)) void exit_new(int status) {
     if (exit_fix && !pthread_main_np()) {
         printf("BO3MacFix: the game quit with status %i, ending it without running static destructors\n", status);
         prepatch_report_at_quit();
         display_follow_save();
+        gc_bridge_quit();
         fflush(NULL);
         _exit(status);
     }

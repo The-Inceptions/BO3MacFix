@@ -1,7 +1,8 @@
 # Modified by Mickael DE LA ROQUE on 2026-09-08 to build and test the
 # unofficial custom-map stream-stall workaround.
 TARGET = BO3MacFix.dylib
-TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch tests/test_settings_ini tests/test_notice_queue
+TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
+	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -86,6 +87,16 @@ tests/test_prepatch: tests/test_prepatch.c source/prepatch.c source/prepatch.h s
 # the notices' queue and low battery levels (notice_queue.c) are plain C too
 tests/test_notice_queue: tests/test_notice_queue.c source/notice_queue.c source/notice_queue.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_notice_queue.c source/notice_queue.c
+
+# controllers.c (when the game is asked to look for controllers, the version SDL is given) against a fake game image and
+# fake HID devices, and gc_bridge.m's player slots as the game's XInput calls see them, with stand-in controllers
+tests/test_controllers: tests/test_controllers.c source/controllers.c source/controllers.h source/offsets.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -Wno-unused-parameter -mmacosx-version-min=$(OSXVER) \
+		-framework CoreFoundation -framework IOKit -o $@ tests/test_controllers.c
+
+tests/test_gc_bridge: tests/test_gc_bridge.m source/gc_bridge.m source/gc_bridge.h source/controllers.h source/offsets.h
+	$(CLANG) -O1 -Wall -Wextra -Werror -Wno-unused-parameter -mmacosx-version-min=$(OSXVER) -framework Foundation \
+		-weak_framework GameController -weak_framework CoreHaptics -framework IOKit -o $@ tests/test_gc_bridge.m
 
 $(TARGET): $(SOURCES) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(DEFINES) $(LDFLAGS) -o $@ $(SOURCES)

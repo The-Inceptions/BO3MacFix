@@ -80,6 +80,8 @@ static float gyro_scale = 1.0f;        // GyroSensitivity / 100
 static int gyro_invert = 0;            // GyroInvert: 1 = vertical, 2 = horizontal, 3 = both
 static bool adaptive_triggers = false; // AdaptiveTriggers
 static atomic_bool app_active = true;
+static atomic_bool triggers_used = false; // adaptive triggers were turned on at some point
+static atomic_bool quitting = false;      // gc_bridge_quit ran: nothing turns them on again
 static os_unfair_lock pads_lock = OS_UNFAIR_LOCK_INIT;
 static bridged_pad pads[XUSER_MAX_COUNT];
 static const void *sdl_seen[XUSER_MAX_COUNT]; // under pads_lock: the SDL controller last seen on each user index
@@ -144,38 +146,63 @@ static bridged_pad *pad_for_user(int user_index) {
     return NULL;
 }
 
-static void player_changed(bridged_pad *pad, int old_index) {
+// on the main thread
+API_AVAILABLE(macos(11.3))
+static void set_lightbar(GCController *controller, int color) {
+    controller.light.color = [[[GCColor alloc] initWithRed:((color >> 16) & 0xFF) / 255.0f
+                                                     green:((color >> 8) & 0xFF) / 255.0f
+                                                      blue:(color & 0xFF) / 255.0f] autorelease];
+}
+
+static void player_changed(bridged_pad *pad, int old_index, bool taken) {
     if (pad->user_index < 0)
         printf("GameController bridge: player %i was taken by another controller, %s waits for a free slot\n",
                old_index + 1, pad->kind);
     else if (old_index < 0)
         printf("GameController bridge: %s is now player %i\n", pad->kind, pad->user_index + 1);
-    else
+    else if (taken)
         printf("GameController bridge: player %i was taken by another controller, %s moved to player %i\n",
                old_index + 1, pad->kind, pad->user_index + 1);
+    else
+        printf("GameController bridge: %s moved from player %i to player %i, which was free\n", pad->kind,
+               old_index + 1, pad->user_index + 1);
     if (@available(macOS 11.3, *)) {
         GCController *controller = [pad->controller retain];
         GCControllerPlayerIndex index = pad->user_index >= 0 ? (GCControllerPlayerIndex)pad->user_index : GCControllerPlayerIndexUnset;
+        int color = lightbar_color;
         dispatch_async(dispatch_get_main_queue(), ^{
-            controller.playerIndex = index;
-            [controller release];
+            @autoreleasepool {
+                controller.playerIndex = index;
+                // a DualShock 4 can show the player on its lightbar, so the colour goes back on after
+                if (color >= 0 && controller.light != nil)
+                    set_lightbar(controller, color);
+                [controller release];
+            }
         });
     }
 }
 
 // SDL takes the first free slot when a controller it handles connects (an Xbox controller, say), which can be the
-// one a bridged controller is on. Move bridged controllers off slots SDL has taken, and give waiting ones a free one.
+// one a bridged controller is on. Move bridged controllers off slots SDL has taken, give waiting ones a free one, and
+// move them down when a lower one is free: the game reads player 1, and when the controller there goes away another
+// one takes its place without the game seeing a gap. A DualSense that goes from Bluetooth to USB can come back as a
+// new controller before macOS says the old one has gone, say.
 static void rehome_pads(void) {
     note_sdl_slots();
     for (int i = 0; i < XUSER_MAX_COUNT; i++) {
         bridged_pad *pad = &pads[i];
-        if (pad->controller == nil || (pad->user_index >= 0 && !sdl_slot_in_use(pad->user_index)))
+        if (pad->controller == nil)
             continue;
         int old_index = pad->user_index;
-        pad->user_index = -1;
-        pad->user_index = first_free_user_index();
+        bool taken = old_index >= 0 && sdl_slot_in_use(old_index);
+        if (taken)
+            pad->user_index = -1;
+        int free_index = first_free_user_index();
+        if (pad->user_index >= 0 && (free_index < 0 || free_index > pad->user_index))
+            continue;
+        pad->user_index = free_index;
         if (pad->user_index != old_index) {
-            player_changed(pad, old_index);
+            player_changed(pad, old_index, taken);
             // the game only finds it on its new index once it looks again
             pad->found = false;
             if (pad->user_index >= 0)
@@ -296,8 +323,10 @@ static void gyro_update(bridged_pad *pad, GCMotion *motion) {
 // AdaptiveTriggers: a trigger break on R2 like a gun's, and light resistance on L2 for aiming down sights
 API_AVAILABLE(macos(11.3))
 static void set_adaptive_triggers(GCController *controller, bool on) {
-    if (![controller.extendedGamepad isKindOfClass:[GCDualSenseGamepad class]])
+    if (![controller.extendedGamepad isKindOfClass:[GCDualSenseGamepad class]] || (on && atomic_load(&quitting)))
         return;
+    if (on)
+        atomic_store(&triggers_used, true);
     GCDualSenseGamepad *dualsense = (GCDualSenseGamepad *)controller.extendedGamepad;
     if (on) {
         [dualsense.rightTrigger setModeWeaponWithStartPosition:0.25f endPosition:0.55f resistiveStrength:0.5f];
@@ -679,6 +708,11 @@ static void controller_connected(GCController *controller) {
     pad->found = false;
     note_sdl_slots();
     pad->user_index = first_free_user_index();
+    // another bridged controller of the same kind is most likely this one over a second connection: a USB cable
+    // plugged into a DualSense on Bluetooth can show it twice
+    bool second_of_kind = false;
+    for (int i = 0; i < XUSER_MAX_COUNT; i++)
+        second_of_kind = second_of_kind || (pads[i].controller != nil && strcmp(pads[i].kind, kind) == 0);
     pad->controller = [controller retain];
     int user_index = pad->user_index;
     os_unfair_lock_unlock(&pads_lock);
@@ -699,9 +733,7 @@ static void controller_connected(GCController *controller) {
     if (lightbar_color < 0) {
         printf("GameController bridge: lightbar left as it is (no LightbarColor in settings.ini)\n");
     } else if (controller.light != nil) {
-        controller.light.color = [[[GCColor alloc] initWithRed:((lightbar_color >> 16) & 0xFF) / 255.0f
-                                                         green:((lightbar_color >> 8) & 0xFF) / 255.0f
-                                                          blue:(lightbar_color & 0xFF) / 255.0f] autorelease];
+        set_lightbar(controller, lightbar_color);
         printf("GameController bridge: lightbar set to %06X\n", lightbar_color);
     } else {
         printf("GameController bridge: this %s has no lightbar macOS can set\n", kind);
@@ -737,8 +769,11 @@ static void controller_connected(GCController *controller) {
             start_haptics(pad, controller, user_index);
         }
     });
-    // the game only looks for controllers at startup and when asked
-    if (user_index >= 0)
+    // the game only looks for controllers at startup and when asked. Not about a second one of a kind, which the game
+    // would take as a second player: if it is the same controller, it takes the first one's place when that goes away
+    if (user_index >= 0 && second_of_kind)
+        printf("GameController bridge: not asking the game about it yet, it may be the %s already connected\n", kind);
+    else if (user_index >= 0)
         controllers_request_gamepad_scan("a PlayStation controller connected");
 }
 
@@ -772,7 +807,9 @@ static void controller_disconnected(GCController *controller) {
     }
     if (!bridged)
         printf("GameController bridge: %s disconnected\n", controller.vendorName.UTF8String ?: "a controller");
-    // nothing to ask the game here, it notices a controller it reads going away by itself
+    // the game notices a controller it reads going away by itself, but only gives the gamepad that read it another
+    // connected controller when asked (Windows asks it on removals too)
+    controllers_request_gamepad_scan(bridged ? "a PlayStation controller disconnected" : "a controller disconnected");
 }
 
 // in the background macOS stops sending controller input, so a held button would stay held: send the game a neutral
@@ -817,6 +854,10 @@ static void gc_setup(void) {
     }];
     [center addObserverForName:@"NSApplicationDidBecomeActiveNotification" object:nil queue:main_queue usingBlock:^(NSNotification *note) {
         app_focus_changed(true);
+    }];
+    // NSApplicationWillTerminateNotification, quitting through AppKit (Cmd+Q, say) rather than the game's own quit
+    [center addObserverForName:@"NSApplicationWillTerminateNotification" object:nil queue:main_queue usingBlock:^(NSNotification *note) {
+        gc_bridge_quit();
     }];
     NSArray<GCController *> *controllers = GCController.controllers;
     printf("GameController bridge: watching for controllers, macOS lists %lu now\n", (unsigned long)controllers.count);
@@ -881,6 +922,8 @@ void gc_bridge_init(uint64_t base, int mode, int lightbar_rgb) {
         install_hook_ASL_XInputGetState(get_state);
         install_hook_ASL_XInputSetState(set_state);
         enabled = true;
+        // a plain exit() runs atexit handlers; ExitFix's _exit on the game thread calls gc_bridge_quit itself
+        atexit(gc_bridge_quit);
         // the GameController framework needs the app's run loop, which runs once the game is up
         dispatch_async(dispatch_get_main_queue(), ^{
             @autoreleasepool {
@@ -890,6 +933,51 @@ void gc_bridge_init(uint64_t base, int mode, int lightbar_rgb) {
         printf("GameController bridge: on, DualSense and DualShock 4 controllers go through macOS instead of SDL\n");
     } else {
         printf("GameController bridge: needs macOS 11.3 or newer, staying off\n");
+    }
+}
+
+// The DualSense keeps its trigger effects after the game has gone, which would leave R2 stiff, so turn them off when
+// the game quits: from ExitFix's _exit on the game thread (qol.c), atexit or AppKit terminating, whichever comes first.
+// The lightbar is left as it is.
+void gc_bridge_quit(void) {
+    if (!enabled || atomic_exchange(&quitting, true) || !atomic_load(&triggers_used))
+        return;
+    if (@available(macOS 11.3, *)) {
+        @autoreleasepool {
+            GCDualSenseGamepad *dualsenses[XUSER_MAX_COUNT];
+            int count = 0;
+            os_unfair_lock_lock(&pads_lock);
+            id controllers[XUSER_MAX_COUNT];
+            for (int i = 0; i < XUSER_MAX_COUNT; i++)
+                controllers[i] = [pads[i].controller retain];
+            os_unfair_lock_unlock(&pads_lock);
+            for (int i = 0; i < XUSER_MAX_COUNT; i++) {
+                GCExtendedGamepad *gamepad = [controllers[i] extendedGamepad];
+                if ([gamepad isKindOfClass:[GCDualSenseGamepad class]]) {
+                    dualsenses[count] = (GCDualSenseGamepad *)gamepad;
+                    [dualsenses[count].rightTrigger setModeOff];
+                    [dualsenses[count].leftTrigger setModeOff];
+                    count++;
+                }
+            }
+            // the controller reports its modes back a moment later: wait for that, 300 ms at most, so the change isn't
+            // lost with the process
+            int waited = 0;
+            bool off = false;
+            while (count > 0 && !off && waited < 300) {
+                usleep(10000);
+                waited += 10;
+                off = true;
+                for (int i = 0; i < count; i++)
+                    off = off && dualsenses[i].rightTrigger.mode == GCDualSenseAdaptiveTriggerModeOff &&
+                          dualsenses[i].leftTrigger.mode == GCDualSenseAdaptiveTriggerModeOff;
+            }
+            if (count > 0)
+                printf("GameController bridge: adaptive triggers off for quitting (%s after %i ms)\n",
+                       off ? "the controller reports them off" : "not confirmed", waited);
+            for (int i = 0; i < XUSER_MAX_COUNT; i++)
+                [controllers[i] release];
+        }
     }
 }
 
@@ -984,9 +1072,7 @@ void gc_bridge_set_lightbar(int rgb) {
                     GCController *controller = [pads[i].controller retain];
                     os_unfair_lock_unlock(&pads_lock);
                     if (controller.light != nil)
-                        controller.light.color = [[[GCColor alloc] initWithRed:((color >> 16) & 0xFF) / 255.0f
-                                                                         green:((color >> 8) & 0xFF) / 255.0f
-                                                                          blue:(color & 0xFF) / 255.0f] autorelease];
+                        set_lightbar(controller, color);
                     [controller release];
                 }
             }

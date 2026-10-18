@@ -6,10 +6,12 @@
 //   com.bo3macfix.test.quit          quits through the game's own quit path, which saves config.ini
 //   com.bo3macfix.test.key           presses the key with the state's macOS virtual key code (kVK_*)
 //   com.bo3macfix.test.restart       restarts the game through Steam, as the settings page's restart does
+//   com.bo3macfix.test.gpadscan      asks the game to look for controllers, as a controller connecting does
 // They arrive on the main queue, which Aspyr's main thread runs while it pumps events.
 #import <AppKit/AppKit.h>
 #include <notify.h>
 #include <stdio.h>
+#include "controllers.h"
 #include "display_follow.h"
 #include "display_testhooks.h"
 #include "offsets.h"
@@ -63,6 +65,10 @@ void display_testhooks_init(uint64_t game_base_address) {
     on_notification("com.bo3macfix.test.restart", ^(int token) {
         printf("display tests: restarting\n");
         settings_restart_game();
+    });
+    on_notification("com.bo3macfix.test.gpadscan", ^(int token) {
+        printf("display tests: controller scan\n");
+        controllers_request_gamepad_scan("test");
     });
     printf("display tests: test hooks on (com.bo3macfix.test.*)\n");
 }

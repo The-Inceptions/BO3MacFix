@@ -665,6 +665,8 @@ void IOHIDDeviceUnscheduleFromRunLoop_new(IOHIDDeviceRef device, CFRunLoopRef ru
     // release the device ref as per https://github.com/libsdl-org/SDL/commit/65fd63369411240dd54cad74916c6a6739e9363b
     //printf("releasing!\n");
     CFRelease(device);
+    // a controller SDL had is gone: the game only gives its gamepad another one when asked (as Windows does)
+    controllers_request_gamepad_scan("SDL dropped a controller");
 }
 DYLD_INTERPOSE(IOHIDDeviceUnscheduleFromRunLoop_new, IOHIDDeviceUnscheduleFromRunLoop);
 
