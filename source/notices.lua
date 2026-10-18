@@ -115,6 +115,14 @@ end
 -- the latest menu made, until it's on a root (it goes on one after it's made, in the same frame)
 local new_menu, new_menu_name, new_menu_looks = nil, nil, 0
 
+-- BO3MACFIX_NOTICESDEBUG: whether the toast is the last element on its root, so drawn over everything on it
+local function log_order(what)
+    if not debug_menus or toast == nil then return end
+    local root = ui_root()
+    log("notices: " .. what .. " on " .. tostring(root_name(root)) .. ", the last element there: " ..
+        tostring(root:getLastChild() == toast))
+end
+
 local function poll()
     if new_menu ~= nil then
         local root = root_of(new_menu)
@@ -131,6 +139,7 @@ local function poll()
                 local shown = toast_shown
                 show(toast_text)
                 toast_shown = shown
+                log_order("toast put back on top")
             end
         end
     end
@@ -148,6 +157,7 @@ local function poll()
             local ok, err = pcall(show, text)
             if ok then
                 log("notices: showing " .. text .. " on " .. tostring(root_name(ui_root())))
+                log_order("toast shown")
             else
                 pcall(close_toast)
                 log("notices error: " .. tostring(err))

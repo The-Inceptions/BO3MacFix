@@ -19,6 +19,7 @@ local function element()
     function e:setText(text) self.text = text end
     function e:beginAnimation(name, ms) self.animation = name end
     function e:getParent() return self.parent end
+    function e:getLastChild() return self.children[#self.children] end
     function e:getPriority() return 0 end
     function e:addElement(child)
         table.insert(self.children, child)
