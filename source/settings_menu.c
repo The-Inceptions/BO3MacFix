@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "havok.h"
+#include "notices.h"
 #include "settings.h"
 #include "settings_menu.h"
 #include "settings_menu_lua.h"
@@ -16,6 +17,7 @@ static int lua_log(lua_State *s) {
 
 static int lua_install(lua_State *s) {
     settings_lua_install(s);
+    notices_lua_install(s);
     return 0;
 }
 

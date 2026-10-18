@@ -33,6 +33,7 @@
 #include "gpu_tweaks.h"
 #include "havok.h"
 #include "utilities.h"
+#include "notices.h"
 #include "offsets.h"
 #include "prepatch.h"
 #include "qol.h"
@@ -1074,6 +1075,9 @@ __attribute__((constructor)) static void dylib_main() {
 
     // quitting without Aspyr's shutdown crash, and game audio following the default output device (see qol.c)
     qol_init(read_int_setting("ExitFix", 1), read_int_setting("AudioFollowsDefault", 1));
+
+    // notices in the game (controllers, their batteries, the display) and pausing when the controller disconnects
+    notices_init(read_int_setting_or_env("Notices", 1), read_int_setting_or_env("PauseOnDisconnect", 0));
 
     // aiming with the mouse's raw movement instead of macOS's accelerated one (RawMouse, off by default)
     rawmouse_init(game_base_address, read_int_setting("RawMouse", 0), read_int_setting("RawMouseScale", 100));

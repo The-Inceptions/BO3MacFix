@@ -20,6 +20,7 @@
 #include "display_follow.h"
 #include "gc_bridge.h"
 #include "gpu_tweaks.h"
+#include "notices.h"
 #include "offsets.h"
 #include "prepatch.h"
 #include "qol.h"
@@ -81,10 +82,12 @@ static const setting_t settings[] = {
     { "GyroSensitivity", "Gyro sensitivity", "How strongly the gyro turns the view, in percent.", "Controller", false, 7, { 25, 50, 75, 100, 150, 200, 300 }, { "25%", "50%", "75%", "100%", "150%", "200%", "300%" }, 100, Live_Always },
     { "GyroInvert", "Gyro invert", "Inverts the gyro's vertical and/or horizontal direction.", "Controller", false, 4, { 0, 1, 2, 3 }, { "Off", "Vertical", "Horizontal", "Both" }, 0, Live_Always },
     { "AdaptiveTriggers", "Adaptive triggers", "Gives the DualSense's R2 a weapon-style break and L2 light resistance.", "Controller", Toggle_Live(0, Live_Always) },
+    { "PauseOnDisconnect", "Pause when the controller disconnects", "Opens the pause menu when your controller disconnects mid-match, in games that can pause (solo, offline). With macOS controller support.", "Controller", Toggle_Live(0, Live_Always) },
     { "RawMouse", "Raw mouse input", "Aims with raw mouse movement instead of macOS's accelerated movement.", "Mouse", Toggle(0) },
     { "RawMouseScale", "Raw mouse speed", "The speed of raw mouse aiming, in percent.", "Mouse", false, 7, { 25, 50, 75, 100, 150, 200, 300 }, { "25%", "50%", "75%", "100%", "150%", "200%", "300%" }, 100, Live_Always },
     { "ExitFix", "Quit without crashing", "Quits without the crash (and crash report) every quit used to end in.", "Game", Toggle_Live(1, Live_Always) },
     { "AudioFollowsDefault", "Audio follows output device", "Moves the game's sound to the new output device, for example when AirPods connect.", "Game", Toggle(1) },
+    { "Notices", "On-screen notices", "Shows a short notice when a controller connects or disconnects or its battery runs low, and when the game moves to another display.", "Game", Toggle_Live(1, Live_Always) },
     { "AAEOnline", "AAE online notes", "Lets All-around Enhancement show its version notes and weather (GitHub and wttr.in only).", "Game", Toggle_Live(0, Live_Always) },
     { "FrameStats", "Frame stats in the log", "Logs the frame rate, 1% low and worst frame time to BO3MacFix/log.txt.", "Advanced", false, 4, { 0, 5, 10, 30 }, { "Off", "Every 5 s", "Every 10 s", "Every 30 s" }, 0, Live_Present },
     { "GpuDiagnostics", "GPU diagnostics in the log", "Logs the window, display mode and Metal layer whenever they change.", "Advanced", Toggle(0) },
@@ -146,6 +149,10 @@ static bool apply_live(const setting_t *t, int value) {
         t7o_set_online(value);
     else if (strcmp(n, "ExitFix") == 0)
         qol_set_exit_fix(value);
+    else if (strcmp(n, "Notices") == 0)
+        notices_set_enabled(value);
+    else if (strcmp(n, "PauseOnDisconnect") == 0)
+        notices_set_pause_on_disconnect(value);
     else
         return false;
     return true;
