@@ -103,6 +103,29 @@ static void check_pacing(double min_duration) {
            display_fps / refreshes, display_fps, display_fps / refreshes, display_fps / (refreshes - 1));
 }
 
+// presentDrawable:afterMinimumDuration: alone doesn't always hold the game back: on the built-in ProMotion panel with
+// macOS 27, a plain Metal loop presenting with a minimum duration of 1/30 s still ran at 120 fps, and Kino with
+// BatteryFPS 60 at 70-110 fps. So the render thread also waits here for the frame's turn, which is what saves power on
+// battery. The turns are counted from the first paced frame (start + n / fps), so a late wake-up doesn't push back the
+// frames after it, and the rate is exactly fps on average. A frame that's a whole turn late starts the count again.
+static void wait_for_turn(double min_duration) {
+    static mach_timebase_info_data_t timebase;
+    static uint64_t next = 0;
+    static double counted_duration = 0;
+    if (timebase.denom == 0)
+        mach_timebase_info(&timebase);
+    uint64_t interval = (uint64_t)(min_duration * 1e9 * timebase.denom / timebase.numer);
+    uint64_t now = mach_absolute_time();
+    if (min_duration != counted_duration || next == 0 || now >= next + interval) {
+        counted_duration = min_duration;
+        next = now + interval;
+        return;
+    }
+    if (now < next)
+        mach_wait_until(next);
+    next += interval;
+}
+
 // called instead of objc_msgSend for Aspyr's [commandBuffer presentDrawable:drawable]
 static void present_drawable(id command_buffer, SEL sel, id drawable) {
     if (frame_stats_seconds > 0)
@@ -118,6 +141,8 @@ static void present_drawable(id command_buffer, SEL sel, id drawable) {
     static int supported = -1;
     if (min_duration > 0 && supported == -1)
         supported = class_respondsToSelector(object_getClass(command_buffer), sel_present_after_minimum_duration);
+    if (min_duration > 0)
+        wait_for_turn(min_duration);
     if (min_duration > 0 && supported)
         ((void (*)(id, SEL, id, double))objc_msgSend)(command_buffer, sel_present_after_minimum_duration, drawable, min_duration);
     else
