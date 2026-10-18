@@ -3,6 +3,11 @@
 // BO3 statically links SDL 2.0.7, which reads controllers through IOKit and only turns ones with a mapping into
 // game controllers. Its built-in list has the DualShock 4 (at version 0x0100 only) but no DualSense, and
 // Aspyr's GPad_GetGamepadType always says Xbox, so even a working DualShock 4 shows Xbox button prompts.
+//
+// The game also only looks for new controllers when asked, and Aspyr's port never asks in a way it understands, so
+// a controller connected while it runs gets it asked here (controllers_request_gamepad_scan).
+#include <dispatch/dispatch.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -140,16 +145,77 @@ static bool is_playstation_product(int product) {
     return false;
 }
 
+// Controllers connected while the game runs. The game only looks for XInput controllers in its gpadupdate command,
+// which runs at startup and, on Windows, when WM_DEVICECHANGE says devices changed (DBT_DEVNODES_CHANGED); every
+// frame it reads only the user indexes it found then. Aspyr's port sends that message without DBT_DEVNODES_CHANGED,
+// which the game ignores, and nothing at all for the GameController bridge's controllers, so a controller connected
+// later was never picked up. This calls the game's own handler for the message instead.
+static void (*GPad_DevicesChanged)(void);
+static atomic_bool scan_pending = false;
+
+// up once GPad_Init has registered its dvars, the command buffer the handler writes to comes before that
+static bool gamepads_up(void) {
+    return GPad_DevicesChanged != NULL && *(void *volatile *)(base_address + ADDR_dvar_gpadEnabled) != NULL;
+}
+
+// which XInput user indexes (players) the game found, and which one its first gamepad reads
+static void log_game_gamepads(void *context) {
+    const volatile int *ports = (const volatile int *)(base_address + ADDR_g_gpadPorts);
+    char found[24] = "";
+    int count = 0;
+    for (int port = 0; port < 4; port++) {
+        if (ports[port * 2] < 0)
+            continue;
+        size_t length = strlen(found);
+        snprintf(found + length, sizeof(found) - length, "%s%i", count++ > 0 ? ", " : "", ports[port * 2] + 1);
+    }
+    int port = *(const volatile int *)(base_address + ADDR_g_gpads + 4);
+    int reads = port >= 0 && port <= 3 ? ports[port * 2] : -1;
+    if (count == 0)
+        printf("BO3MacFix: the game found no controllers\n");
+    else if (reads >= 0)
+        printf("BO3MacFix: the game found %s %s and reads player %i\n", count > 1 ? "controllers on players" :
+               "a controller on player", found, reads + 1);
+    else
+        printf("BO3MacFix: the game found %s %s but reads none\n", count > 1 ? "controllers on players" :
+               "a controller on player", found);
+}
+
+static void scan_now(void *why) {
+    atomic_store(&scan_pending, false);
+    printf("BO3MacFix: asking the game to look for controllers (%s)\n", (const char *)why);
+    GPad_DevicesChanged();
+    // it looks a frame later, and again 60 frames after that
+    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), NULL, log_game_gamepads);
+}
+
+void controllers_request_gamepad_scan(const char *why) {
+    if (!gamepads_up() || atomic_exchange(&scan_pending, true))
+        return;
+    // from the main thread, which can write to the command buffer (it has its own lock), and a moment later: SDL and
+    // Aspyr have taken a controller of theirs by then, and controllers that come together make one request
+    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC), dispatch_get_main_queue(), (void *)why,
+                     scan_now);
+}
+
 // SDL only asks for the version while building a new controller's GUID. Log what it will see, and give known
 // PlayStation controllers the version 0x0100 the mappings use, in case Bluetooth or firmware reports another.
 // With the GameController bridge on, give them a version no mapping has instead, so SDL leaves them to the bridge.
 CFTypeRef controllers_hid_property(IOHIDDeviceRef device, CFStringRef key, CFTypeRef value) {
-    if ((!mappings_enabled && !gc_bridge_enabled()) || key != (CFStringRef)(base_address + ADDR_CFString_HIDVersionNumber))
+    if (base_address == 0 || key != (CFStringRef)(base_address + ADDR_CFString_HIDVersionNumber))
         return value;
     int vendor = hid_int_property(device, CFSTR(kIOHIDVendorIDKey));
-    if (vendor != SONY_VENDOR_ID)
-        return value;
     int product = hid_int_property(device, CFSTR(kIOHIDProductIDKey));
+    bool bridged = gc_bridge_enabled() && vendor == SONY_VENDOR_ID && is_playstation_product(product);
+    // after startup, this is a controller connected while the game runs: Aspyr takes it as soon as SDL has, but the
+    // game has to be asked to look (the bridge asks for its own controllers)
+    if (gamepads_up()) {
+        printf("BO3MacFix: SDL found a controller connected while the game runs (%04x:%04x)\n", vendor, product);
+        if (!bridged)
+            controllers_request_gamepad_scan("SDL found a new controller");
+    }
+    if ((!mappings_enabled && !gc_bridge_enabled()) || vendor != SONY_VENDOR_ID)
+        return value;
     int version = 0;
     if (value != NULL && CFGetTypeID(value) == CFNumberGetTypeID())
         CFNumberGetValue(value, kCFNumberSInt32Type, &version);
@@ -159,7 +225,7 @@ CFTypeRef controllers_hid_property(IOHIDDeviceRef device, CFStringRef key, CFTyp
         CFStringGetCString(transport_ref, transport, sizeof(transport), kCFStringEncodingUTF8);
     printf("BO3MacFix: Sony controller %04x:%04x version %04x over %s\n", vendor, product, version, transport);
 
-    if (gc_bridge_enabled() && is_playstation_product(product)) {
+    if (bridged) {
         static CFNumberRef version_unmapped = NULL;
         if (version_unmapped == NULL) {
             int v = 0xFFFF;
@@ -225,6 +291,14 @@ static bool install_prompts_hook(void) {
 
 void controllers_init(uint64_t base, int add_mappings, int button_prompts) {
     base_address = base;
+    // push rbp; mov rbp, rsp; lea rsi, [rip+0x4f553a] ("wait; gpadupdate;..."); xor edi, edi; pop rbp; jmp Cbuf_InsertText
+    static const uint8_t devices_changed[] = { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x8D, 0x35, 0x3A, 0x55, 0x4F, 0x00, 0x31, 0xFF, 0x5D, 0xE9 };
+    void *func = (void *)(base + ADDR_GPad_DevicesChanged);
+    if (memcmp(prepatch_original_code(func, sizeof(devices_changed)), devices_changed, sizeof(devices_changed)) == 0)
+        GPad_DevicesChanged = func;
+    else
+        printf("unexpected code at %08x, controllers connected while the game runs won't be picked up\n",
+               ADDR_GPad_DevicesChanged);
     if (add_mappings) {
         mappings_enabled = true;
         add_sdl_mappings();

@@ -14,3 +14,8 @@ CFTypeRef controllers_hid_property(IOHIDDeviceRef device, CFStringRef key, CFTyp
 // ButtonPrompts changed while the game runs (false: needs a restart), and whether that can happen now
 bool controllers_set_button_prompts(int mode);
 bool controllers_prompts_live(void);
+
+// a controller connected while the game runs: asks the game to look for controllers again, as Windows' device change
+// message would. From any thread; does nothing until the game's gamepad code is up, and requests close together make
+// one. why: a string literal for the log.
+void controllers_request_gamepad_scan(const char *why);

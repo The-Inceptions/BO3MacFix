@@ -78,6 +78,8 @@
 #define ADDR_ASL_XInputSetState 0x1295ac // func - DWORD XInputSetState(DWORD dwUserIndex, XINPUT_VIBRATION *pVibration)
 #define ADDR_ASL_XInputEnabled 0x1b97300 // bool - XInputEnable state, starts true and nothing changes it - name is a guess
 #define ADDR_CFString_HIDVersionNumber 0x1b8b5e0 // CFStringRef - the "VersionNumber" key SDL 2.0.7 reads
+#define ADDR_GPad_DevicesChanged 0x122f77a // func - void (void), the main window's WM_DEVICECHANGE (DBT_DEVNODES_CHANGED) handler: Cbuf_InsertText(0, "wait; gpadupdate;wait 60; gpadupdate;\n") - name is a guess
+#define ADDR_dvar_gpadEnabled 0x14ce0a28 // dvar_t * - bool, gpadupdate only looks for controllers while it's set, NULL until GPad_Init registers it - name is a guess
 
 //function patches
 #define ADDR_Scr_ErrorInternalPatch 0x11a238e // mid-func

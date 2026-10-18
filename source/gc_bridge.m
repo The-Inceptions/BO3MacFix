@@ -8,6 +8,7 @@
 //
 // Aspyr keeps an SDL controller per XInput user index (player) and gives a new one the first free slot. A bridged
 // controller takes the first index SDL isn't using, and moves if SDL later puts a controller of its own there.
+// The game only looks for controllers at startup and when asked, so it's asked whenever one connects or moves later.
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
 #import <CoreHaptics/CoreHaptics.h>
@@ -21,6 +22,7 @@
 #include <string.h>
 #include "dobby.h"
 #include "offsets.h"
+#include "controllers.h"
 #include "gc_bridge.h"
 #include "prepatch.h"
 
@@ -55,6 +57,7 @@ typedef struct {
     id controller;              // GCController, retained, nil = free entry
     const char *kind;           // "DualSense" or "DualShock 4"
     int user_index;             // XInput user index the game reads it on, -1 = waiting for a free one
+    bool found;                 // the game has asked for its state since it connected or moved
     XINPUT_STATE state;
     uint16_t wanted_motors[2];  // last speeds from XInputSetState
     int16_t gyro[2];            // right stick deflection GyroAim adds (x, y)
@@ -79,14 +82,43 @@ static bool adaptive_triggers = false; // AdaptiveTriggers
 static atomic_bool app_active = true;
 static os_unfair_lock pads_lock = OS_UNFAIR_LOCK_INIT;
 static bridged_pad pads[XUSER_MAX_COUNT];
+static const void *sdl_seen[XUSER_MAX_COUNT]; // under pads_lock: the SDL controller last seen on each user index
 static dispatch_queue_t input_queue;
 
 // Aspyr's XInput slots, { SDL_GameController *; SDL_Haptic *; int effect; }[4]
+static const uint8_t *sdl_slot(int user_index) {
+    return *(const uint8_t *volatile *)(base_address + ADDR_ASL_XInputSlots + user_index * 24);
+}
+
 static bool sdl_slot_in_use(int user_index) {
-    return *(void *volatile *)(base_address + ADDR_ASL_XInputSlots + user_index * 24) != NULL;
+    return sdl_slot(user_index) != NULL;
 }
 
 // these all need pads_lock held
+
+// logs SDL taking or letting go of a user index. SDL_GameController.guid is at +0xC, its vendor and product at +4
+// and +8 in that
+static void note_sdl_slots(void) {
+    for (int u = 0; u < XUSER_MAX_COUNT; u++) {
+        const uint8_t *controller = sdl_slot(u);
+        if (controller == sdl_seen[u])
+            continue;
+        sdl_seen[u] = controller;
+        if (controller == NULL) {
+            printf("GameController bridge: SDL let go of player %i\n", u + 1);
+            continue;
+        }
+        uint16_t vendor, product;
+        memcpy(&vendor, controller + 0x10, sizeof(vendor));
+        memcpy(&product, controller + 0x14, sizeof(product));
+        if (vendor == SONY_VENDOR_ID)
+            printf("GameController bridge: SDL took a PlayStation controller (%04x:%04x) as player %i, it should have "
+                   "been left to the bridge\n", vendor, product, u + 1);
+        else
+            printf("GameController bridge: SDL has a controller (%04x:%04x) as player %i\n", vendor, product, u + 1);
+    }
+}
+
 static bool user_index_free(int user_index) {
     if (sdl_slot_in_use(user_index))
         return false;
@@ -134,6 +166,7 @@ static void player_changed(bridged_pad *pad, int old_index) {
 // SDL takes the first free slot when a controller it handles connects (an Xbox controller, say), which can be the
 // one a bridged controller is on. Move bridged controllers off slots SDL has taken, and give waiting ones a free one.
 static void rehome_pads(void) {
+    note_sdl_slots();
     for (int i = 0; i < XUSER_MAX_COUNT; i++) {
         bridged_pad *pad = &pads[i];
         if (pad->controller == nil || (pad->user_index >= 0 && !sdl_slot_in_use(pad->user_index)))
@@ -141,8 +174,13 @@ static void rehome_pads(void) {
         int old_index = pad->user_index;
         pad->user_index = -1;
         pad->user_index = first_free_user_index();
-        if (pad->user_index != old_index)
+        if (pad->user_index != old_index) {
             player_changed(pad, old_index);
+            // the game only finds it on its new index once it looks again
+            pad->found = false;
+            if (pad->user_index >= 0)
+                controllers_request_gamepad_scan("a bridged controller moved");
+        }
     }
 }
 
@@ -287,6 +325,10 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
         rehome_pads();
         bridged_pad *pad = pad_for_user(user_index);
         if (pad != NULL) {
+            if (!pad->found) {
+                printf("GameController bridge: the game found the %s on player %i\n", pad->kind, user_index + 1);
+                pad->found = true;
+            }
             // like Aspyr's, a neutral state while XInput is disabled, and also while the game isn't focused
             bool active = atomic_load(&app_active) && (*(volatile uint8_t *)(base_address + ADDR_ASL_XInputEnabled) & 1);
             if (active) {
@@ -579,6 +621,27 @@ static const char *sony_transport(void) {
 }
 
 API_AVAILABLE(macos(11.3))
+static void controller_disconnected(GCController *controller);
+
+// a controller that comes back (over Bluetooth, say) is a new GCController. Should macOS not have said the old one
+// went away, it would keep its player slot with frozen input, so drop bridged controllers macOS no longer lists
+API_AVAILABLE(macos(11.3))
+static void drop_unlisted_pads(GCController *connected) {
+    NSArray<GCController *> *listed = GCController.controllers;
+    for (int i = 0; i < XUSER_MAX_COUNT; i++) {
+        os_unfair_lock_lock(&pads_lock);
+        GCController *controller = [pads[i].controller retain];
+        const char *kind = pads[i].kind;
+        os_unfair_lock_unlock(&pads_lock);
+        if (controller != nil && controller != connected && ![listed containsObject:controller]) {
+            printf("GameController bridge: macOS no longer lists a bridged %s, dropping it\n", kind);
+            controller_disconnected(controller);
+        }
+        [controller release];
+    }
+}
+
+API_AVAILABLE(macos(11.3))
 static void controller_connected(GCController *controller) {
     GCExtendedGamepad *gamepad = controller.extendedGamepad;
     const char *kind = NULL;
@@ -586,8 +649,13 @@ static void controller_connected(GCController *controller) {
         kind = "DualSense";
     else if ([gamepad isKindOfClass:[GCDualShockGamepad class]])
         kind = "DualShock 4";
-    if (kind == NULL)
-        return; // Xbox and other controllers stay with SDL
+    if (kind == NULL) {
+        // Xbox and other controllers stay with SDL, which Aspyr takes them from, but the game still has to look
+        printf("GameController bridge: %s connected, it's left to SDL\n", controller.vendorName.UTF8String ?: "a controller");
+        controllers_request_gamepad_scan("a controller connected");
+        return;
+    }
+    drop_unlisted_pads(controller);
 
     os_unfair_lock_lock(&pads_lock);
     bridged_pad *pad = NULL;
@@ -608,6 +676,8 @@ static void controller_connected(GCController *controller) {
     pad->wanted_motors[0] = pad->wanted_motors[1] = 0;
     pad->gyro[0] = pad->gyro[1] = 0;
     pad->kind = kind;
+    pad->found = false;
+    note_sdl_slots();
     pad->user_index = first_free_user_index();
     pad->controller = [controller retain];
     int user_index = pad->user_index;
@@ -667,10 +737,14 @@ static void controller_connected(GCController *controller) {
             start_haptics(pad, controller, user_index);
         }
     });
+    // the game only looks for controllers at startup and when asked
+    if (user_index >= 0)
+        controllers_request_gamepad_scan("a PlayStation controller connected");
 }
 
 API_AVAILABLE(macos(11.3))
 static void controller_disconnected(GCController *controller) {
+    bool bridged = false;
     for (int i = 0; i < XUSER_MAX_COUNT; i++) {
         bridged_pad *pad = &pads[i];
         os_unfair_lock_lock(&pads_lock);
@@ -681,6 +755,7 @@ static void controller_disconnected(GCController *controller) {
         os_unfair_lock_unlock(&pads_lock);
         if (!match)
             continue;
+        bridged = true;
         controller.extendedGamepad.valueChangedHandler = nil;
         controller.motion.valueChangedHandler = nil;
         if (user_index >= 0)
@@ -695,6 +770,9 @@ static void controller_disconnected(GCController *controller) {
             }
         });
     }
+    if (!bridged)
+        printf("GameController bridge: %s disconnected\n", controller.vendorName.UTF8String ?: "a controller");
+    // nothing to ask the game here, it notices a controller it reads going away by itself
 }
 
 // in the background macOS stops sending controller input, so a held button would stay held: send the game a neutral
@@ -740,7 +818,9 @@ static void gc_setup(void) {
     [center addObserverForName:@"NSApplicationDidBecomeActiveNotification" object:nil queue:main_queue usingBlock:^(NSNotification *note) {
         app_focus_changed(true);
     }];
-    for (GCController *controller in GCController.controllers)
+    NSArray<GCController *> *controllers = GCController.controllers;
+    printf("GameController bridge: watching for controllers, macOS lists %lu now\n", (unsigned long)controllers.count);
+    for (GCController *controller in controllers)
         controller_connected(controller);
 }
 
