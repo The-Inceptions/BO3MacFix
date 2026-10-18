@@ -32,13 +32,21 @@ static void raw_input(void *context, IOReturn result, void *sender, IOHIDValueRe
         atomic_fetch_add(&raw_y, amount);
 }
 
-// void Cocoa_HandleMouseEvent(SDL_VideoDevice *_this, NSEvent *event), only called in relative mode
+// void Cocoa_HandleMouseEvent(SDL_VideoDevice *_this, NSEvent *event). SDL calls it for every mouse event; it only
+// sends motion in relative mode (SDL_Mouse.relative_mode, at 0x88: `cmp dword [r14+0x88], 0` in the original), and
+// the window's mouseMoved: sends the absolute position otherwise
 install_hook_name(Cocoa_HandleMouseEvent, void, void *video, void *event) {
     // NSEventTypeMouseMoved, Left/Right/OtherMouseDragged, like the original
     unsigned long type = ((unsigned long (*)(void *, SEL))objc_msgSend)(event, sel_registerName("type"));
     if (type != 5 && type != 6 && type != 7 && type != 27)
         return;
     uint8_t *mouse = ((uint8_t *(*)(void))(base_address + ADDR_SDL_GetMouse))();
+    // menus (absolute cursor): the original does its bookkeeping and sends nothing. Sending raw motion here too
+    // would move SDL's cursor by it on top of the absolute position.
+    if (mouse == NULL || *(int *)(mouse + 0x88) == 0) {
+        orig_Cocoa_HandleMouseEvent(video, event);
+        return;
+    }
     // raw counts keep adding up while nothing is aiming (in menus, or with the game in the background), so after a
     // gap start over instead of turning the view by all of that movement at once
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
@@ -52,7 +60,7 @@ install_hook_name(Cocoa_HandleMouseEvent, void, void *video, void *event) {
     int send_x = (int)trunc(x), send_y = (int)trunc(y);
     rest_x = x - send_x;
     rest_y = y - send_y;
-    if (mouse != NULL && (send_x != 0 || send_y != 0))
+    if (send_x != 0 || send_y != 0)
         ((int (*)(void *, uint32_t, int, int, int))(base_address + ADDR_SDL_SendMouseMotion))(
             *(void **)(mouse + 0x58), *(uint32_t *)(mouse + 0x50), 1, send_x, send_y);
 }
