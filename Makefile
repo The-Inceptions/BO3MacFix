@@ -1,7 +1,7 @@
 # Modified by Mickael DE LA ROQUE on 2026-09-08 to build and test the
 # unofficial custom-map stream-stall workaround.
 TARGET = BO3MacFix.dylib
-TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays
+TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_settings_ini
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -32,8 +32,9 @@ SOURCES += source/metalfx.m source/gpu_diag.m
 # the pre-patched executable (prepatch.c), the launcher builds it with BO3MacFix_BuildPrepatched
 SOURCES += source/prepatch.c
 
-# settings.ini's options for an in-game menu, the settings.ini writer and restarting (settings.c)
-SOURCES += source/settings.c
+# settings.ini's options for an in-game menu, the settings.ini writer and restarting (settings.c), with the
+# settings.ini reading and writing (settings_ini.c)
+SOURCES += source/settings.c source/settings_ini.c
 # the in-game settings page that uses it (settings_menu.c)
 SOURCES += source/settings_menu.c
 
@@ -57,6 +58,10 @@ test: $(TEST_TARGETS)
 
 tests/test_stream_stall_recovery: tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_stream_stall_recovery.c source/stream_stall_recovery.c
+
+# settings_ini.c's reading and writing, against odd settings.ini files
+tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_settings_ini.c source/settings_ini.c
 
 # display_policy.c's decisions are plain C, so they're tested with made-up displays, without the game
 tests/test_display_policy: tests/test_display_policy.c source/display_policy.c source/display_policy.h source/display_follow.h

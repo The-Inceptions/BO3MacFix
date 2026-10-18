@@ -23,6 +23,7 @@
 #include "qol.h"
 #include "rawmouse.h"
 #include "settings.h"
+#include "settings_ini.h"
 #include "t7overcharged.h"
 
 #define Settings_File "../../../BO3MacFix/settings.ini"
@@ -153,79 +154,13 @@ static const setting_t *find_setting(const char *name) {
     return NULL;
 }
 
-// the value of Name in settings.ini, or fallback (the same parsing as read_setting in bo3macfix.c)
+// the value of Name in settings.ini, or fallback (read like read_setting in bo3macfix.c, see settings_ini.c)
 static int read_value(const setting_t *setting) {
-    FILE *fp = fopen(Settings_File, "r");
-    int value = setting->fallback;
-    if (fp == NULL)
-        return value;
-    size_t name_len = strlen(setting->name);
-    char line[512];
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        char *p = line + strspn(line, " \t");
-        if (strncmp(p, setting->name, name_len) != 0)
-            continue;
-        p += name_len;
-        p += strspn(p, " \t");
-        if (*p != '=')
-            continue;
-        p++;
-        p += strspn(p, " \t\"");
-        if (setting->hex && *p == '#')
-            p++;
-        value = (int)strtol(p, NULL, setting->hex ? 16 : 10);
-    }
-    fclose(fp);
-    return value;
-}
-
-// does this line set name (Name = ...)?
-static bool line_sets(const char *line, const char *name) {
-    const char *p = line + strspn(line, " \t");
-    size_t name_len = strlen(name);
-    if (strncmp(p, name, name_len) != 0)
-        return false;
-    p += name_len;
-    p += strspn(p, " \t");
-    return *p == '=';
+    return settings_ini_read(Settings_File, setting->name, setting->fallback, setting->hex ? 16 : 10);
 }
 
 bool settings_write(const char *name, const char *value) {
-    FILE *in = fopen(Settings_File, "r");
-    char temp[1024];
-    snprintf(temp, sizeof(temp), "%s.tmp%d", Settings_File, (int)getpid());
-    FILE *out = fopen(temp, "w");
-    if (out == NULL) {
-        if (in != NULL)
-            fclose(in);
-        return false;
-    }
-    bool written = false, ends_with_newline = true;
-    char line[1024];
-    while (in != NULL && fgets(line, sizeof(line), in) != NULL) {
-        size_t len = strlen(line);
-        ends_with_newline = len > 0 && line[len - 1] == '\n';
-        if (line_sets(line, name)) {
-            // replace the last line that sets it (read_setting uses the last), drop earlier duplicates
-            if (!written) {
-                fprintf(out, "%s = %s\n", name, value);
-                written = true;
-            }
-            continue;
-        }
-        fputs(line, out);
-    }
-    if (in != NULL)
-        fclose(in);
-    if (!written)
-        fprintf(out, "%s%s = %s\n", ends_with_newline ? "" : "\n", name, value);
-    bool ok = fflush(out) == 0 && fsync(fileno(out)) == 0;
-    ok = fclose(out) == 0 && ok;
-    if (!ok || rename(temp, Settings_File) != 0) {
-        unlink(temp);
-        return false;
-    }
-    return true;
+    return settings_ini_write(Settings_File, name, value);
 }
 
 #pragma mark - restarting
