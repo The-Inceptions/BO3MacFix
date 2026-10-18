@@ -120,32 +120,75 @@ int display_policy_target(const DisplayInfo *displays, int count, int game_displ
     return find_main(displays, count);
 }
 
-int display_policy_choices(const DisplayInfo *displays, int count, int *values, char labels[][64], int max) {
+int display_policy_target_mirrored(const DisplayInfo *displays, int count, int game_display, const DisplayStore *store,
+                                   const MirrorInfo *mirrors, int mirror_count) {
+    if (game_display == Game_Display_Chosen && store->chosen[0] != '\0' &&
+        display_policy_find_remembered(displays, count, store, store->chosen) < 0) {
+        for (int m = 0; m < mirror_count; m++) {
+            int primary = strcmp(mirrors[m].key, store->chosen) == 0 ? display_policy_find(displays, count, mirrors[m].primary) : -1;
+            if (primary >= 0)
+                return primary;
+        }
+    }
+    return display_policy_target(displays, count, game_display, store);
+}
+
+void display_slots_update(DisplaySlots *table, const DisplayInfo *displays, int count, int *slots) {
+    for (int i = 0; i < count; i++) {
+        int slot = -1;
+        for (int s = 0; slot < 0 && s < table->count; s++)
+            if (strcmp(table->displays[s].key, displays[i].key) == 0)
+                slot = s;
+        if (slot < 0 && table->count < Pick_Slots)
+            slot = table->count++;
+        // all taken: the first slot whose display isn't connected
+        for (int s = 0; slot < 0 && s < table->count; s++)
+            if (display_policy_find_key(displays, count, table->displays[s].key) < 0)
+                slot = s;
+        if (slot >= 0)
+            table->displays[slot] = displays[i];
+        slots[i] = slot;
+    }
+}
+
+const DisplayInfo *display_slots_pick(const DisplaySlots *table, int value) {
+    int slot = value - Game_Display_Pick;
+    return slot >= 0 && slot < table->count && table->displays[slot].key[0] != '\0' ? &table->displays[slot] : NULL;
+}
+
+static int pick_value(const int *slots, int i) {
+    return Game_Display_Pick + (slots != NULL ? slots[i] : i);
+}
+
+int display_policy_choices(const DisplayInfo *displays, int count, const int *slots, int *values, char labels[][64], int max) {
     static const char *const rules[] = { "Main display", "Built-in", "External" };
     int n = 0;
     for (int i = 0; i < 3 && n < max; i++, n++) {
         values[n] = i;
         strlcpy(labels[n], rules[i], 64);
     }
-    for (int i = 0; i < count && n < max; i++, n++) {
+    for (int i = 0; i < count && n < max; i++) {
+        if (slots != NULL && slots[i] < 0)
+            continue;
         // a second display with the same name is "<name> (2)"
         int same = 1;
         for (int j = 0; j < i; j++)
             same += strcmp(displays[j].name, displays[i].name) == 0;
-        values[n] = Game_Display_Pick + i;
+        values[n] = pick_value(slots, i);
         if (same > 1)
-            snprintf(labels[n], 64, "%s (%d)", displays[i].name, same);
+            snprintf(labels[n], 64, "%.58s (%d)", displays[i].name, same);
         else
             strlcpy(labels[n], displays[i].name, 64);
+        n++;
     }
     return n;
 }
 
-int display_policy_current(int game_display, const DisplayInfo *displays, int count, const DisplayStore *store) {
+int display_policy_current(int game_display, const DisplayInfo *displays, int count, const int *slots, const DisplayStore *store) {
     if (game_display != Game_Display_Chosen)
         return game_display;
     int chosen = display_policy_find_remembered(displays, count, store, store->chosen);
-    return chosen >= 0 ? Game_Display_Pick + chosen : Game_Display_Chosen;
+    return chosen >= 0 && (slots == NULL || slots[chosen] >= 0) ? pick_value(slots, chosen) : Game_Display_Chosen;
 }
 
 int display_policy_persisted(const char *name, int value) {
@@ -282,28 +325,49 @@ RememberedDisplay *display_store_find(DisplayStore *store, const char *key) {
     return (RememberedDisplay *)find_remembered(store, key);
 }
 
+// a full store forgets the display used longest ago that isn't the last one, the last external or the chosen one
+static int forget_one(DisplayStore *store) {
+    for (int i = 0; i < store->count; i++) {
+        const char *key = store->displays[i].key;
+        if (strcmp(key, store->last_display) == 0 || strcmp(key, store->last_external) == 0 ||
+            strcmp(key, store->chosen) == 0)
+            continue;
+        memmove(&store->displays[i], &store->displays[i + 1], (size_t)(store->count - i - 1) * sizeof(RememberedDisplay));
+        store->count--;
+        return 1;
+    }
+    return 0;
+}
+
 RememberedDisplay *display_store_add(DisplayStore *store, const DisplayInfo *display) {
     if (display->key[0] == '\0')
         return NULL;
-    RememberedDisplay *entry = display_store_find(store, display->key);
-    if (entry == NULL) {
-        if (store->count >= Store_Max)
+    RememberedDisplay entry;
+    RememberedDisplay *found = display_store_find(store, display->key);
+    if (found != NULL) {
+        // the most recently used display goes last, so the front is what a full store forgets first
+        entry = *found;
+        int i = (int)(found - store->displays);
+        memmove(&store->displays[i], &store->displays[i + 1], (size_t)(store->count - i - 1) * sizeof(RememberedDisplay));
+        store->count--;
+    } else {
+        if (store->count >= Store_Max && !forget_one(store))
             return NULL;
-        entry = &store->displays[store->count++];
-        memset(entry, 0, sizeof(*entry));
-        strlcpy(entry->key, display->key, sizeof(entry->key));
+        memset(&entry, 0, sizeof(entry));
+        strlcpy(entry.key, display->key, sizeof(entry.key));
     }
-    strlcpy(entry->name, display->name, sizeof(entry->name));
-    entry->vendor = display->vendor;
-    entry->model = display->model;
-    entry->serial = display->serial;
+    strlcpy(entry.name, display->name, sizeof(entry.name));
+    entry.vendor = display->vendor;
+    entry.model = display->model;
+    entry.serial = display->serial;
     if (display->native_w > 0) {
-        entry->native_w = display->native_w;
-        entry->native_h = display->native_h;
+        entry.native_w = display->native_w;
+        entry.native_h = display->native_h;
     }
     if (display->refresh > 0)
-        entry->max_refresh = display->refresh;
-    return entry;
+        entry.max_refresh = display->refresh;
+    store->displays[store->count] = entry;
+    return &store->displays[store->count++];
 }
 
 int display_store_adopt(DisplayStore *store, const DisplayInfo *displays, int count, int i, char *from, size_t n) {
@@ -361,6 +425,7 @@ int display_store_load(DisplayStore *store, const char *path) {
     if (fp == NULL)
         return 0;
     RememberedDisplay *entry = NULL;
+    int in_section = 0; // the keys after a section header belong to it, even when it isn't kept
     char line[512];
     while (fgets(line, sizeof(line), fp) != NULL) {
         char *p = trim(line);
@@ -369,7 +434,8 @@ int display_store_load(DisplayStore *store, const char *path) {
         if (*p == '[') {
             char *end = strchr(p, ']');
             entry = NULL;
-            if (end == NULL || store->count >= Store_Max)
+            in_section = 1;
+            if (end == NULL || end == p + 1 || store->count >= Store_Max)
                 continue;
             *end = '\0';
             entry = &store->displays[store->count++];
@@ -382,6 +448,8 @@ int display_store_load(DisplayStore *store, const char *path) {
             continue;
         *equals = '\0';
         char *key = trim(p), *value = trim(equals + 1);
+        if (entry == NULL && in_section)
+            continue;
         if (entry == NULL) {
             if (strcmp(key, "LastDisplay") == 0)
                 strlcpy(store->last_display, value, sizeof(store->last_display));
@@ -414,6 +482,9 @@ int display_store_load(DisplayStore *store, const char *path) {
 }
 
 int display_store_save(const DisplayStore *store, const char *path) {
+    // the rename below would replace a displays.ini the user made read-only (rename only needs the folder writable)
+    if (access(path, F_OK) == 0 && access(path, W_OK) != 0)
+        return -1;
     char temp[1024];
     snprintf(temp, sizeof(temp), "%s.tmp%d", path, (int)getpid());
     FILE *fp = fopen(temp, "w");

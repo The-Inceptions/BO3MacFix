@@ -60,11 +60,39 @@ int display_policy_find_remembered(const DisplayInfo *displays, int count, const
 // as 2. Returns an index into displays, -1 if there are none.
 int display_policy_target(const DisplayInfo *displays, int count, int game_display, const DisplayStore *store);
 
-// the settings page's GameDisplay choices: the three rules, then each display as Game_Display_Pick + its index, named
-// (a second "XB273K GP" is "XB273K GP (2)"). Returns how many.
-int display_policy_choices(const DisplayInfo *displays, int count, int *values, char labels[][64], int max);
-// the value the page shows for the rule: 0 to 2, Game_Display_Pick + i for the chosen display i, or 3 if it's not connected
-int display_policy_current(int game_display, const DisplayInfo *displays, int count, const DisplayStore *store);
+// GameDisplay's values for the displays: Game_Display_Pick + a slot each display keeps for the session, so a settings
+// page that listed the displays before one came or went still picks the display it showed, not whichever has that
+// place in the list now. At launch the slots are the displays' places in the list.
+#define Pick_Slots 64
+typedef struct DisplaySlots {
+    DisplayInfo displays[Pick_Slots]; // each slot's display, as last seen
+    int count;
+} DisplaySlots;
+
+// gives every connected display its slot (slots[i] for displays[i]): the one it had, else the next free one, else
+// (all taken) the first one whose display isn't connected
+void display_slots_update(DisplaySlots *table, const DisplayInfo *displays, int count, int *slots);
+// the display a GameDisplay value of Game_Display_Pick or more stands for, NULL if none
+const DisplayInfo *display_slots_pick(const DisplaySlots *table, int value);
+
+// a display that's mirroring another (macOS shows the other's picture on it, so it isn't in the list of displays), by
+// its UUID, and the display it mirrors
+typedef struct MirrorInfo {
+    char key[52];
+    uint32_t primary;
+} MirrorInfo;
+
+// display_policy_target with mirroring: a chosen display that's mirroring another stands for the one it mirrors, where
+// the game's picture has to be for it to show
+int display_policy_target_mirrored(const DisplayInfo *displays, int count, int game_display, const DisplayStore *store,
+                                   const MirrorInfo *mirrors, int mirror_count);
+
+// the settings page's GameDisplay choices: the three rules, then each display as Game_Display_Pick + its slot (slots
+// NULL: its index), named (a second "XB273K GP" is "XB273K GP (2)"). Returns how many.
+int display_policy_choices(const DisplayInfo *displays, int count, const int *slots, int *values, char labels[][64], int max);
+// the value the page shows for the rule: 0 to 2, Game_Display_Pick + the chosen display's slot (or index), or 3 if it's
+// not connected
+int display_policy_current(int game_display, const DisplayInfo *displays, int count, const int *slots, const DisplayStore *store);
 // what settings.ini keeps: GameDisplay's picks (Game_Display_Pick + i) are stored as 3, the chosen display
 int display_policy_persisted(const char *name, int value);
 
@@ -96,14 +124,17 @@ int display_policy_launch(const DisplayStore *store, const DisplayInfo *displays
 int display_policy_parse_game(const char *text, GameValues *out);
 
 RememberedDisplay *display_store_find(DisplayStore *store, const char *key);
-// finds or adds the display and updates its shape; NULL if the store is full
+// finds or adds the display, updates its shape and makes it the most recently used one (the pointer is valid until the
+// next add). A full store forgets the display used longest ago that isn't LastDisplay, LastExternal or Chosen; NULL if
+// there's none it can forget.
 RememberedDisplay *display_store_add(DisplayStore *store, const DisplayInfo *display);
 // displays[i] isn't in the store under its key: if it's a remembered display that came back with another UUID (the
 // same vendor, model and serial, else the only remembered display of its kind that isn't connected), add it with that
 // memory, point the last-used and chosen display at it, and return 1 with the old key in `from`
 int display_store_adopt(DisplayStore *store, const DisplayInfo *displays, int count, int i, char *from, size_t n);
 int display_store_load(DisplayStore *store, const char *path);
-int display_store_save(const DisplayStore *store, const char *path); // written atomically, 1 on success
+// written atomically: 1 on success, 0 on failure, -1 if the file is read-only (then it's left as it is)
+int display_store_save(const DisplayStore *store, const char *path);
 
 // trailing-edge debounce of display events: a decision is due `settle` seconds after the last event, but not while a
 // reconfiguration is in progress (a CG "begin" with nothing after it yet), and never later than `cap` after the first

@@ -37,6 +37,8 @@ static int display_count;
 static uint32_t game_id; // the game's display: SDL display 0 once a move went through
 static DisplayStore store;
 static uint64_t store_version;
+static DisplaySlots pick_slots;       // GameDisplay's value for each display this session (Game_Display_Pick + slot)
+static int display_slots[Display_Max]; // the slot of displays[i]
 
 // one writer of displays.ini at a time, outside `lock` so a slow disk never holds up the others
 static pthread_mutex_t save_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -102,67 +104,89 @@ static void native_size(CGDirectDisplayID id, int *width, int *height) {
 // the online displays in SDL 2.0.7's order: the main display first, then the rest, leaving out mirror secondaries and
 // displays without a mode (SDL_cocoamodes.m:236-262), so the indices match SDL's. AppKit adds the names, the maximum
 // refresh rate and the camera housing, on the main thread once NSApp exists.
-static int take_snapshot(DisplayInfo *out, int max) {
+static void uuid_text(CGDirectDisplayID id, char *buf, size_t n) {
+    buf[0] = '\0';
+    CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(id);
+    if (uuid != NULL) {
+        CFStringRef text = CFUUIDCreateString(NULL, uuid);
+        CFStringGetCString(text, buf, (CFIndex)n, kCFStringEncodingASCII);
+        CFRelease(text);
+        CFRelease(uuid);
+    }
+}
+
+static int take_snapshot(DisplayInfo *out, int max, MirrorInfo *mirrored, int *mirrored_count) {
     uint32_t count = 0;
-    CGDirectDisplayID ids[Display_Max];
-    if (CGGetOnlineDisplayList(Display_Max, ids, &count) != kCGErrorSuccess)
+    CGDirectDisplayID online[64], ids[64];
+    *mirrored_count = 0;
+    if (CGGetOnlineDisplayList(64, online, &count) != kCGErrorSuccess)
         return 0;
+    for (uint32_t i = 0; i < count && *mirrored_count < max; i++) {
+        CGDirectDisplayID primary = CGDisplayMirrorsDisplay(online[i]);
+        if (primary != kCGNullDirectDisplay) {
+            MirrorInfo *m = &mirrored[(*mirrored_count)++];
+            uuid_text(online[i], m->key, sizeof(m->key));
+            m->primary = primary;
+        }
+    }
+    int candidates = 0;
+    for (int pass = 0; pass < 2; pass++)
+        for (uint32_t i = 0; i < count; i++)
+            if ((pass == 0) == (CGDisplayIsMain(online[i]) != 0) && CGDisplayMirrorsDisplay(online[i]) == kCGNullDirectDisplay)
+                ids[candidates++] = online[i];
+    // more than fit: the game's display takes the last place rather than look unplugged
+    pthread_mutex_lock(&lock);
+    CGDirectDisplayID game = game_id;
+    pthread_mutex_unlock(&lock);
+    for (int i = max; game != 0 && i < candidates; i++)
+        if (ids[i] == game && max > 1)
+            ids[max - 1] = game;
     BOOL appkit = pthread_main_np() && NSApp != nil;
     int n = 0;
     @autoreleasepool {
         NSArray<NSScreen *> *screens = appkit ? [NSScreen screens] : nil;
-        for (int pass = 0; pass < 2; pass++) {
-            for (uint32_t i = 0; i < count && n < max; i++) {
-                CGDirectDisplayID id = ids[i];
-                if ((pass == 0) != (CGDisplayIsMain(id) != 0) || CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay)
+        for (int i = 0; i < candidates && n < max; i++) {
+            CGDirectDisplayID id = ids[i];
+            CGDisplayModeRef mode = CGDisplayCopyDisplayMode(id);
+            if (mode == NULL)
+                continue;
+            DisplayInfo *d = &out[n++];
+            memset(d, 0, sizeof(*d));
+            d->id = id;
+            uuid_text(id, d->uuid, sizeof(d->uuid));
+            d->builtin = CGDisplayIsBuiltin(id) != 0;
+            d->main = CGDisplayIsMain(id) != 0;
+            d->vendor = CGDisplayVendorNumber(id);
+            d->model = CGDisplayModelNumber(id);
+            d->serial = CGDisplaySerialNumber(id);
+            d->unit = CGDisplayUnitNumber(id);
+            CGRect bounds = CGDisplayBounds(id);
+            d->x = (int)bounds.origin.x;
+            d->y = (int)bounds.origin.y;
+            d->w = (int)bounds.size.width;
+            d->h = (int)bounds.size.height;
+            d->pixel_w = (int)CGDisplayModeGetPixelWidth(mode);
+            d->pixel_h = (int)CGDisplayModeGetPixelHeight(mode);
+            d->scale = d->w > 0 ? (double)d->pixel_w / d->w : 1.0;
+            int mode_refresh = (int)lround(CGDisplayModeGetRefreshRate(mode)), screen_fps = 0;
+            CGDisplayModeRelease(mode);
+            native_size(id, &d->native_w, &d->native_h);
+            snprintf(d->name, sizeof(d->name), d->builtin ? "Built-in display" : "Display %u", id);
+            for (NSScreen *screen in screens) {
+                if ([screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue] != id)
                     continue;
-                CGDisplayModeRef mode = CGDisplayCopyDisplayMode(id);
-                if (mode == NULL)
-                    continue;
-                DisplayInfo *d = &out[n++];
-                memset(d, 0, sizeof(*d));
-                d->id = id;
-                CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(id);
-                if (uuid != NULL) {
-                    CFStringRef text = CFUUIDCreateString(NULL, uuid);
-                    CFStringGetCString(text, d->uuid, sizeof(d->uuid), kCFStringEncodingASCII);
-                    CFRelease(text);
-                    CFRelease(uuid);
+                if (@available(macOS 10.15, *)) {
+                    if (screen.localizedName.UTF8String != NULL)
+                        snprintf(d->name, sizeof(d->name), "%s", screen.localizedName.UTF8String);
                 }
-                d->builtin = CGDisplayIsBuiltin(id) != 0;
-                d->main = CGDisplayIsMain(id) != 0;
-                d->vendor = CGDisplayVendorNumber(id);
-                d->model = CGDisplayModelNumber(id);
-                d->serial = CGDisplaySerialNumber(id);
-                d->unit = CGDisplayUnitNumber(id);
-                CGRect bounds = CGDisplayBounds(id);
-                d->x = (int)bounds.origin.x;
-                d->y = (int)bounds.origin.y;
-                d->w = (int)bounds.size.width;
-                d->h = (int)bounds.size.height;
-                d->pixel_w = (int)CGDisplayModeGetPixelWidth(mode);
-                d->pixel_h = (int)CGDisplayModeGetPixelHeight(mode);
-                d->scale = d->w > 0 ? (double)d->pixel_w / d->w : 1.0;
-                int mode_refresh = (int)lround(CGDisplayModeGetRefreshRate(mode)), screen_fps = 0;
-                CGDisplayModeRelease(mode);
-                native_size(id, &d->native_w, &d->native_h);
-                snprintf(d->name, sizeof(d->name), d->builtin ? "Built-in display" : "Display %u", id);
-                for (NSScreen *screen in screens) {
-                    if ([screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue] != id)
-                        continue;
-                    if (@available(macOS 10.15, *)) {
-                        if (screen.localizedName.UTF8String != NULL)
-                            snprintf(d->name, sizeof(d->name), "%s", screen.localizedName.UTF8String);
-                    }
-                    if (@available(macOS 12.0, *)) {
-                        screen_fps = (int)screen.maximumFramesPerSecond;
-                        d->variable_refresh = screen.minimumRefreshInterval != screen.maximumRefreshInterval;
-                        d->notch = (int)screen.safeAreaInsets.top;
-                    }
+                if (@available(macOS 12.0, *)) {
+                    screen_fps = (int)screen.maximumFramesPerSecond;
+                    d->variable_refresh = screen.minimumRefreshInterval != screen.maximumRefreshInterval;
+                    d->notch = (int)screen.safeAreaInsets.top;
                 }
-                // a virtual display can report 2500 frames per second
-                d->refresh = display_policy_refresh(screen_fps, mode_refresh);
             }
+            // a virtual display can report 2500 frames per second
+            d->refresh = display_policy_refresh(screen_fps, mode_refresh);
         }
     }
     display_policy_keys(out, n);
@@ -211,8 +235,8 @@ static void save_store(const DisplayStore *copy, uint64_t version);
 // the settings page's GameDisplay choices, logged at launch and whenever they change (the test harness reads the
 // 100 + i values from it)
 static void log_choices(const int *values, char labels[][64], int n) {
-    static char last[1024];
-    char line[1024] = "display: game display choices:";
+    static char last[2048];
+    char line[2048] = "display: game display choices:";
     for (int i = 0; i < n; i++) {
         char item[96];
         snprintf(item, sizeof(item), "%s %d %s", i > 0 ? ";" : "", values[i], labels[i]);
@@ -238,6 +262,7 @@ static void use_snapshot(const DisplayInfo *current, int count, DisplayInfo *bef
     }
     memcpy(displays, current, sizeof(displays));
     display_count = count;
+    display_slots_update(&pick_slots, displays, count, display_slots);
     for (int i = 0; i < count; i++) {
         char from[52];
         if (display_store_adopt(&store, displays, count, i, from, sizeof(from))) {
@@ -250,7 +275,7 @@ static void use_snapshot(const DisplayInfo *current, int count, DisplayInfo *bef
         copy = store;
     int values[3 + Display_Max];
     char labels[3 + Display_Max][64];
-    int choices = display_policy_choices(displays, count, values, labels, 3 + Display_Max);
+    int choices = display_policy_choices(displays, count, display_slots, values, labels, 3 + Display_Max);
     pthread_mutex_unlock(&lock);
     for (int i = 0; i < told_count; i++)
         printf("%s\n", told[i]);
@@ -349,12 +374,17 @@ static void apply_confine(void) {
 
 // a copy of the store taken under `lock` (with ++store_version); an older copy than the last one written is skipped
 static void save_store(const DisplayStore *copy, uint64_t version) {
+    static int told_read_only;
     pthread_mutex_lock(&save_lock);
     if (version > saved_version) {
-        if (display_store_save(copy, Displays_File))
+        int saved = display_store_save(copy, Displays_File);
+        if (saved > 0)
             saved_version = version;
-        else
+        else if (saved < 0 && !told_read_only)
+            printf("display: " Displays_File " is read-only, so what the game uses on each display isn't saved there\n");
+        else if (saved == 0)
             printf("display: couldn't save " Displays_File "\n");
+        told_read_only = told_read_only || saved < 0;
     }
     pthread_mutex_unlock(&save_lock);
 }
@@ -459,7 +489,9 @@ static void evaluate(void) {
         return;
     }
     DisplayInfo current[Display_Max], before[Display_Max];
-    int count = take_snapshot(current, Display_Max);
+    MirrorInfo mirrored[Display_Max];
+    int mirrored_count;
+    int count = take_snapshot(current, Display_Max, mirrored, &mirrored_count);
     if (count <= 0)
         return;
     uint32_t sdl_first = sdl_displays_id(0);
@@ -491,7 +523,7 @@ static void evaluate(void) {
         target = display_policy_find(current, count, window_display);
     } else {
         pthread_mutex_lock(&lock);
-        target = display_policy_target(current, count, game_display, &store);
+        target = display_policy_target_mirrored(current, count, game_display, &store, mirrored, mirrored_count);
         pthread_mutex_unlock(&lock);
     }
     int here = display_policy_find(current, count, game);
@@ -639,7 +671,9 @@ static void start_appkit(void) {
     appkit_started = 1;
     // AppKit's names and refresh rates, without treating them as a change
     DisplayInfo current[Display_Max];
-    int count = take_snapshot(current, Display_Max);
+    MirrorInfo mirrored[Display_Max];
+    int mirrored_count;
+    int count = take_snapshot(current, Display_Max, mirrored, &mirrored_count);
     if (count > 0)
         use_snapshot(current, count, NULL, NULL);
     pthread_mutex_lock(&lock);
@@ -720,11 +754,13 @@ uint32_t display_follow_launch_target(void) {
     if (!started)
         return 0;
     DisplayInfo current[Display_Max];
-    int count = take_snapshot(current, Display_Max);
+    MirrorInfo mirrored[Display_Max];
+    int mirrored_count;
+    int count = take_snapshot(current, Display_Max, mirrored, &mirrored_count);
     if (count > 0)
         use_snapshot(current, count, NULL, NULL);
     pthread_mutex_lock(&lock);
-    int target = follow ? display_policy_target(current, count, game_display, &store) : -1;
+    int target = follow ? display_policy_target_mirrored(current, count, game_display, &store, mirrored, mirrored_count) : -1;
     game_id = target >= 0 ? current[target].id : CGMainDisplayID();
     int i = display_policy_find(current, count, game_id);
     if (i >= 0)
@@ -811,7 +847,7 @@ int display_follow_set_option(const char *name, int value) {
     int look_again = 0;
     DisplayStore copy;
     uint64_t version = 0;
-    char told[128] = "";
+    char told[256] = "";
     pthread_mutex_lock(&lock);
     if (strcmp(name, "DisplayFollow") == 0) {
         look_again = !follow && value != 0;
@@ -819,17 +855,23 @@ int display_follow_set_option(const char *name, int value) {
     } else if (strcmp(name, "GameDisplay") == 0) {
         int rule = value < 0 || value > Game_Display_Chosen ? Game_Display_Main : value;
         if (value >= Game_Display_Pick) {
-            // a display picked by name on the settings page becomes the chosen display (gone since the page listed it:
-            // nothing changes)
-            int i = value - Game_Display_Pick;
+            // a display picked by name on the settings page becomes the chosen display. The value is the display's
+            // for the whole session, so a page that listed the displays before one came or went still gets the one it
+            // showed; one unplugged since is chosen all the same (the External rule applies until it's back).
+            const DisplayInfo *slot = display_slots_pick(&pick_slots, value);
+            int i = slot != NULL ? display_policy_find_key(displays, display_count, slot->key) : -1;
+            DisplayInfo picked = { 0 };
+            if (slot != NULL)
+                picked = i >= 0 ? displays[i] : *slot;
             rule = game_display;
-            if (i < display_count && display_store_add(&store, &displays[i]) != NULL) {
-                strlcpy(store.chosen, displays[i].key, sizeof(store.chosen));
-                strlcpy(store.chosen_name, displays[i].name, sizeof(store.chosen_name));
+            if (slot != NULL && display_store_add(&store, &picked) != NULL) {
+                strlcpy(store.chosen, picked.key, sizeof(store.chosen));
+                strlcpy(store.chosen_name, picked.name, sizeof(store.chosen_name));
                 copy = store;
                 version = ++store_version;
                 rule = Game_Display_Chosen;
-                snprintf(told, sizeof(told), "display: the game's display is \"%s\" now", displays[i].name);
+                snprintf(told, sizeof(told), "display: the game's display is \"%s\" now%s", picked.name,
+                         i < 0 ? " (not connected, so it goes by the External rule until it's back)" : "");
             }
         }
         look_again = game_display != rule || version != 0;
@@ -909,14 +951,14 @@ void display_follow_print_state(const char *why) {
 
 int display_follow_game_display_choices(int *values, char labels[][64], int max) {
     pthread_mutex_lock(&lock);
-    int n = display_policy_choices(displays, display_count, values, labels, max);
+    int n = display_policy_choices(displays, display_count, display_slots, values, labels, max);
     pthread_mutex_unlock(&lock);
     return n;
 }
 
 int display_follow_game_display_current(void) {
     pthread_mutex_lock(&lock);
-    int value = display_policy_current(game_display, displays, display_count, &store);
+    int value = display_policy_current(game_display, displays, display_count, display_slots, &store);
     pthread_mutex_unlock(&lock);
     return value;
 }

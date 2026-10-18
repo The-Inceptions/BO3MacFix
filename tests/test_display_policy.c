@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "../source/display_policy.h"
@@ -99,6 +100,19 @@ static void test_chosen(void) {
     strcpy(monitor.chosen, Gaming_UUID);
     DisplayInfo moved[] = { builtin, tv, another(&gaming, 9, "22222222-0000-0000-0000-000000000009") };
     assert(display_policy_target(moved, 3, 3, &monitor) == 2);
+
+    // the chosen TV mirrors the built-in (so it's not in the list): the game goes where its picture shows on the TV,
+    // the built-in, not to the gaming monitor by the External rule
+    MirrorInfo tv_mirrors_builtin = { .key = TV_UUID, .primary = 1 };
+    assert(display_policy_target_mirrored(no_tv, 2, 3, &store, &tv_mirrors_builtin, 1) == 0);
+    assert(display_policy_target_mirrored(no_tv, 2, 3, &store, NULL, 0) == 1);
+    // mirroring a display that isn't in the list either, or another display mirroring: the rules as before
+    MirrorInfo elsewhere = { .key = TV_UUID, .primary = 42 }, other = { .key = Gaming_UUID, .primary = 1 };
+    assert(display_policy_target_mirrored(no_tv, 2, 3, &store, &elsewhere, 1) == 1);
+    assert(display_policy_target_mirrored(no_tv, 2, 3, &store, &other, 1) == 1);
+    // connected and not mirroring: the chosen display; the other rules don't look at mirrors
+    assert(display_policy_target_mirrored(all, 3, 3, &store, &tv_mirrors_builtin, 1) == 2);
+    assert(display_policy_target_mirrored(no_tv, 2, 2, &store, &tv_mirrors_builtin, 1) == 1);
 }
 
 static void test_choices(void) {
@@ -107,7 +121,7 @@ static void test_choices(void) {
     DisplayInfo all[] = { builtin, xb, another(&xb, 6, "33333333-0000-0000-0000-000000000006") };
     int values[8];
     char labels[8][64];
-    int n = display_policy_choices(all, 3, values, labels, 8);
+    int n = display_policy_choices(all, 3, NULL, values, labels, 8);
     assert(n == 6);
     assert(values[0] == 0 && strcmp(labels[0], "Main display") == 0);
     assert(values[1] == 1 && strcmp(labels[1], "Built-in") == 0);
@@ -115,21 +129,55 @@ static void test_choices(void) {
     assert(values[3] == 100 && strcmp(labels[3], "Built-in Retina Display") == 0);
     assert(values[4] == 101 && strcmp(labels[4], "XB273K GP") == 0);
     assert(values[5] == 102 && strcmp(labels[5], "XB273K GP (2)") == 0);
-    assert(display_policy_choices(all, 3, values, labels, 4) == 4 && values[3] == 100);
+    assert(display_policy_choices(all, 3, NULL, values, labels, 4) == 4 && values[3] == 100);
 
     // what the page shows, and what settings.ini keeps
     DisplayStore store = { 0 };
     display_store_add(&store, &all[2]);
     strcpy(store.chosen, all[2].key);
-    assert(display_policy_current(2, all, 3, &store) == 2);
-    assert(display_policy_current(3, all, 3, &store) == 102);
+    assert(display_policy_current(2, all, 3, NULL, &store) == 2);
+    assert(display_policy_current(3, all, 3, NULL, &store) == 102);
     DisplayInfo laptop[] = { builtin, tv };
-    assert(display_policy_current(3, laptop, 2, &store) == 3);          // the chosen one isn't connected
+    assert(display_policy_current(3, laptop, 2, NULL, &store) == 3);          // the chosen one isn't connected
     // without it, the other serial-less XB273K GP (unknown to displays.ini) can't be told apart from it
-    assert(display_policy_current(3, all, 2, &store) == 101);
+    assert(display_policy_current(3, all, 2, NULL, &store) == 101);
     assert(display_policy_persisted("GameDisplay", 102) == 3);
     assert(display_policy_persisted("GameDisplay", 2) == 2);
     assert(display_policy_persisted("ConfineCursor", 1) == 1);
+
+    // the values stay each display's for the session: a page that listed [built-in, XB, XB (2)] still picks the XB it
+    // showed after the first XB is unplugged and a TV plugged in
+    DisplaySlots table = { 0 };
+    int slots[4];
+    display_slots_update(&table, all, 3, slots);
+    assert(slots[0] == 0 && slots[1] == 1 && slots[2] == 2);
+    DisplayInfo later[] = { builtin, all[2], tv };
+    display_slots_update(&table, later, 3, slots);
+    assert(slots[0] == 0 && slots[1] == 2 && slots[2] == 3);
+    n = display_policy_choices(later, 3, slots, values, labels, 8);
+    assert(n == 6 && values[3] == 100 && values[4] == 102 && values[5] == 103 && strcmp(labels[5], "TV") == 0);
+    assert(strcmp(display_slots_pick(&table, 102)->key, all[2].key) == 0);
+    assert(strcmp(display_slots_pick(&table, 101)->key, all[1].key) == 0);  // unplugged, but still the one shown
+    assert(display_slots_pick(&table, 104) == NULL && display_slots_pick(&table, 99) == NULL);
+    assert(display_policy_current(3, later, 3, slots, &store) == 102);
+    // the first XB back: its old value
+    DisplayInfo back[] = { builtin, all[1], all[2], tv };
+    display_slots_update(&table, back, 4, slots);
+    assert(slots[1] == 1 && slots[2] == 2 && slots[3] == 3);
+
+    // all slots taken: a new display takes the first slot whose display isn't connected
+    DisplaySlots full = { 0 };
+    DisplayInfo one = tv;
+    for (int i = 0; i < Pick_Slots; i++) {
+        snprintf(one.key, sizeof(one.key), "SLOT-%d", i);
+        display_slots_update(&full, &one, 1, slots);
+        assert(slots[0] == i);
+    }
+    DisplayInfo pair[] = { tv, tv };
+    strcpy(pair[0].key, "SLOT-0");
+    strcpy(pair[1].key, "SLOT-NEW");
+    display_slots_update(&full, pair, 2, slots);
+    assert(slots[0] == 0 && slots[1] == 1 && full.count == Pick_Slots && strcmp(display_slots_pick(&full, 101)->key, "SLOT-NEW") == 0);
 }
 
 static void test_identity(void) {
@@ -361,7 +409,10 @@ static void test_store(void) {
     a->width = 2624;
     a->height = 1696;
     a->refresh = 120;
-    assert(display_store_add(&store, &builtin) == a && store.count == 2);
+    // adding it again keeps its values and makes it the most recently used one, so it's last now
+    a = display_store_add(&store, &builtin);
+    assert(a == &store.displays[1] && store.count == 2 && a->width == 2624 && a->refresh == 120);
+    assert(strcmp(store.displays[0].key, Gaming_UUID) == 0);
     DisplayInfo second = gaming;
     strcpy(second.key, Gaming_UUID "#3");
     display_store_add(&store, &second);
@@ -388,6 +439,93 @@ static void test_store(void) {
     assert(loaded.displays[0].width == 1280 && loaded.displays[0].height == 720 && strcmp(loaded.last_display, "abc") == 0);
     unlink(path);
     assert(!display_store_load(&loaded, path) && loaded.count == 0);
+}
+
+// 32 displays remembered: a new one makes room by forgetting the one used longest ago that isn't the last display,
+// the last external or the chosen one
+static void test_store_full(void) {
+    DisplayStore store = { 0 };
+    DisplayInfo d = tv;
+    for (int i = 0; i < 32; i++) {
+        snprintf(d.key, sizeof(d.key), "DISPLAY-%02d", i);
+        assert(display_store_add(&store, &d) != NULL);
+    }
+    assert(store.count == 32);
+    strcpy(store.last_display, "DISPLAY-00");
+    strcpy(store.last_external, "DISPLAY-01");
+    strcpy(store.chosen, "DISPLAY-02");
+    strcpy(d.key, "DISPLAY-NEW");
+    RememberedDisplay *added = display_store_add(&store, &d);
+    assert(added != NULL && strcmp(added->key, "DISPLAY-NEW") == 0 && store.count == 32);
+    assert(display_store_find(&store, "DISPLAY-03") == NULL);
+    assert(display_store_find(&store, "DISPLAY-00") && display_store_find(&store, "DISPLAY-01") && display_store_find(&store, "DISPLAY-02"));
+    // using 04 again moves it to the back, so 05 is forgotten next
+    strcpy(d.key, "DISPLAY-04");
+    display_store_add(&store, &d)->width = 1280;
+    strcpy(d.key, "DISPLAY-NEWER");
+    assert(display_store_add(&store, &d) != NULL && store.count == 32);
+    assert(display_store_find(&store, "DISPLAY-05") == NULL && display_store_find(&store, "DISPLAY-04")->width == 1280);
+
+    // nothing it can forget: three displays and all of them in use
+    DisplayStore tiny = { 0 };
+    for (int i = 0; i < 32; i++) {
+        snprintf(d.key, sizeof(d.key), "SAME");
+        snprintf(tiny.displays[i].key, sizeof(tiny.displays[i].key), "K%d", i % 3);
+    }
+    tiny.count = 32;
+    strcpy(tiny.last_display, "K0");
+    strcpy(tiny.last_external, "K1");
+    strcpy(tiny.chosen, "K2");
+    strcpy(d.key, "ANOTHER");
+    assert(display_store_add(&tiny, &d) == NULL && tiny.count == 32);
+}
+
+// a broken displays.ini: whatever can be read is, nothing else, and no section's keys leak into the top level
+static void test_store_corrupt(void) {
+    char path[] = "/tmp/test_display_policy.XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0);
+    FILE *fp = fdopen(fd, "w");
+    static const char binary[] = "\xff\xfe\x00garbage\r\n";
+    fwrite(binary, 1, sizeof(binary) - 1, fp);
+    fputs("LastDisplay = KEEP\r\n[unterminated\r\nChosen = LEAKED\r\n[]\r\nChosen = LEAKED2\r\n", fp);
+    fputs("[GOOD]\r\nName = A TV\r\nWindowSize = 1280xjunk\r\nRefreshRate = abc\r\nNative = 3840x2160\r\n", fp);
+    for (int i = 0; i < 600; i++)
+        fputc('x', fp);
+    fputs(" = 1\n", fp);
+    for (int i = 0; i < 40; i++)
+        fprintf(fp, "[S%d]\nName = s%d\nChosen = LEAKED3\n", i, i);
+    fclose(fp);
+    DisplayStore store;
+    assert(display_store_load(&store, path));
+    assert(store.count == 32 && strcmp(store.displays[0].key, "GOOD") == 0 && strcmp(store.displays[0].name, "A TV") == 0);
+    assert(store.displays[0].native_w == 3840 && store.displays[0].native_h == 2160 && store.displays[0].refresh == 0);
+    // "1280xjunk": the width is read, the height isn't, and a size needs both
+    assert(store.displays[0].height == 0);
+    assert(strcmp(store.last_display, "KEEP") == 0 && store.chosen[0] == '\0');
+    unlink(path);
+}
+
+// a displays.ini the user made read-only stays as it is (renaming over it would only need the folder writable)
+static void test_store_read_only(void) {
+    char path[] = "/tmp/test_display_policy.XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0);
+    close(fd);
+    DisplayStore store = { 0 };
+    display_store_add(&store, &builtin)->width = 2624;
+    assert(display_store_save(&store, path) == 1);
+    assert(chmod(path, 0444) == 0);
+    display_store_add(&store, &gaming);
+    assert(display_store_save(&store, path) == -1);
+    DisplayStore loaded;
+    assert(display_store_load(&loaded, path) && loaded.count == 1);
+    assert(chmod(path, 0644) == 0);
+    assert(display_store_save(&store, path) == 1 && display_store_load(&loaded, path) && loaded.count == 2);
+    unlink(path);
+    // missing: it's made
+    assert(display_store_save(&store, path) == 1);
+    unlink(path);
 }
 
 static void test_debounce(void) {
@@ -480,6 +618,9 @@ int main(void) {
     test_launch();
     test_parse();
     test_store();
+    test_store_full();
+    test_store_corrupt();
+    test_store_read_only();
     test_debounce();
     test_cursor_edge();
     printf("display policy tests passed\n");
