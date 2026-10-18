@@ -37,6 +37,7 @@
 #define Max_Notice_Age 20.0    // seconds a notice waits for the UI (while a map loads, say) before it's dropped
 #define Max_Pause_Age 5.0      // seconds a pause request waits
 #define Startup_Quiet 15.0     // controllers macOS finds while the game starts aren't news
+#define Startup_Display_Quiet 30.0 // nor the display the window first goes to
 #define Battery_Interval 60    // seconds between battery checks
 #define Key_Escape 53         // kVK_Escape
 
@@ -163,6 +164,7 @@ static void controller_disconnected(NSString *name, bool forced) {
 #pragma mark - displays
 
 static CGDirectDisplayID shown_display; // main thread: the display the game was last seen on, 0 until it's known
+                                        // (the window becoming key, or its first move)
 static unsigned screen_changes;         // main thread
 
 static CGDirectDisplayID display_of(NSScreen *screen) {
@@ -182,9 +184,9 @@ static void game_window_moved(NSWindow *window) {
         NSScreen *screen = window.screen;
         if (change != screen_changes || screen == nil || display_of(screen) == shown_display)
             return;
-        bool first = shown_display == 0;
         shown_display = display_of(screen);
-        if (first)
+        // where the window first goes isn't news
+        if (now() - started < Startup_Display_Quiet)
             return;
         NSString *name = nil;
         if (@available(macOS 10.15, *))
