@@ -697,6 +697,27 @@ DYLD_INTERPOSE(IOHIDDeviceGetProperty_hook, IOHIDDeviceGetProperty);
 
 int sandbox_init_with_parameters(const char *profile, uint64_t flags, const char *const parameters[], char **errorbuf);
 
+// The engine's players folder is the one in Application Support, but a mod's Lua sees the game folder's
+// (lua_correct_path), where Windows has just the one. All-around Enhancement saves its options and custom mutations
+// from Lua as .cfg files and loads them with exec, which only looks in the engine's folder, so they never loaded (and
+// the defaults it then saved replaced them): a .cfg in the game folder's players folder comes before the engine's
+#define Engine_Players_Folder "/Application Support/Call of Duty Black Ops III/players/"
+static bool players_cfg_in_game_folder(const char *cwd, const char *in_str, char *out, size_t out_len)
+{
+    const char *rest = strcasestr(in_str, Engine_Players_Folder);
+    if (rest == NULL)
+        return false;
+    rest += strlen(Engine_Players_Folder);
+    size_t len = strlen(rest);
+    if (len <= 4 || strcasecmp(rest + len - 4, ".cfg") != 0 || strstr(rest, "..") != NULL)
+        return false;
+    if (snprintf(out, out_len, "%s/%splayers/%s", cwd, Basegame_Path, rest) >= (int)out_len)
+        return false;
+    for (char *c = out; *c != '\0'; c++)
+        if (*c == '\\') *c = '/';
+    return access(out, F_OK) == 0;
+}
+
 #define EMUPATH_B "C:\\Emu\\AppAssets"
 #define EMUPATH_F "C:/Emu/AppAssets"
 install_hook_name(ASL_ToNativePath, void *, void *asl, char *in_str)
@@ -744,7 +765,12 @@ install_hook_name(ASL_ToNativePath, void *, void *asl, char *in_str)
             return orig_ASL_ToNativePath(asl, newpath);
         }
     }
-    
+
+    if (players_cfg_in_game_folder(cwd, in_str, newpath, sizeof(newpath))) {
+        printf("using %s from the game folder's players folder\n", filename_from_path(newpath));
+        return orig_ASL_ToNativePath(asl, newpath);
+    }
+
     return orig_ASL_ToNativePath(asl, in_str);
 }
 
