@@ -80,6 +80,8 @@ static float gyro_scale = 1.0f;        // GyroSensitivity / 100
 static int gyro_invert = 0;            // GyroInvert: 1 = vertical, 2 = horizontal, 3 = both
 static bool adaptive_triggers = false; // AdaptiveTriggers
 static atomic_bool app_active = true;
+static atomic_bool triggers_used = false; // adaptive triggers were turned on at some point
+static atomic_bool quitting = false;      // gc_bridge_quit ran: nothing turns them on again
 static os_unfair_lock pads_lock = OS_UNFAIR_LOCK_INIT;
 static bridged_pad pads[XUSER_MAX_COUNT];
 static const void *sdl_seen[XUSER_MAX_COUNT]; // under pads_lock: the SDL controller last seen on each user index
@@ -321,8 +323,10 @@ static void gyro_update(bridged_pad *pad, GCMotion *motion) {
 // AdaptiveTriggers: a trigger break on R2 like a gun's, and light resistance on L2 for aiming down sights
 API_AVAILABLE(macos(11.3))
 static void set_adaptive_triggers(GCController *controller, bool on) {
-    if (![controller.extendedGamepad isKindOfClass:[GCDualSenseGamepad class]])
+    if (![controller.extendedGamepad isKindOfClass:[GCDualSenseGamepad class]] || (on && atomic_load(&quitting)))
         return;
+    if (on)
+        atomic_store(&triggers_used, true);
     GCDualSenseGamepad *dualsense = (GCDualSenseGamepad *)controller.extendedGamepad;
     if (on) {
         [dualsense.rightTrigger setModeWeaponWithStartPosition:0.25f endPosition:0.55f resistiveStrength:0.5f];
@@ -851,6 +855,10 @@ static void gc_setup(void) {
     [center addObserverForName:@"NSApplicationDidBecomeActiveNotification" object:nil queue:main_queue usingBlock:^(NSNotification *note) {
         app_focus_changed(true);
     }];
+    // NSApplicationWillTerminateNotification, quitting through AppKit (Cmd+Q, say) rather than the game's own quit
+    [center addObserverForName:@"NSApplicationWillTerminateNotification" object:nil queue:main_queue usingBlock:^(NSNotification *note) {
+        gc_bridge_quit();
+    }];
     NSArray<GCController *> *controllers = GCController.controllers;
     printf("GameController bridge: watching for controllers, macOS lists %lu now\n", (unsigned long)controllers.count);
     for (GCController *controller in controllers)
@@ -914,6 +922,8 @@ void gc_bridge_init(uint64_t base, int mode, int lightbar_rgb) {
         install_hook_ASL_XInputGetState(get_state);
         install_hook_ASL_XInputSetState(set_state);
         enabled = true;
+        // a plain exit() runs atexit handlers; ExitFix's _exit on the game thread calls gc_bridge_quit itself
+        atexit(gc_bridge_quit);
         // the GameController framework needs the app's run loop, which runs once the game is up
         dispatch_async(dispatch_get_main_queue(), ^{
             @autoreleasepool {
@@ -923,6 +933,51 @@ void gc_bridge_init(uint64_t base, int mode, int lightbar_rgb) {
         printf("GameController bridge: on, DualSense and DualShock 4 controllers go through macOS instead of SDL\n");
     } else {
         printf("GameController bridge: needs macOS 11.3 or newer, staying off\n");
+    }
+}
+
+// The DualSense keeps its trigger effects after the game has gone, which would leave R2 stiff, so turn them off when
+// the game quits: from ExitFix's _exit on the game thread (qol.c), atexit or AppKit terminating, whichever comes first.
+// The lightbar is left as it is.
+void gc_bridge_quit(void) {
+    if (!enabled || atomic_exchange(&quitting, true) || !atomic_load(&triggers_used))
+        return;
+    if (@available(macOS 11.3, *)) {
+        @autoreleasepool {
+            GCDualSenseGamepad *dualsenses[XUSER_MAX_COUNT];
+            int count = 0;
+            os_unfair_lock_lock(&pads_lock);
+            id controllers[XUSER_MAX_COUNT];
+            for (int i = 0; i < XUSER_MAX_COUNT; i++)
+                controllers[i] = [pads[i].controller retain];
+            os_unfair_lock_unlock(&pads_lock);
+            for (int i = 0; i < XUSER_MAX_COUNT; i++) {
+                GCExtendedGamepad *gamepad = [controllers[i] extendedGamepad];
+                if ([gamepad isKindOfClass:[GCDualSenseGamepad class]]) {
+                    dualsenses[count] = (GCDualSenseGamepad *)gamepad;
+                    [dualsenses[count].rightTrigger setModeOff];
+                    [dualsenses[count].leftTrigger setModeOff];
+                    count++;
+                }
+            }
+            // the controller reports its modes back a moment later: wait for that, 300 ms at most, so the change isn't
+            // lost with the process
+            int waited = 0;
+            bool off = false;
+            while (count > 0 && !off && waited < 300) {
+                usleep(10000);
+                waited += 10;
+                off = true;
+                for (int i = 0; i < count; i++)
+                    off = off && dualsenses[i].rightTrigger.mode == GCDualSenseAdaptiveTriggerModeOff &&
+                          dualsenses[i].leftTrigger.mode == GCDualSenseAdaptiveTriggerModeOff;
+            }
+            if (count > 0)
+                printf("GameController bridge: adaptive triggers off for quitting (%s after %i ms)\n",
+                       off ? "the controller reports them off" : "not confirmed", waited);
+            for (int i = 0; i < XUSER_MAX_COUNT; i++)
+                [controllers[i] release];
+        }
     }
 }
 
