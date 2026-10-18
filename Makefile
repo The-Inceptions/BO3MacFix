@@ -1,7 +1,7 @@
 # Modified by Mickael DE LA ROQUE on 2026-09-08 to build and test the
 # unofficial custom-map stream-stall workaround.
 TARGET = BO3MacFix.dylib
-TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays
+TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -67,6 +67,11 @@ tests/test_display_policy: tests/test_display_policy.c source/display_policy.c s
 tests/test_sdl_displays: tests/test_sdl_displays.c source/sdl_displays.c source/sdl_displays.h source/engine_display.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -mmacosx-version-min=$(OSXVER) -framework CoreFoundation \
 		-framework CoreGraphics -framework CoreVideo -o $@ tests/test_sdl_displays.c
+
+# prepatch.c's builder and runtime against a made-up executable with the game's layout (the test includes the source
+# itself), with the address and undefined behaviour sanitizers since it's all byte offsets
+tests/test_prepatch: tests/test_prepatch.c source/prepatch.c source/prepatch.h source/offsets.h source/dobby.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_prepatch.c
 
 $(TARGET): $(SOURCES) source/t7overcharged_lua.h source/settings_menu_lua.h
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(DEFINES) $(LDFLAGS) -o $@ $(SOURCES)
