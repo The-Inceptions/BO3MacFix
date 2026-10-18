@@ -112,9 +112,13 @@ char *copy_clipboard_text() {
 
 void set_clipboard_text(const char *text) {
     @autoreleasepool {
+        // nil for text that isn't valid UTF-8, which a Lua string can be: leave the clipboard as it is then
+        NSString *string = text != NULL ? [NSString stringWithUTF8String:text] : nil;
+        if (string == nil)
+            return;
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
-        [pasteboard setString:[NSString stringWithUTF8String:text] forType:NSPasteboardTypeString];
+        [pasteboard setString:string forType:NSPasteboardTypeString];
     }
 }
 

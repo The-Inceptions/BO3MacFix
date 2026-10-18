@@ -38,6 +38,7 @@
 #include "qol.h"
 #include "rawmouse.h"
 #include "sdl_displays.h"
+#include "settings_ini.h"
 #include "settings_menu.h"
 #include "steam.h"
 #include "stream_stall_recovery.h"
@@ -606,31 +607,10 @@ static void display_mode_patch() {
     checked_code_patch(ADDR_ASL_DXGIOutput_GetModes_HeightCap, jg_height_near, nop6, sizeof(nop6));
 }
 
-// reads a number from a "Name = value" line in BO3MacFix/settings.ini, or returns fallback
+// reads a number from a "Name = value" line in BO3MacFix/settings.ini, or returns fallback (see settings_ini.c)
 #define Settings_Path Macfix_Path "/settings.ini"
 static int read_setting(const char *name, int fallback, int base) {
-    FILE *fp = fopen(Settings_Path, "r");
-    if (fp == NULL)
-        return fallback;
-    int value = fallback;
-    size_t name_len = strlen(name);
-    char line[256];
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        char *p = line + strspn(line, " \t");
-        if (strncmp(p, name, name_len) != 0)
-            continue;
-        p += name_len;
-        p += strspn(p, " \t");
-        if (*p != '=')
-            continue;
-        p++;
-        p += strspn(p, " \t\"");
-        if (base == 16 && *p == '#')
-            p++;
-        value = (int)strtol(p, NULL, base);
-    }
-    fclose(fp);
-    return value;
+    return settings_ini_read(Settings_Path, name, fallback, base);
 }
 
 static int read_int_setting(const char *name, int fallback) {
@@ -875,8 +855,9 @@ install_hook_name(CL_FirstSnapshot, void, void *arg) {
 }
 
 install_hook_name(Com_GetBuildIntField, int, int field) {
-    // if the field is this magic number ("Mac!"), return a version number
-    if (field == 0x4D616321) {
+    // if the field is this magic number ("Mac!"), return a version number. Lua's numbers are floats, so
+    // Engine.GetBuildIntField(0x4D616321) arrives here rounded to 0x4D616300.
+    if (field == 0x4D616321 || field == 0x4D616300) {
         return 0x00000102; // 0x0102 for 1.2
     }
     return orig_Com_GetBuildIntField(field);

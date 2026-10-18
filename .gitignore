@@ -18,3 +18,4 @@ tests/test_stream_stall_recovery
 tests/test_display_policy
 tests/test_sdl_displays
 tests/test_prepatch
+tests/test_settings_ini

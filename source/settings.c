@@ -2,12 +2,14 @@
 // one line of settings.ini, restarting the game, and the BO3MacFix Lua table:
 //   BO3MacFix.GetSettings() -> { { name, label, description, category, kind = "toggle"|"choice", values, labels,
 //                                  value, default, live }, ... }
-//   BO3MacFix.SetSetting(name, value) -> restart_needed
+//   BO3MacFix.SetSetting(name, value) -> restart_needed, or nil if it couldn't be saved
 //   BO3MacFix.RestartGame()
-//   BO3MacFix.RestartPending() -> true if a setting that needs a restart changed this session
+//   BO3MacFix.RestartPending() -> true while a setting saved this session differs from what the game started with
+//                                  and couldn't be applied without a restart
 // Some settings apply right away (live = true): the frame rate ones, the display ones, the controller ones,
 // RawMouseScale, AAEOnline and ExitFix, plus JobIdleFix and RenderIdleFix from the pre-patched executable. The rest
 // are read once at startup, so changing them asks for a restart.
+#include <limits.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +25,7 @@
 #include "qol.h"
 #include "rawmouse.h"
 #include "settings.h"
+#include "settings_ini.h"
 #include "t7overcharged.h"
 
 #define Settings_File "../../../BO3MacFix/settings.ini"
@@ -89,7 +92,10 @@ static const setting_t settings[] = {
 };
 #define Setting_Count (sizeof(settings) / sizeof(settings[0]))
 
-static bool restart_pending = false;
+// each setting's value in settings.ini when the game started, and whether the value saved since needs a restart
+static int startup_values[Setting_Count];
+static bool startup_known = false;
+static bool needs_restart[Setting_Count];
 
 // whether changing this setting now takes effect without a restart
 static bool live_now(const setting_t *t) {
@@ -153,79 +159,29 @@ static const setting_t *find_setting(const char *name) {
     return NULL;
 }
 
-// the value of Name in settings.ini, or fallback (the same parsing as read_setting in bo3macfix.c)
+// the value of Name in settings.ini, or fallback (read like read_setting in bo3macfix.c, see settings_ini.c)
 static int read_value(const setting_t *setting) {
-    FILE *fp = fopen(Settings_File, "r");
-    int value = setting->fallback;
-    if (fp == NULL)
-        return value;
-    size_t name_len = strlen(setting->name);
-    char line[512];
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        char *p = line + strspn(line, " \t");
-        if (strncmp(p, setting->name, name_len) != 0)
-            continue;
-        p += name_len;
-        p += strspn(p, " \t");
-        if (*p != '=')
-            continue;
-        p++;
-        p += strspn(p, " \t\"");
-        if (setting->hex && *p == '#')
-            p++;
-        value = (int)strtol(p, NULL, setting->hex ? 16 : 10);
-    }
-    fclose(fp);
-    return value;
-}
-
-// does this line set name (Name = ...)?
-static bool line_sets(const char *line, const char *name) {
-    const char *p = line + strspn(line, " \t");
-    size_t name_len = strlen(name);
-    if (strncmp(p, name, name_len) != 0)
-        return false;
-    p += name_len;
-    p += strspn(p, " \t");
-    return *p == '=';
+    return settings_ini_read(Settings_File, setting->name, setting->fallback, setting->hex ? 16 : 10);
 }
 
 bool settings_write(const char *name, const char *value) {
-    FILE *in = fopen(Settings_File, "r");
-    char temp[1024];
-    snprintf(temp, sizeof(temp), "%s.tmp%d", Settings_File, (int)getpid());
-    FILE *out = fopen(temp, "w");
-    if (out == NULL) {
-        if (in != NULL)
-            fclose(in);
-        return false;
-    }
-    bool written = false, ends_with_newline = true;
-    char line[1024];
-    while (in != NULL && fgets(line, sizeof(line), in) != NULL) {
-        size_t len = strlen(line);
-        ends_with_newline = len > 0 && line[len - 1] == '\n';
-        if (line_sets(line, name)) {
-            // replace the last line that sets it (read_setting uses the last), drop earlier duplicates
-            if (!written) {
-                fprintf(out, "%s = %s\n", name, value);
-                written = true;
-            }
-            continue;
-        }
-        fputs(line, out);
-    }
-    if (in != NULL)
-        fclose(in);
-    if (!written)
-        fprintf(out, "%s%s = %s\n", ends_with_newline ? "" : "\n", name, value);
-    bool ok = fflush(out) == 0 && fsync(fileno(out)) == 0;
-    ok = fclose(out) == 0 && ok;
-    if (!ok || rename(temp, Settings_File) != 0) {
-        unlink(temp);
-        return false;
-    }
-    return true;
+    return settings_ini_write(Settings_File, name, value);
+}
+
+// read when the first UI state gets the BO3MacFix table, before the page can change anything
+static void remember_startup_values(void) {
+    if (startup_known)
+        return;
+    for (size_t i = 0; i < Setting_Count; i++)
+        startup_values[i] = read_value(&settings[i]);
+    startup_known = true;
+}
+
+static bool restart_pending(void) {
+    for (size_t i = 0; i < Setting_Count; i++)
+        if (needs_restart[i])
+            return true;
+    return false;
 }
 
 #pragma mark - restarting
@@ -236,6 +192,11 @@ static void (*Cbuf_AddText)(int localClientNum, const char *text);
 // config.ini is saved). Going through Steam keeps its launch options and session; the launcher it runs makes or
 // reuses the pre-patched executable, and the game reloads the last mod (AAE) by itself.
 static void restart_game(void) {
+    // only once: pressing restart again before the game has quit would start it twice
+    static bool restarting = false;
+    if (restarting)
+        return;
+    restarting = true;
     char command[256];
     snprintf(command, sizeof(command), "while kill -0 %d 2>/dev/null; do sleep 0.5; done; sleep 1; open steam://rungameid/311210",
              (int)getpid());
@@ -315,16 +276,21 @@ static int lua_list(lua_State *s) {
     return 1;
 }
 
-// SetSetting(name, value as a string): saves it, returns whether the game needs a restart for it
+// SetSetting(name, value as a string): saves it, returns whether the game needs a restart for it (nil if it couldn't
+// be saved)
 static int lua_set(lua_State *s) {
     const char *name = hks_check_string(s, 1), *value_text = hks_check_string(s, 2);
     const setting_t *t = name != NULL ? find_setting(name) : NULL;
-    if (t == NULL || value_text == NULL) {
+    char *end = NULL;
+    double number = value_text != NULL ? strtod(value_text, &end) : 0;
+    // SetSetting(name) (a value of "nil") or one that isn't a number would otherwise save 0
+    if (t == NULL || value_text == NULL || end == value_text || !(number >= INT_MIN && number <= INT_MAX)) {
         hks_push_nil(s);
         return 1;
     }
-    int value = (int)strtod(value_text, NULL);
-    int before = read_value(t);
+    int value = (int)number;
+    size_t index = (size_t)(t - settings);
+    remember_startup_values();
     // a display picked by name (Game display 100 and up) is saved as 3, "the chosen display", whose UUID
     // display_follow keeps in displays.ini
     int saved = display_follow_owns(t->name) ? display_follow_persisted_value(t->name, value) : value;
@@ -339,10 +305,10 @@ static int lua_set(lua_State *s) {
         return 1;
     }
     bool applied = live_now(t) && apply_live(t, value);
-    bool restart = !applied && saved != before;
+    // compared with the value the game started with, so changing a setting back needs no restart
+    bool restart = !applied && saved != startup_values[index];
+    needs_restart[index] = restart;
     printf("BO3MacFix: set %s = %s%s\n", t->name, text, applied ? "" : restart ? " (takes effect after a restart)" : "");
-    if (restart)
-        restart_pending = true;
     hks_push_boolean(s, restart);
     return 1;
 }
@@ -352,8 +318,12 @@ static int lua_restart(lua_State *s) {
     return 0;
 }
 
+void settings_restart_game(void) {
+    restart_game();
+}
+
 static int lua_pending(lua_State *s) {
-    hks_push_boolean(s, restart_pending);
+    hks_push_boolean(s, restart_pending());
     return 1;
 }
 
@@ -391,6 +361,7 @@ static const char settings_lua[] =
     "function BO3MacFix.RestartPending() return pending() end\n";
 
 void settings_lua_install(lua_State *s) {
+    remember_startup_values();
     // the stack can be reallocated while our Lua runs, so remember the top as an index
     ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
     if (hks_load_source(s, settings_lua, sizeof(settings_lua) - 1, "=BO3MacFix settings table")) {

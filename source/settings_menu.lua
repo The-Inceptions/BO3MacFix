@@ -65,7 +65,8 @@ local function build_page(controller)
     local notice = new_text(self, 64, 640, 1150, 20, 1, 0.45, 0.3)
     new_text(self, 64, 676, 1150, 18, 0.6, 0.6, 0.6):setText(
         "Up/Down or mouse choose   Left/Right, Cross/Enter or click change   Triangle/R restart the game   Circle/Esc back")
-    local focus, first = 1, 1
+    -- save_failed: the label of a setting settings.ini couldn't take, shown until a change is saved
+    local focus, first, save_failed = 1, 1, nil
 
     local function refresh()
         if focus < first then first = focus end
@@ -91,8 +92,12 @@ local function build_page(controller)
         end
         local setting = settings[focus]
         description:setText(setting and setting.description or "")
-        if BO3MacFix.RestartPending() then
+        if save_failed ~= nil then
+            notice:setText("Couldn't save " .. save_failed .. " to BO3MacFix/settings.ini.")
+        elseif BO3MacFix.RestartPending() then
             notice:setText("Restart required for your changes to apply.  Press Triangle or R to restart now.")
+        else
+            notice:setText("")
         end
     end
 
@@ -111,9 +116,15 @@ local function build_page(controller)
             new_value = setting.values[at]
         end
         if new_value ~= setting.value then
-            BO3MacFix.SetSetting(setting.name, new_value)
-            setting.value = new_value
-            log("settings menu: " .. setting.name .. " = " .. tostring(new_value))
+            -- nil when settings.ini couldn't be written: then the page keeps showing the value in effect
+            if BO3MacFix.SetSetting(setting.name, new_value) == nil then
+                save_failed = setting.label
+                log("settings menu: couldn't save " .. setting.name .. " = " .. tostring(new_value))
+            else
+                save_failed = nil
+                setting.value = new_value
+                log("settings menu: " .. setting.name .. " = " .. tostring(new_value))
+            end
         end
         refresh()
     end
