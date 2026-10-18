@@ -1,4 +1,7 @@
 #include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
@@ -46,6 +49,32 @@ static BOOL codesign(NSArray<NSString *> *arguments) {
     return task.terminationStatus == 0;
 }
 
+// removes what a launcher that was stopped while making the copy left behind (CoDBlkOps3_Exe.bo3macfix.tmp<pid>, and
+// codesign's .cstemp of it), 37 MB each. Another launcher that's making one right now keeps its own.
+static void remove_stale_temp_files(NSURL *gameDir, FILE *log) {
+    NSString *prefix = @"CoDBlkOps3_Exe.bo3macfix.tmp";
+    for (NSString *name in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:gameDir.path error:nil]) {
+        if (![name hasPrefix:prefix])
+            continue;
+        pid_t pid = (pid_t)strtol([name substringFromIndex:prefix.length].UTF8String, NULL, 10);
+        if (pid <= 0 || pid == getpid() || (kill(pid, 0) != 0 && errno == ESRCH)) {
+            fprintf(log, "removing %s, left over from an earlier launch\n", name.UTF8String);
+            unlink([gameDir URLByAppendingPathComponent:name].path.fileSystemRepresentation);
+        }
+    }
+}
+
+// makes sure the file is on disk before it's renamed into place, so a crash or power cut can't leave a copy that's
+// up to date by its header but not all there
+static BOOL flush_to_disk(NSString *path) {
+    int fd = open(path.fileSystemRepresentation, O_RDONLY);
+    if (fd < 0)
+        return NO;
+    BOOL flushed = fcntl(fd, F_FULLFSYNC) == 0 || fsync(fd) == 0;
+    close(fd);
+    return flushed;
+}
+
 // The pre-patched executable is a copy of the game's with BO3MacFix's code changes made in the file, so they don't
 // have to be made in memory, which makes Rosetta run the whole game through its slower JIT. Returns the copy,
 // making it first when it's missing or out of date (after a game or BO3MacFix update), or nil to start the original.
@@ -54,6 +83,7 @@ static NSURL *prepatched_executable(NSURL *gameDir, NSURL *dylibUrl, FILE *log) 
     NSString *copy = [gameDir URLByAppendingPathComponent:@"CoDBlkOps3_Exe.bo3macfix"].path;
     NSString *temp = [copy stringByAppendingFormat:@".tmp%d", (int)getpid()];
     char message[512];
+    remove_stale_temp_files(gameDir, log);
 
     // BO3MacFix makes the copy, it knows what to change
     void *macfix = dlopen(dylibUrl.path.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
@@ -79,6 +109,11 @@ static NSURL *prepatched_executable(NSURL *gameDir, NSURL *dylibUrl, FILE *log) 
     if (!codesign(@[ @"--force", @"--sign", @"-", @"--identifier", @"CoDBlkOps3_Exe", temp ]) ||
         !codesign(@[ @"--verify", temp ])) {
         fprintf(log, "couldn't sign the pre-patched executable\n");
+        unlink(temp.fileSystemRepresentation);
+        return nil;
+    }
+    if (!flush_to_disk(temp)) {
+        fprintf(log, "couldn't write the pre-patched executable to disk\n");
         unlink(temp.fileSystemRepresentation);
         return nil;
     }
@@ -147,15 +182,36 @@ int main(int argc, char **argv) {
             gameProc.executableURL = copyUrl;
     }
     fprintf(log, "starting %s\n", gameProc.executableURL.lastPathComponent.UTF8String);
-    fclose(log);
+    fflush(log);
 
     //NSLog(@"Launching game...\n");
     //NSLog(@"  Executable: %@\n", gameProc.executableURL);
     //NSLog(@"  Working Directory: %@\n", gameProc.currentDirectoryURL);
     //NSLog(@"  DYLD_INSERT_LIBRARIES: %@\n", newEnvironment[@"DYLD_INSERT_LIBRARIES"]);
     //NSLog(@"  WINEPREFIX: %@\n", newEnvironment[@"WINEPREFIX"]);
-    // launch the game executable
-    [gameProc launch];
+    // launch the game executable, or the original if the pre-patched copy won't start (it lost its execute permission,
+    // say). An NSTask only runs once, so that takes a new one.
+    NSError *error = nil;
+    BOOL launched = [gameProc launchAndReturnError:&error];
+    if (!launched && ![gameProc.executableURL.lastPathComponent isEqualToString:@"CoDBlkOps3_Exe"]) {
+        fprintf(log, "couldn't start %s (%s), starting CoDBlkOps3_Exe\n", gameProc.executableURL.lastPathComponent.UTF8String,
+                error.localizedDescription.UTF8String);
+        NSTask *original = [[NSTask alloc] init];
+        original.currentDirectoryURL = gameProc.currentDirectoryURL;
+        original.executableURL = [gameProc.currentDirectoryURL URLByAppendingPathComponent:@"CoDBlkOps3_Exe"];
+        original.environment = gameProc.environment;
+        original.arguments = gameProc.arguments;
+        gameProc = original;
+        error = nil;
+        launched = [gameProc launchAndReturnError:&error];
+    }
+    if (!launched) {
+        fprintf(log, "couldn't start %s: %s\n", gameProc.executableURL.lastPathComponent.UTF8String,
+                error.localizedDescription.UTF8String);
+        fclose(log);
+        return 1;
+    }
+    fclose(log);
     [gameProc waitUntilExit];
     return 0;
 }
