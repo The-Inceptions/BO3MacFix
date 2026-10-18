@@ -148,5 +148,16 @@ pause_request = false
 tick()
 check(pauses == 4, "an Engine function that fails counts as unknown")
 
+-- numbers for booleans: 0 is false
+Engine.CanPauseGame = function() return 1 end
+Engine.LastInput_Gamepad = function() return 0 end
+pause_request = false
+tick()
+check(pauses == 4, "a 0 from LastInput_Gamepad means the keyboard or mouse")
+Engine.LastInput_Gamepad = function() return 1 end
+pause_request = false
+tick()
+check(pauses == 5, "and a 1 a controller")
+
 if failures == 0 then print("test_notices.lua: all passed") end
 os.exit(failures == 0 and 0 or 1)

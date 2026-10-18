@@ -67,15 +67,17 @@ end
 -- the pause menu (StartMenu_Main) is open, from NoticesMenuCreated
 local pause_menu_open = false
 
-local function call(fn, ...)
+-- an Engine function's answer as true or false (some return 0 or 1), nil if there's no such function or it failed
+local function ask(fn, ...)
     if type(fn) ~= "function" then return nil end
     local ok, result = pcall(fn, ...)
-    if ok then return result end
-    return nil
+    if not ok or result == nil then return nil end
+    if type(result) == "number" then return result ~= 0 end
+    return result and true or false
 end
 
 local function try_pause(forced)
-    local in_game, can_pause, gamepad = call(Engine.IsInGame), call(Engine.CanPauseGame), call(Engine.LastInput_Gamepad, 0)
+    local in_game, can_pause, gamepad = ask(Engine.IsInGame), ask(Engine.CanPauseGame), ask(Engine.LastInput_Gamepad, 0)
     local why = nil
     if in_game ~= true then
         why = "not in a match"
