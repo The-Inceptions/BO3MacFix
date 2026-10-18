@@ -116,12 +116,17 @@ static int battery_percent(GCController *controller, bool *charging) {
     return -1;
 }
 
-// what's been warned about is kept on the controller (or the test's stand-in for one)
-static void check_battery(id owner, NSString *name, int percent, bool charging) {
+// whether to warn about this battery level now; what's been warned about is kept on the controller (or the test's
+// stand-in for one)
+static bool battery_low(id owner, int percent, bool charging) {
     int warned = [objc_getAssociatedObject(owner, Battery_Warned_Key) intValue];
     int warn = battery_warning(&warned, percent, charging);
     objc_setAssociatedObject(owner, Battery_Warned_Key, @(warned), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (warn != 0)
+    return warn != 0;
+}
+
+static void check_battery(id owner, NSString *name, int percent, bool charging) {
+    if (battery_low(owner, percent, charging))
         notices_post("%s battery low: %d%%", name.UTF8String, percent);
 }
 
@@ -142,11 +147,12 @@ static void controller_connected(NSString *name, int percent, bool charging, id 
         printf("BO3MacFix: %s was there at startup, no notice\n", name.UTF8String);
         return;
     }
-    if (percent >= 0)
-        notices_post("%s connected, battery %d%%%s", name.UTF8String, percent, charging ? " and charging" : "");
-    else
+    if (percent < 0)
         notices_post("%s connected", name.UTF8String);
-    check_battery(battery_owner, name, percent, charging);
+    else if (battery_low(battery_owner, percent, charging))
+        notices_post("%s connected, battery low: %d%%", name.UTF8String, percent);
+    else
+        notices_post("%s connected, battery %d%%%s", name.UTF8String, percent, charging ? " and charging" : "");
 }
 
 static void controller_disconnected(NSString *name, bool forced) {
