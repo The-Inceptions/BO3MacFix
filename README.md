@@ -43,10 +43,12 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `LightbarColor` | -1 | The lightbar colour as RRGGBB, with `ControllerBridge`. -1 leaves it alone. |
 | `GyroAim` | 0 | Experimental: aims with the DualSense's gyro on top of the right stick, 1 always, 2 while L2 is held. With `ControllerBridge`. `GyroSensitivity` (percent) and `GyroInvert` (1 vertical, 2 horizontal, 3 both) tune it. |
 | `AdaptiveTriggers` | 0 | Experimental: gives the DualSense's R2 a weapon-style break and L2 light resistance. With `ControllerBridge`. |
+| `PauseOnDisconnect` | 0 | Opens the pause menu when the controller you're playing with disconnects mid-match (a Bluetooth dropout, a flat battery), in games that can pause: solo and offline. With `ControllerBridge`. |
 | `RawMouse` | 0 | Experimental: aims with raw mouse counts instead of macOS's accelerated movement. `RawMouseScale` (percent) sets the speed. |
 | `AAEOnline` | 0 | Lets All-around Enhancement fetch its version notes and weather (HTTPS GET only, to raw.githubusercontent.com and wttr.in). |
 | `ExitFix` | 1 | Quits without the crash (and crash report) Aspyr's shutdown causes every time. |
 | `AudioFollowsDefault` | 1 | Moves the game's audio to the new default output device, e.g. when AirPods connect or disconnect. |
+| `Notices` | 1 | Shows a short notice at the top of the screen when a controller connects or disconnects (with its battery level), when its battery gets low (20, 10 and 5 %), and when the game moves to another display. The controller ones need `ControllerBridge`. |
 | `FrameStats` | 0 | Logs the frame rate, 1% low and worst frame time every N seconds. |
 | `BatteryFPS` | 0 | Limits the frame rate to N (30 to 240) only while the Mac runs on battery, to save power. |
 | `MetalHUD` | 0 | Shows macOS's Metal performance HUD (FPS and GPU time). |

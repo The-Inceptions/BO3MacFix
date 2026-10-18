@@ -1,0 +1,433 @@
+// On-screen notices in the game, see notices.h. What happens outside the game goes into a queue as a line of text:
+// - macOS's notifications for controllers connecting and disconnecting, the same ones gc_bridge.m acts on (so only
+//   with ControllerBridge, which is when the game uses the GameController framework anyway);
+// - a look at those controllers' batteries every minute, warning at 20, 10 and 5 percent (notice_queue.c);
+// - the game window moving to another display, which display_follow.m does, or the player dragging it.
+// notices.lua, in the game's UI, takes them from the queue four times a second and shows each for a few seconds at
+// the top of the screen.
+//
+// PauseOnDisconnect: when a controller disconnects, notices.lua is asked to pause. It does if the game is in a match
+// that can pause (Engine.CanPauseGame: solo and offline games), the pause menu isn't open already and the last input
+// came from a controller. To pause, this posts an Escape key press to the game's own event queue, so the engine opens
+// its pause menu and pauses exactly as when the player presses Esc.
+//
+// Test notifications, with BO3MACFIX_TESTHOOKS=1 (notifyutil -s NAME VALUE sets the value, notifyutil -p NAME posts):
+//   com.bo3macfix.test.notice      shows "Test notice N"
+//   com.bo3macfix.test.controller  1: a made-up DualSense connects. 0: it disconnects, asking to pause as if the last
+//                                  input came from it
+//   com.bo3macfix.test.battery     the made-up DualSense's battery is now VALUE percent (VALUE + 1000: and charging)
+//   com.bo3macfix.test.escape      posts Escape, what PauseOnDisconnect does
+//   com.bo3macfix.test.cmdq        does what the app menu's Cmd+Q item does, saying first what that is
+#import <AppKit/AppKit.h>
+#import <GameController/GameController.h>
+#include <notify.h>
+#include <objc/runtime.h>
+#include <os/lock.h>
+#include <stdarg.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include "gc_bridge.h"
+#include "havok.h"
+#include "notice_queue.h"
+#include "notices.h"
+#include "notices_lua.h"
+
+#define Max_Notice_Age 20.0    // seconds a notice waits for the UI (while a map loads, say) before it's dropped
+#define Max_Pause_Age 5.0      // seconds a pause request waits
+#define Startup_Quiet 15.0     // controllers macOS finds while the game starts aren't news
+#define Battery_Interval 60    // seconds between battery checks
+#define Key_Escape 53         // kVK_Escape
+
+static atomic_bool notices_on = false, pause_on = false;
+static bool debug_menus = false;
+static double started;
+static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+static notice_queue_t queue;       // under lock
+static double pause_requested;     // under lock: when a controller went away, 0 for no request
+static bool pause_forced;          // under lock: pause whatever the last input was (the test hook)
+
+static double now(void) {
+    return (double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
+}
+
+void notices_post(const char *format, ...) {
+    char text[Notice_Text_Max];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(text, sizeof(text), format, args);
+    va_end(args);
+    bool on = atomic_load(&notices_on);
+    printf("BO3MacFix: notice: %s%s\n", text, on ? "" : " (not shown, Notices is off)");
+    if (!on)
+        return;
+    os_unfair_lock_lock(&lock);
+    notice_queue_push(&queue, text, now());
+    os_unfair_lock_unlock(&lock);
+}
+
+static void request_pause(bool forced) {
+    if (!atomic_load(&pause_on))
+        return;
+    os_unfair_lock_lock(&lock);
+    pause_requested = now();
+    pause_forced = forced;
+    os_unfair_lock_unlock(&lock);
+}
+
+void notices_set_enabled(int on) {
+    atomic_store(&notices_on, on != 0);
+    if (on == 0) {
+        os_unfair_lock_lock(&lock);
+        queue.count = 0;
+        os_unfair_lock_unlock(&lock);
+    }
+}
+
+void notices_set_pause_on_disconnect(int on) {
+    atomic_store(&pause_on, on != 0);
+}
+
+#pragma mark - controllers
+
+static const void *Battery_Warned_Key = &Battery_Warned_Key;
+
+static NSString *controller_name(GCController *controller) {
+    NSString *name = nil;
+    if (@available(macOS 10.15, *))
+        name = controller.productCategory;
+    if (name.length == 0)
+        name = controller.vendorName;
+    return name.length > 0 ? name : @"Controller";
+}
+
+// the battery level in percent, -1 if macOS doesn't know it. A DualSense over Bluetooth gives its level with an
+// unknown state, so charging is only known over USB.
+static int battery_percent(GCController *controller, bool *charging) {
+    *charging = false;
+    if (@available(macOS 11.0, *)) {
+        GCDeviceBattery *battery = controller.battery;
+        if (battery == nil || battery.batteryLevel <= 0.0f)
+            return -1;
+        *charging = battery.batteryState == GCDeviceBatteryStateCharging || battery.batteryState == GCDeviceBatteryStateFull;
+        return (int)(battery.batteryLevel * 100.0f + 0.5f);
+    }
+    return -1;
+}
+
+// what's been warned about is kept on the controller (or the test's stand-in for one)
+static void check_battery(id owner, NSString *name, int percent, bool charging) {
+    int warned = [objc_getAssociatedObject(owner, Battery_Warned_Key) intValue];
+    int warn = battery_warning(&warned, percent, charging);
+    objc_setAssociatedObject(owner, Battery_Warned_Key, @(warned), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (warn != 0)
+        notices_post("%s battery low: %d%%", name.UTF8String, percent);
+}
+
+static void check_batteries(void) {
+    if (!atomic_load(&notices_on))
+        return;
+    for (GCController *controller in GCController.controllers) {
+        if (controller.extendedGamepad == nil)
+            continue;
+        bool charging;
+        int percent = battery_percent(controller, &charging);
+        check_battery(controller, controller_name(controller), percent, charging);
+    }
+}
+
+static void controller_connected(NSString *name, int percent, bool charging, id battery_owner) {
+    if (now() - started < Startup_Quiet) {
+        printf("BO3MacFix: %s was there at startup, no notice\n", name.UTF8String);
+        return;
+    }
+    if (percent >= 0)
+        notices_post("%s connected, battery %d%%%s", name.UTF8String, percent, charging ? " and charging" : "");
+    else
+        notices_post("%s connected", name.UTF8String);
+    check_battery(battery_owner, name, percent, charging);
+}
+
+static void controller_disconnected(NSString *name, bool forced) {
+    notices_post("%s disconnected", name.UTF8String);
+    request_pause(forced);
+}
+
+#pragma mark - displays
+
+static CGDirectDisplayID shown_display; // main thread: the display the game was last seen on, 0 until it's known
+static unsigned screen_changes;         // main thread
+
+static CGDirectDisplayID display_of(NSScreen *screen) {
+    return [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
+}
+
+static bool is_game_window(id object) {
+    Class sdl_window = NSClassFromString(@"SDLWindow");
+    return sdl_window != nil && [object isKindOfClass:sdl_window];
+}
+
+// Moving to another display takes a few steps (leaving fullscreen, moving, fullscreen again, maybe a resolution
+// change), so say where the window is once it has stayed put for a moment
+static void game_window_moved(NSWindow *window) {
+    unsigned change = ++screen_changes;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSScreen *screen = window.screen;
+        if (change != screen_changes || screen == nil || display_of(screen) == shown_display)
+            return;
+        bool first = shown_display == 0;
+        shown_display = display_of(screen);
+        if (first)
+            return;
+        NSString *name = nil;
+        if (@available(macOS 10.15, *))
+            name = screen.localizedName;
+        int hz = 0;
+        if (@available(macOS 12.0, *))
+            hz = (int)screen.maximumFramesPerSecond;
+        if (hz > 0)
+            notices_post("Game moved to %s, %d Hz", name.UTF8String ?: "another display", hz);
+        else
+            notices_post("Game moved to %s", name.UTF8String ?: "another display");
+    });
+}
+
+#pragma mark - pausing
+
+static void post_escape(bool down) {
+    NSWindow *window = NSApp.keyWindow ?: NSApp.mainWindow;
+    NSEvent *event = [NSEvent keyEventWithType:down ? NSEventTypeKeyDown : NSEventTypeKeyUp location:NSZeroPoint
+                                 modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+                                  windowNumber:window.windowNumber context:nil characters:@"\x1b"
+                   charactersIgnoringModifiers:@"\x1b" isARepeat:NO keyCode:Key_Escape];
+    [NSApp postEvent:event atStart:NO];
+}
+
+// SDL reads the key from the event queue on the main thread like a real one; the engine acts on the key going down
+static void press_escape(const char *why) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        printf("BO3MacFix: %s, pressing Escape for the game's pause menu\n", why);
+        post_escape(true);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            post_escape(false);
+        });
+    });
+}
+
+#pragma mark - Lua
+
+// TakeNotice() -> the next notice's text, or nil
+static int lua_take_notice(lua_State *s) {
+    char text[Notice_Text_Max];
+    os_unfair_lock_lock(&lock);
+    bool taken = notice_queue_pop(&queue, now(), Max_Notice_Age, text, sizeof(text));
+    os_unfair_lock_unlock(&lock);
+    if (taken)
+        hks_push_string(s, text);
+    else
+        hks_push_nil(s);
+    return 1;
+}
+
+// TakePauseRequest() -> nil, or whether to pause whatever the last input was
+static int lua_take_pause(lua_State *s) {
+    os_unfair_lock_lock(&lock);
+    double requested = pause_requested;
+    bool forced = pause_forced;
+    pause_requested = 0;
+    pause_forced = false;
+    os_unfair_lock_unlock(&lock);
+    if (requested > 0 && now() - requested <= Max_Pause_Age)
+        hks_push_boolean(s, forced);
+    else
+        hks_push_nil(s);
+    return 1;
+}
+
+static int lua_pause_game(lua_State *s) {
+    press_escape("a controller disconnected mid-match (PauseOnDisconnect)");
+    return 0;
+}
+
+static int lua_log(lua_State *s) {
+    const char *text = hks_check_string(s, 1);
+    printf("BO3MacFix: %s\n", text != NULL ? text : "");
+    return 0;
+}
+
+// runs notices.lua, which gets whether to log every menu made (BO3MACFIX_NOTICESDEBUG=1)
+static int lua_load_ui(lua_State *s) {
+    ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
+    if (hks_load_source(s, (const char *)notices_lua, notices_lua_len, "=BO3MacFix notices")) {
+        hks_push_boolean(s, debug_menus);
+        hks_pcall(s, 1, 0);
+    }
+    HKS_TOP(s) = HKS_BASE(s) + top;
+    return 0;
+}
+
+// Runs in each UI Lua state right after settings.c's table: adds our functions to the BO3MacFix table, and has the
+// first menu made in the state load notices.lua, in a coroutine like settings_menu.c does with its page, and pass it
+// every menu made after that (for the pause menu). It does nothing in a state that already has them.
+static const char start_lua[] =
+    "local log, take, take_pause, pause_game, load_ui = ...\n"
+    "local bo3macfix = rawget(_G, 'BO3MacFix')\n"
+    "if bo3macfix == nil or rawget(bo3macfix, 'TakeNotice') ~= nil then return end\n"
+    "if CoD == nil or CoD.Menu == nil or CoD.Menu.NewForUIEditor == nil then return end\n"
+    "bo3macfix.TakeNotice, bo3macfix.TakePauseRequest, bo3macfix.PauseGame = take, take_pause, pause_game\n"
+    "bo3macfix.NoticeLog = log\n"
+    "local new_menu, loaded = CoD.Menu.NewForUIEditor, false\n"
+    "CoD.Menu.NewForUIEditor = function(name, ...)\n"
+    "  if not loaded then\n"
+    "    loaded = true\n"
+    "    local ok, err\n"
+    "    if coroutine ~= nil then\n"
+    "      ok, err = coroutine.resume(coroutine.create(function() load_ui() end))\n"
+    "    else\n"
+    "      ok, err = pcall(load_ui)\n"
+    "    end\n"
+    "    if not ok then log('notices error: ' .. tostring(err)) end\n"
+    "  end\n"
+    "  local menu = new_menu(name, ...)\n"
+    "  local created = bo3macfix.NoticesMenuCreated\n"
+    "  if created ~= nil then\n"
+    "    local ok, err = pcall(created, name, menu)\n"
+    "    if not ok then log('notices error: ' .. tostring(err)) end\n"
+    "  end\n"
+    "  return menu\n"
+    "end\n";
+
+void notices_lua_install(lua_State *s) {
+    // the stack can be reallocated while our Lua runs, so remember the top as an index
+    ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
+    if (hks_load_source(s, start_lua, sizeof(start_lua) - 1, "=BO3MacFix notices start")) {
+        hks_push_cfunction(s, lua_log, "NoticesLog");
+        hks_push_cfunction(s, lua_take_notice, "NoticesTake");
+        hks_push_cfunction(s, lua_take_pause, "NoticesTakePause");
+        hks_push_cfunction(s, lua_pause_game, "NoticesPause");
+        hks_push_cfunction(s, lua_load_ui, "NoticesLoadUI");
+        hks_pcall(s, 5, 0);
+    }
+    HKS_TOP(s) = HKS_BASE(s) + top;
+}
+
+#pragma mark - setup
+
+static NSMenuItem *find_key_equivalent(NSMenu *menu, NSString *key) {
+    for (NSMenuItem *item in menu.itemArray) {
+        if ([item.keyEquivalent isEqualToString:key] &&
+            (item.keyEquivalentModifierMask & (NSEventModifierFlagCommand | NSEventModifierFlagShift |
+                                               NSEventModifierFlagOption | NSEventModifierFlagControl)) == NSEventModifierFlagCommand)
+            return item;
+        NSMenuItem *found = item.hasSubmenu ? find_key_equivalent(item.submenu, key) : nil;
+        if (found != nil)
+            return found;
+    }
+    return nil;
+}
+
+static void on_test(const char *name, void (^handler)(uint64_t value)) {
+    int token;
+    uint32_t status = notify_register_dispatch(name, &token, dispatch_get_main_queue(), ^(int t) {
+        uint64_t value = 0;
+        notify_get_state(t, &value);
+        handler(value);
+    });
+    if (status != NOTIFY_STATUS_OK)
+        printf("notices tests: couldn't listen for %s\n", name);
+}
+
+static void setup_tests(void) {
+    static NSObject *test_pad;
+    test_pad = [NSObject new];
+    on_test("com.bo3macfix.test.notice", ^(uint64_t value) {
+        static int count = 0;
+        notices_post("Test notice %d", ++count);
+    });
+    on_test("com.bo3macfix.test.controller", ^(uint64_t value) {
+        if (value != 0)
+            controller_connected(@"DualSense", 80, false, test_pad);
+        else
+            controller_disconnected(@"DualSense", true);
+    });
+    on_test("com.bo3macfix.test.battery", ^(uint64_t value) {
+        check_battery(test_pad, @"DualSense", (int)(value % 1000), value >= 1000);
+    });
+    on_test("com.bo3macfix.test.escape", ^(uint64_t value) {
+        press_escape("test");
+    });
+    on_test("com.bo3macfix.test.cmdq", ^(uint64_t value) {
+        NSMenuItem *quit = find_key_equivalent(NSApp.mainMenu, @"q");
+        printf("notices tests: Cmd+Q is \"%s\", action %s, target %s; NSApp is %s, its delegate %s\n",
+               quit.title.UTF8String ?: "(no menu item)", quit.action != NULL ? sel_getName(quit.action) : "none",
+               quit.target != nil ? object_getClassName(quit.target) : "the first responder", object_getClassName(NSApp),
+               NSApp.delegate != nil ? object_getClassName(NSApp.delegate) : "none");
+        if (quit != nil && quit.action != NULL)
+            [NSApp sendAction:quit.action to:quit.target from:quit];
+        else
+            [NSApp terminate:nil];
+    });
+    printf("notices tests: test hooks on (com.bo3macfix.test.notice, controller, battery, escape, cmdq)\n");
+}
+
+static void setup(bool tests) {
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    NSOperationQueue *main_queue = NSOperationQueue.mainQueue;
+    [center addObserverForName:NSWindowDidChangeScreenNotification object:nil queue:main_queue usingBlock:^(NSNotification *note) {
+        if (is_game_window(note.object))
+            game_window_moved(note.object);
+    }];
+    [center addObserverForName:NSWindowDidBecomeKeyNotification object:nil queue:main_queue usingBlock:^(NSNotification *note) {
+        NSWindow *window = note.object;
+        if (shown_display == 0 && is_game_window(window) && window.screen != nil)
+            shown_display = display_of(window.screen);
+    }];
+
+    // the GameController framework only when the bridge uses it, so SDL keeps controllers to itself otherwise
+    if (gc_bridge_enabled()) {
+        [center addObserverForName:GCControllerDidConnectNotification object:nil queue:main_queue usingBlock:^(NSNotification *note) {
+            GCController *controller = note.object;
+            if (controller.extendedGamepad == nil)
+                return;
+            bool charging;
+            int percent = battery_percent(controller, &charging);
+            controller_connected(controller_name(controller), percent, charging, controller);
+        }];
+        [center addObserverForName:GCControllerDidDisconnectNotification object:nil queue:main_queue usingBlock:^(NSNotification *note) {
+            GCController *controller = note.object;
+            if (controller.extendedGamepad != nil)
+                controller_disconnected(controller_name(controller), false);
+        }];
+        static dispatch_source_t battery_timer;
+        battery_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+        dispatch_source_set_timer(battery_timer, dispatch_time(DISPATCH_TIME_NOW, Battery_Interval * NSEC_PER_SEC),
+                                  Battery_Interval * NSEC_PER_SEC, 10 * NSEC_PER_SEC);
+        dispatch_source_set_event_handler(battery_timer, ^{
+            @autoreleasepool {
+                check_batteries();
+            }
+        });
+        dispatch_resume(battery_timer);
+    }
+    if (tests)
+        setup_tests();
+}
+
+void notices_init(int notices, int pause_on_disconnect) {
+    started = now();
+    atomic_store(&notices_on, notices != 0);
+    atomic_store(&pause_on, pause_on_disconnect != 0);
+    const char *env = getenv("BO3MACFIX_NOTICESDEBUG");
+    debug_menus = env != NULL && atoi(env) != 0;
+    env = getenv("BO3MACFIX_TESTHOOKS");
+    bool tests = env != NULL && atoi(env) != 0;
+    // after gc_bridge_init's own setup, on the main thread once the game runs its event loop
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            setup(tests);
+        }
+    });
+    printf("BO3MacFix: on-screen notices %s, pausing when the controller disconnects %s%s\n", notices ? "on" : "off",
+           pause_on_disconnect ? "on" : "off", gc_bridge_enabled() ? "" : " (controller notices need ControllerBridge)");
+}

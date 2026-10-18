@@ -1,7 +1,7 @@
 # Modified by Mickael DE LA ROQUE on 2026-09-08 to build and test the
 # unofficial custom-map stream-stall workaround.
 TARGET = BO3MacFix.dylib
-TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays
+TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_notice_queue
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -47,6 +47,9 @@ FRAMEWORKS += -framework Metal -framework QuartzCore -framework AppKit -weak_fra
 # tests' hooks (display_testhooks.m)
 SOURCES += source/display_follow.m source/display_policy.c source/sdl_displays.c source/sdl_displays_cocoa.m
 SOURCES += source/engine_display.c source/display_testhooks.m
+# on-screen notices in the game (notices.m with the queue in notice_queue.c, drawn by notices.lua) and pausing when the
+# controller disconnects
+SOURCES += source/notices.m source/notice_queue.c
 # ColorSync for display UUIDs, CoreVideo for the refresh rate of SDL's display modes
 FRAMEWORKS += -framework ColorSync -framework CoreVideo
 
@@ -68,7 +71,11 @@ tests/test_sdl_displays: tests/test_sdl_displays.c source/sdl_displays.c source/
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -mmacosx-version-min=$(OSXVER) -framework CoreFoundation \
 		-framework CoreGraphics -framework CoreVideo -o $@ tests/test_sdl_displays.c
 
-$(TARGET): $(SOURCES) source/t7overcharged_lua.h source/settings_menu_lua.h
+# the notices' queue and low battery levels (notice_queue.c) are plain C too
+tests/test_notice_queue: tests/test_notice_queue.c source/notice_queue.c source/notice_queue.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_notice_queue.c source/notice_queue.c
+
+$(TARGET): $(SOURCES) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(DEFINES) $(LDFLAGS) -o $@ $(SOURCES)
 
 # the Lua half of our T7Overcharged support, embedded as a byte array
@@ -79,7 +86,11 @@ source/t7overcharged_lua.h: source/t7overcharged.lua
 source/settings_menu_lua.h: source/settings_menu.lua
 	cd source && xxd -i settings_menu.lua > settings_menu_lua.h
 
+# the notices' Lua (notices.m), embedded as a byte array
+source/notices_lua.h: source/notices.lua
+	cd source && xxd -i notices.lua > notices_lua.h
+
 clean:
-	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h
+	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h
 
 .PHONY: all clean test
