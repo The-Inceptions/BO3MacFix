@@ -434,11 +434,27 @@ static bool apply_request(const DisplayDecision *d) {
     return true;
 }
 
+// Alt-tabbed out of fullscreen the engine is windowed (r_fullscreen 0, with the restore flag set) until it's active
+// again, when the restore sets r_fullscreen 1 (latched, so it still reads 0) and restarts at r_mode. A display change
+// applied meanwhile is applied as to a window: no new resolution, no fullscreen on the new display, and the old
+// display's resolution comes back there. So it waits until the engine is fullscreen again, or windowed with nothing
+// pending (the restore is off).
+static bool wait_for_fullscreen(void) {
+    return Dvar_GetInt(dvars.fullscreen) == 0 && (*(volatile bool *)(game_base_address + ADDR_R_RestoreFullscreen) ||
+                                                  *(volatile bool *)(game_base_address + ADDR_R_VidRestartPending));
+}
+
 // Once a frame on the engine's Main thread: applies pending video changes (the options' vid_restart, alt-tab)
 install_hook_name(R_CheckVidRestart, void, void) {
     DisplayDecision decision;
     int width, height;
-    if (take_request(&decision)) {
+    static bool told_waiting;
+    bool pending = atomic_load_explicit(&request_generation, memory_order_acquire) != request_taken;
+    bool waiting = pending && find_dvars() && wait_for_fullscreen();
+    if (waiting && !told_waiting)
+        printf("engine: alt-tabbed out of fullscreen, the display change waits until the game is fullscreen again\n");
+    told_waiting = waiting;
+    if (!waiting && take_request(&decision)) {
         bool applied = apply_request(&decision);
         orig_R_CheckVidRestart();
         if (applied && current_mode(&width, &height))
