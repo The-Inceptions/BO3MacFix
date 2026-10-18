@@ -318,6 +318,10 @@ static int lua_restart(lua_State *s) {
     return 0;
 }
 
+void settings_restart_game(void) {
+    restart_game();
+}
+
 static int lua_pending(lua_State *s) {
     hks_push_boolean(s, restart_pending());
     return 1;

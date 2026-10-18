@@ -5,6 +5,7 @@
 //   com.bo3macfix.test.activate      brings the game to the front again, after the test switched to another app
 //   com.bo3macfix.test.quit          quits through the game's own quit path, which saves config.ini
 //   com.bo3macfix.test.key           presses the key with the state's macOS virtual key code (kVK_*)
+//   com.bo3macfix.test.restart       restarts the game through Steam, as the settings page's restart does
 // They arrive on the main queue, which Aspyr's main thread runs while it pumps events.
 #import <AppKit/AppKit.h>
 #include <notify.h>
@@ -12,6 +13,7 @@
 #include "display_follow.h"
 #include "display_testhooks.h"
 #include "offsets.h"
+#include "settings.h"
 
 static void (*Cbuf_AddText)(int localClientNum, const char *text);
 
@@ -57,6 +59,10 @@ void display_testhooks_init(uint64_t game_base_address) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
             [NSApp postEvent:key_event(NSEventTypeKeyUp) atStart:NO];
         });
+    });
+    on_notification("com.bo3macfix.test.restart", ^(int token) {
+        printf("display tests: restarting\n");
+        settings_restart_game();
     });
     printf("display tests: test hooks on (com.bo3macfix.test.*)\n");
 }
