@@ -256,6 +256,12 @@ static int lua_pause_game(lua_State *s) {
     return 0;
 }
 
+// NoticeClock() -> seconds since the game started, for how long a toast has shown (LUI's timers run late under load)
+static int lua_clock(lua_State *s) {
+    hks_push_number(s, (float)(now() - started));
+    return 1;
+}
+
 static int lua_log(lua_State *s) {
     const char *text = hks_check_string(s, 1);
     printf("BO3MacFix: %s\n", text != NULL ? text : "");
@@ -277,12 +283,12 @@ static int lua_load_ui(lua_State *s) {
 // first menu made in the state load notices.lua, in a coroutine like settings_menu.c does with its page, and pass it
 // every menu made after that (for the pause menu). It does nothing in a state that already has them.
 static const char start_lua[] =
-    "local log, take, take_pause, pause_game, load_ui = ...\n"
+    "local log, take, take_pause, pause_game, clock, load_ui = ...\n"
     "local bo3macfix = rawget(_G, 'BO3MacFix')\n"
     "if bo3macfix == nil or rawget(bo3macfix, 'TakeNotice') ~= nil then return end\n"
     "if CoD == nil or CoD.Menu == nil or CoD.Menu.NewForUIEditor == nil then return end\n"
     "bo3macfix.TakeNotice, bo3macfix.TakePauseRequest, bo3macfix.PauseGame = take, take_pause, pause_game\n"
-    "bo3macfix.NoticeLog = log\n"
+    "bo3macfix.NoticeLog, bo3macfix.NoticeClock = log, clock\n"
     "local new_menu, loaded = CoD.Menu.NewForUIEditor, false\n"
     "CoD.Menu.NewForUIEditor = function(name, ...)\n"
     "  if not loaded then\n"
@@ -312,8 +318,9 @@ void notices_lua_install(lua_State *s) {
         hks_push_cfunction(s, lua_take_notice, "NoticesTake");
         hks_push_cfunction(s, lua_take_pause, "NoticesTakePause");
         hks_push_cfunction(s, lua_pause_game, "NoticesPause");
+        hks_push_cfunction(s, lua_clock, "NoticesClock");
         hks_push_cfunction(s, lua_load_ui, "NoticesLoadUI");
-        hks_pcall(s, 5, 0);
+        hks_pcall(s, 6, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
 }
