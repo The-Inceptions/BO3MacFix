@@ -54,10 +54,17 @@ void hks_push_cfunction(lua_State *s, lua_CFunction fn, const char *name) {
     hks_pushnamedcclosure(s, fn, 0, name, 0, 0);
 }
 
-// prints and pops the error message left on the stack by a failed load or call
+// prints and pops the error message left on the stack by a failed load or call. error() can throw any value, and
+// checking a table or nil as a string would raise a new error from here, outside any protected call.
 static void hks_report_error(lua_State *s, const char *what) {
-    printf("Lua %s error: %s\n", what, hks_check_string(s, -1));
-    HKS_TOP(s)--;
+    HksObject *error = HKS_TOP(s) - 1;
+    uint32_t type = error >= HKS_BASE(s) ? error->t & 0xF : HKS_TNIL;
+    if (type == HKS_TSTRING || type == HKS_TNUMBER)
+        printf("Lua %s error: %s\n", what, hks_check_string(s, -1));
+    else
+        printf("Lua %s error (an error value of type %u)\n", what, type);
+    if (error >= HKS_BASE(s))
+        HKS_TOP(s)--;
 }
 
 bool hks_load_source(lua_State *s, const char *source, size_t source_len, const char *chunk_name) {
