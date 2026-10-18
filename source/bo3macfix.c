@@ -855,8 +855,9 @@ install_hook_name(CL_FirstSnapshot, void, void *arg) {
 }
 
 install_hook_name(Com_GetBuildIntField, int, int field) {
-    // if the field is this magic number ("Mac!"), return a version number
-    if (field == 0x4D616321) {
+    // if the field is this magic number ("Mac!"), return a version number. Lua's numbers are floats, so
+    // Engine.GetBuildIntField(0x4D616321) arrives here rounded to 0x4D616300.
+    if (field == 0x4D616321 || field == 0x4D616300) {
         return 0x00000102; // 0x0102 for 1.2
     }
     return orig_Com_GetBuildIntField(field);
