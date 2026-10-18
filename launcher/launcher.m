@@ -30,7 +30,11 @@ static int read_setting(NSString *path, const char *name, int fallback) {
             continue;
         p++;
         p += strspn(p, " \t\"");
-        value = atoi(p);
+        // "Name =" with nothing (or no number) after it keeps the default, like the dylib's parser
+        char *end;
+        long parsed = strtol(p, &end, 10);
+        if (end != p)
+            value = (int)parsed;
     }
     fclose(fp);
     return value;
