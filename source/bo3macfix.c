@@ -1080,7 +1080,8 @@ __attribute__((constructor)) static void dylib_main() {
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);
 
-    // MetalFX upscaling when the game runs below the screen's resolution (MetalFXUpscale, 0 = off), see metalfx.m
+    // MetalFX upscaling when the game runs below the screen's resolution (MetalFXUpscale: 0 off, 1 on, 2 on at the
+    // panel's own resolution in scaled monitor modes), see metalfx.m
     gpu_tweaks_metalfx_init(read_int_setting("MetalFXUpscale", 0), checked_code_patch);
 
     // log the frame rate every FrameStats seconds (0 = off), see gpu_tweaks.c
@@ -1109,7 +1110,7 @@ __attribute__((constructor)) static void dylib_main() {
     display_follow_set_option("GameDisplay", read_int_setting_or_env("GameDisplay", 0));
     display_follow_set_option("DisplayMemory", read_int_setting_or_env("DisplayMemory", 1));
     display_follow_set_option("MatchRefreshRate", read_int_setting_or_env("MatchRefreshRate", 1));
-    display_follow_set_option("ConfineCursor", read_int_setting_or_env("ConfineCursor", 1));
+    display_follow_set_option("ConfineCursor", read_int_setting_or_env("ConfineCursor", 0));
     display_follow_init(read_int_setting_or_env("DisplayFollow", 1));
     sdl_displays_init();
     engine_display_init();

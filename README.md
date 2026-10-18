@@ -31,12 +31,12 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `FastSetjmp` | 1 | Makes the script VMs' `setjmp`/`longjmp` skip saving the signal mask, a syscall each time. |
 | `FramesInFlight` | 2 | How many frames the CPU may queue ahead of the GPU, 1 to 3 (`MaxFrameLatency` in config.ini does nothing on Mac). |
 | `FramePacingFPS` | 0 | Keeps each frame on screen for at least 1/N of a second, 30 to 240, for even pacing below the refresh rate. |
-| `MetalFXUpscale` | 0 | Upscales with MetalFX when the game's resolution is lower than the screen's, in either fullscreen mode. Needs macOS 13. |
+| `MetalFXUpscale` | 0 | Upscales with MetalFX when the game's resolution is lower than the screen's, in either fullscreen mode. 2 is for scaled monitor modes (like "looks like 2560x1440" on a 4K monitor): it upscales to the panel's own pixels rather than the bigger scaled size macOS shrinks back down. Needs macOS 13. |
 | `DisplayFollow` | 1 | Follows display changes: when displays are plugged in or unplugged, the game moves to the display `GameDisplay` picks and adapts its resolution and refresh rate to it. |
-| `GameDisplay` | 0 | Which display the game uses: 0 the main display (the one with the menu bar), 1 the MacBook's built-in screen while it's on, 2 an external display when one is connected (the last one the game used, else the fastest). |
-| `DisplayMemory` | 1 | Remembers the resolution and refresh rate the game used on each display (in `BO3MacFix/displays.ini`), for when it's back on that display. |
+| `GameDisplay` | 0 | Which display the game uses: 0 the main display (the one with the menu bar), 1 the MacBook's built-in screen while it's on, 2 an external display when one is connected (the last one the game used, else the fastest), 3 one display you picked by name on the in-game page (it's remembered in `BO3MacFix/displays.ini`; while it's not connected, the game goes by 2). |
+| `DisplayMemory` | 1 | Remembers the resolution and refresh rate the game used on each display (in `BO3MacFix/displays.ini`), for when it's back on that display. A monitor is still recognised when it's plugged into another port or adapter. |
 | `MatchRefreshRate` | 1 | Uses each display's own refresh rate. A `MaxFPS` that matched the old display's refresh rate follows it too. |
-| `ConfineCursor` | 1 | Keeps the pointer on the game's display in fullscreen menus, so a click can't land on another display. |
+| `ConfineCursor` | 0 | Stops stray clicks landing on another display in fullscreen menus: the pointer stops at the edge of the game's display, and keeps going if you push on past it. |
 | `ControllerMappings` | 1 | Lets DualShock 4, DualSense and DualSense Edge controllers work over USB. |
 | `ControllerBridge` | 0 | Reads DualShock 4 and DualSense controllers through macOS instead: Bluetooth and USB, rumble and lightbar. Turn Steam Input off for the game. Needs macOS 11.3. |
 | `ButtonPrompts` | 0 | 0 shows PlayStation buttons with a PlayStation controller, 1 always Xbox, 2 always PlayStation. |

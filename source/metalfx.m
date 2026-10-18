@@ -7,11 +7,16 @@
 //
 // Aspyr's view only resizes the drawable when its own size changes, so this also does it when the game window moves to
 // another screen or gets another backing scale (a Retina screen and a 1x one can be the same size in points).
+//
+// MetalFXUpscale = 2 is for scaled HiDPI modes, like looks like 2560x1440 on a 3840x2160 panel: the window then has
+// 5120x2880 pixels, more than the panel shows, so MetalFX upscales to the panel's 3840x2160 instead and Core Animation
+// and the display scale that the rest of the way, as they would any drawable smaller than the window.
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalFX/MetalFX.h>
 #import <QuartzCore/CAMetalLayer.h>
+#include <IOKit/graphics/IOGraphicsTypes.h>
 #include <math.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
@@ -30,6 +35,7 @@
 typedef void (*copy_texture_fn)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
 
 static int metalfx_ready = 0; // MetalFX is there and the drawable size hook is installed
+static int metalfx_mode = 1; // MetalFXUpscale: 1 upscales to the window's pixels, 2 to the panel's in scaled modes
 
 // ASL_MetalView
 static IMP orig_updateDrawableSize = NULL, nsview_viewDidChangeBackingProperties = NULL;
@@ -41,6 +47,8 @@ static id game_view = nil; // a weak reference (objc_storeWeak), the view whose 
 // AppKit can't be asked, so that goes by the scale from here.
 static _Atomic double screen_scale = 0; // 0 until the main thread has seen the view in a window
 static atomic_int screen_max_fps = 0, screen_variable_refresh = 0;
+static atomic_uint screen_display = 0; // its CGDirectDisplayID
+static atomic_uint screen_native = 0; // width << 16 | height of its panel's own resolution, 0 if not known
 
 // sizes packed 16 bits each (pack_sizes): the game's size and drawable size MetalFX couldn't do, which keep the drawable
 // at the game's size until either changes, the last ones we sized the drawable for, and the last frame's upscale for
@@ -61,6 +69,62 @@ static MTLOrigin pending_origin; // where the upscaled frame goes in the drawabl
 static uint64_t pack_sizes(NSUInteger width1, NSUInteger height1, NSUInteger width2, NSUInteger height2) {
     return (uint64_t)(width1 & 0xFFFF) << 48 | (uint64_t)(height1 & 0xFFFF) << 32 | (uint64_t)(width2 & 0xFFFF) << 16 |
            (uint64_t)(height2 & 0xFFFF);
+}
+
+// a display's panel resolution, width << 16 | height: the mode macOS marks as native, else the widest one that isn't
+// HiDPI. For when display_follow doesn't have the display.
+static unsigned int panel_pixels(CGDirectDisplayID display) {
+    CFStringRef keys[] = { kCGDisplayShowDuplicateLowResolutionModes };
+    CFBooleanRef values[] = { kCFBooleanTrue };
+    CFDictionaryRef options = CFDictionaryCreate(NULL, (const void **)keys, (const void **)values, 1,
+                                                 &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(display, options);
+    CFRelease(options);
+    size_t width = 0, height = 0, widest_width = 0, widest_height = 0;
+    for (CFIndex i = 0; modes != NULL && i < CFArrayGetCount(modes); i++) {
+        CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        size_t w = CGDisplayModeGetPixelWidth(mode), h = CGDisplayModeGetPixelHeight(mode);
+        if (CGDisplayModeGetIOFlags(mode) & kDisplayModeNativeFlag) {
+            width = w;
+            height = h;
+        }
+        if (w == CGDisplayModeGetWidth(mode) && w > widest_width) {
+            widest_width = w;
+            widest_height = h;
+        }
+    }
+    if (modes != NULL)
+        CFRelease(modes);
+    if (width == 0) {
+        width = widest_width;
+        height = widest_height;
+    }
+    return (unsigned int)(width & 0xFFFF) << 16 | (unsigned int)(height & 0xFFFF);
+}
+
+// the panel resolution of the game window's screen: display_follow's when it's describing that display, else ours
+static unsigned int panel_native(void) {
+    DisplayInfo display;
+    unsigned int id = atomic_load(&screen_display);
+    if (display_follow_current(&display) == 1 && display.native_w > 0 && display.native_h > 0 && (id == 0 || display.id == id))
+        return (unsigned int)(display.native_w & 0xFFFF) << 16 | (unsigned int)(display.native_h & 0xFFFF);
+    return atomic_load(&screen_native);
+}
+
+// what MetalFX upscales to for a window with this many pixels: all of them, or with MetalFXUpscale = 2 in a scaled
+// mode the panel's resolution (the window's size shrunk to fit in it)
+static void output_size(int backing_width, int backing_height, int *width, int *height) {
+    *width = backing_width;
+    *height = backing_height;
+    if (metalfx_mode != 2)
+        return;
+    unsigned int panel = panel_native();
+    int panel_width = (int)(panel >> 16), panel_height = (int)(panel & 0xFFFF);
+    if (panel_width <= 0 || panel_height <= 0 || backing_width <= panel_width || backing_height <= panel_height)
+        return;
+    double scale = fmin((double)panel_width / backing_width, (double)panel_height / backing_height);
+    *width = (int)lround(backing_width * scale);
+    *height = (int)lround(backing_height * scale);
 }
 
 // what the main thread knows about the game window's screen, with a line in the log whenever that changes
@@ -95,6 +159,37 @@ static void remember_screen(NSView *view) {
         printf("%s\n", line);
         strcpy(last, line);
     }
+
+    // a scaled HiDPI mode gives the window more pixels than the panel has, and the display scales them down to it
+    if (display != atomic_exchange(&screen_display, display))
+        atomic_store(&screen_native, panel_pixels(display));
+    unsigned int panel = panel_native();
+    int panel_width = (int)(panel >> 16), panel_height = (int)(panel & 0xFFFF);
+    int backing_width = (int)lround(view.bounds.size.width * window.backingScaleFactor);
+    int backing_height = (int)lround(view.bounds.size.height * window.backingScaleFactor);
+    static char last_scaled[256];
+    char scaled[256] = "";
+    if (panel_width > 0 && backing_width > panel_width && backing_height > panel_height) {
+        char name[64] = "the display";
+        DisplayInfo info;
+        if (display_follow_current(&info) == 1 && info.id == display && info.name[0] != 0)
+            snprintf(name, sizeof(name), "%s", info.name);
+        else if (@available(macOS 10.15, *))
+            snprintf(name, sizeof(name), "%s", screen.localizedName.UTF8String ?: "the display");
+        int width, height;
+        output_size(backing_width, backing_height, &width, &height);
+        if (metalfx_mode == 2)
+            snprintf(scaled, sizeof(scaled), "present: %s is in a scaled mode (%ix%i for a %ix%i panel), MetalFX outputs %ix%i",
+                     name, backing_width, backing_height, panel_width, panel_height, width, height);
+        else
+            snprintf(scaled, sizeof(scaled), "present: %s is in a scaled mode (%ix%i for a %ix%i panel), so MetalFX makes "
+                     "more pixels than it shows. MetalFXUpscale = 2 upscales to the panel's resolution instead, or a mode "
+                     "that looks like %ix%i fits the panel exactly", name, backing_width, backing_height, panel_width,
+                     panel_height, panel_width / 2, panel_height / 2);
+    }
+    if (scaled[0] != 0 && strcmp(scaled, last_scaled) != 0)
+        printf("%s\n", scaled);
+    strcpy(last_scaled, scaled);
 }
 
 // the view's size in pixels. Aspyr's _viewSize and contentScaleFactor are in points (1728x1117 with a scale of 1 on a
@@ -113,8 +208,9 @@ static void view_pixels(NSView *view, CGSize view_size, int *width, int *height)
 
 // Aspyr's updateDrawableSize sets the drawable to the forced size (the game's resolution) when there is one, and to
 // the view's size in points otherwise. Keep the forced size for everything else that reads it, but give the layer the
-// view's native pixels when they're bigger, so MetalFX can upscale into them. Unforced drawables are left alone here:
-// Aspyr unforces, reads the drawable back and forces it again unless it's the game's size (enlarge_unforced_drawable).
+// view's native pixels (or the panel's, output_size) when they're bigger, so MetalFX can upscale into them. Unforced
+// drawables are left alone here: Aspyr unforces, reads the drawable back and forces it again unless it's the game's size
+// (enlarge_unforced_drawable).
 static void updateDrawableSize_hook(id self, SEL sel) {
     ((void (*)(id, SEL))orig_updateDrawableSize)(self, sel);
     objc_storeWeak(&game_view, self);
@@ -126,8 +222,9 @@ static void updateDrawableSize_hook(id self, SEL sel) {
     int forced_height = *(int *)((char *)self + forced_height_offset);
     if (forced_width <= 0 || forced_height <= 0)
         return;
-    int native_width, native_height;
-    view_pixels(self, view_size, &native_width, &native_height);
+    int backing_width, backing_height, native_width, native_height;
+    view_pixels(self, view_size, &backing_width, &backing_height);
+    output_size(backing_width, backing_height, &native_width, &native_height);
 
     static int last_forced_width = -1, last_forced_height = -1, last_native_width = -1, last_native_height = -1;
     int changed = forced_width != last_forced_width || forced_height != last_forced_height ||
@@ -249,8 +346,11 @@ static void enlarge_unforced_drawable(NSUInteger width, NSUInteger height) {
     id view = objc_loadWeak(&game_view);
     if (view == nil || *(int *)((char *)view + forced_width_offset) > 0 || *(int *)((char *)view + forced_height_offset) > 0)
         return;
-    NSUInteger native_width = (NSUInteger)lround(width * scale), native_height = (NSUInteger)lround(height * scale);
-    uint64_t sizes = pack_sizes(width, height, native_width, native_height);
+    int native_width, native_height;
+    output_size((int)lround(width * scale), (int)lround(height * scale), &native_width, &native_height);
+    if (native_width <= (int)width || native_height <= (int)height)
+        return;
+    uint64_t sizes = pack_sizes(width, height, (NSUInteger)native_width, (NSUInteger)native_height);
     if (sizes == atomic_load(&failed_sizes))
         return;
     atomic_store(&resized_sizes, sizes);
@@ -400,8 +500,9 @@ static ptrdiff_t ivar_offset(Class cls, const char *name) {
     return ivar != NULL ? ivar_getOffset(ivar) : -1;
 }
 
-int metalfx_init(void) {
+int metalfx_init(int mode) {
     @autoreleasepool {
+        metalfx_mode = mode == 2 ? 2 : 1;
         if (NSClassFromString(@"MTLFXSpatialScalerDescriptor") == nil) {
             printf("MetalFX isn't available (it needs macOS 13 or later), not upscaling\n");
             return 0;
@@ -433,7 +534,8 @@ int metalfx_init(void) {
         class_addMethod(view, backing_changed, (IMP)viewDidChangeBackingProperties_new, "v@:");
         watch_screens();
         metalfx_ready = 1;
-        printf("MetalFX upscaling is on, it upscales when the game's resolution is lower than the screen's\n");
+        printf("MetalFX upscaling is on, it upscales when the game's resolution is lower than the screen's%s\n",
+               metalfx_mode == 2 ? " (or in a scaled mode, the panel's)" : "");
         return 1;
     }
 }

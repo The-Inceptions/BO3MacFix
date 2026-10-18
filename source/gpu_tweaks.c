@@ -4,7 +4,8 @@
 // - FramePacingFPS: presents with presentDrawable:afterMinimumDuration: instead of presentDrawable:, so
 //   each frame stays on screen for at least 1/fps seconds and frames come out evenly on ProMotion displays.
 // - MetalFXUpscale: when the game runs below the screen's resolution, upscales each frame to the screen's
-//   native size with MetalFX instead of letting Core Animation stretch it, see metalfx.m.
+//   native size with MetalFX instead of letting Core Animation stretch it, see metalfx.m. 2 upscales to the
+//   panel's resolution instead when the display is in a scaled mode.
 // - FrameStats: logs the frame rate, 1% low and worst frame time every few seconds, for benchmarking.
 // - BatteryFPS: paces frames to that rate only while the Mac runs on battery, to save power.
 // - MetalHUD: turns on macOS's Metal performance HUD.
@@ -213,7 +214,7 @@ void gpu_tweaks_metalfx_init(int metalfx_upscale, code_patch_fn checked_code_pat
         printf("MetalFX: couldn't hook Aspyr's present, not upscaling\n");
         return;
     }
-    metalfx_active = metalfx_init();
+    metalfx_active = metalfx_init(metalfx_upscale);
 }
 
 void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch) {

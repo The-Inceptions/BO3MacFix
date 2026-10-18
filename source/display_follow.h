@@ -15,6 +15,9 @@ typedef struct DisplayInfo {
     int refresh;            // maximum frames per second (NSScreen.maximumFramesPerSecond, else the mode's, else 60)
     int variable_refresh;   // ProMotion or VRR
     int notch;              // camera housing height in points, 0 if none
+    char key[52];           // what displays.ini knows it by: the UUID, or "<uuid>#<unit>" for a second display with that UUID
+    uint32_t vendor, model, serial; // CGDisplayVendorNumber, ModelNumber and SerialNumber (0 if it has no serial)
+    uint32_t unit;          // CGDisplayUnitNumber
 } DisplayInfo;
 
 typedef struct DisplayDecision {
@@ -37,3 +40,11 @@ int display_follow_owns(const char *name);               // for settings.c's app
 int display_follow_set_option(const char *name, int value); // 1 = applied live, 0 = not (then it needs a restart)
 void display_follow_save(void);                          // at quit, including ExitFix's _exit path
 void display_follow_print_state(const char *why);        // one "display state: ..." line (main thread)
+
+// GameDisplay on the settings page, any thread. The choices: 0 "Main display", 1 "Built-in", 2 "External", then each
+// connected display as 100 + i with its name ("XB273K GP (2)" for a second one of that name). Returns how many.
+int display_follow_game_display_choices(int *values, char labels[][64], int max);
+// the value to show: 0, 1 or 2; 100 + i for the chosen display while it's connected; 3 when it isn't
+int display_follow_game_display_current(void);
+// what settings.ini keeps for a value the page set: 3 (the chosen display) for GameDisplay values from 100, else value
+int display_follow_persisted_value(const char *name, int value);

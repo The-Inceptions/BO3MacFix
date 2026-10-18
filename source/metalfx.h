@@ -5,8 +5,9 @@
 // MetalFX spatial upscaling of the whole frame when Aspyr's Metal layer presents it, see metalfx.m.
 
 // checks that MetalFX and Aspyr's Metal view are there and starts keeping the drawable at the screen's native size,
-// returns 1 if upscaling is on, otherwise logs why not and returns 0
-int metalfx_init(void);
+// returns 1 if upscaling is on, otherwise logs why not and returns 0. mode is MetalFXUpscale: 2 upscales to the panel's
+// resolution when the display is in a scaled mode (more pixels than the panel), 1 to the window's pixels.
+int metalfx_init(int mode);
 
 // replacement for Aspyr's [blitEncoder copyFromTexture:backbuffer ... toTexture:drawable.texture ...] at 0x1000e8fde
 void *metalfx_copy_function(void);

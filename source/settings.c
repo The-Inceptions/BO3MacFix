@@ -63,13 +63,13 @@ static const setting_t settings[] = {
     { "FramesInFlight", "Frames in flight", "How many frames the CPU may queue ahead of the GPU: fewer means less input lag.", "Graphics", false, 3, { 1, 2, 3 }, { "1 (least lag)", "2 (normal)", "3 (smoothest)" }, 2, false },
     { "FramePacingFPS", "Frame pacing", "Keeps each frame on screen for a minimum time, for even pacing below the refresh rate.", "Graphics", false, 6, { 0, 30, 45, 60, 90, 120 }, { "Off", "30", "45", "60", "90", "120" }, 0, Live_Present },
     { "BatteryFPS", "Battery frame limit", "Limits the frame rate only while the Mac runs on battery, to save power.", "Graphics", false, 5, { 0, 30, 45, 60, 90 }, { "Off", "30", "45", "60", "90" }, 0, Live_Present },
-    { "MetalFXUpscale", "MetalFX upscaling", "Upscales with MetalFX when the game runs below the screen's resolution.", "Graphics", Toggle(0) },
+    { "MetalFXUpscale", "MetalFX upscaling", "Upscales with MetalFX when the game runs below the screen's resolution. \"Panel resolution\" is for scaled monitor modes.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "On", "On, panel resolution" }, 0, Live_Never },
     { "MetalHUD", "Metal performance HUD", "Shows macOS's Metal HUD with the frame rate and GPU time.", "Graphics", Toggle(0) },
     { "DisplayFollow", "Follow display changes", "Moves the game when displays are plugged in or unplugged, and adapts its resolution and refresh rate to the new display.", "Display", Toggle_Live(1, Live_Always) },
-    { "GameDisplay", "Game display", "Which display the game uses: the main display (with the menu bar), the MacBook's screen, or an external monitor when one is connected.", "Display", false, 3, { 0, 1, 2 }, { "Main display", "Built-in", "External" }, 0, Live_Always },
+    { "GameDisplay", "Game display", "Which display the game uses: the main display (with the menu bar), the MacBook's screen, any external monitor, or one you pick by name.", "Display", false, 3, { 0, 1, 2 }, { "Main display", "Built-in", "External" }, 0, Live_Always },
     { "DisplayMemory", "Remember each display", "Remembers the resolution and refresh rate the game used on each display.", "Display", Toggle_Live(1, Live_Always) },
     { "MatchRefreshRate", "Match refresh rate", "Uses each display's own refresh rate, like 240 Hz on a gaming monitor and 120 Hz on the MacBook.", "Display", Toggle_Live(1, Live_Always) },
-    { "ConfineCursor", "Keep cursor on game display", "Stops the pointer leaving the game's display in fullscreen menus, so a stray click can't drop out.", "Display", Toggle_Live(1, Live_Always) },
+    { "ConfineCursor", "Keep cursor on game display", "Stops stray clicks landing on another display in fullscreen menus; push past the edge to leave.", "Display", Toggle_Live(0, Live_Always) },
     { "ControllerMappings", "PlayStation controllers over USB", "Lets DualShock 4, DualSense and DualSense Edge controllers work over USB.", "Controller", Toggle(1) },
     { "ControllerBridge", "macOS controller support", "Reads PlayStation controllers through macOS: Bluetooth and USB, rumble and lightbar. Turn Steam Input off.", "Controller", Toggle(0) },
     { "ButtonPrompts", "Button prompts", "Which button icons the game shows.", "Controller", false, 3, { 0, 1, 2 }, { "Automatic", "Xbox", "PlayStation" }, 0, Live_Prompts },
@@ -253,6 +253,38 @@ static void restart_game(void) {
 
 #pragma mark - Lua
 
+#define Max_Row_Choices 20
+
+// a choice row's values and labels, and its value now. Game display also lists every connected display by name
+// (values 100 and up), so it's asked each time the page opens; one that was chosen but isn't connected stays listed.
+static int row_choices(const setting_t *t, int *values, char labels[][64], int *value) {
+    int count = 0;
+    *value = read_value(t);
+    if (strcmp(t->name, "GameDisplay") == 0) {
+        count = display_follow_game_display_choices(values, labels, Max_Row_Choices - 1);
+        *value = display_follow_game_display_current();
+    }
+    if (count <= 0) {
+        for (count = 0; count < t->count; count++) {
+            values[count] = t->values[count];
+            strlcpy(labels[count], t->labels[count], sizeof(labels[count]));
+        }
+    }
+    bool listed = false;
+    for (int c = 0; c < count; c++)
+        listed = listed || values[c] == *value;
+    if (!listed && strcmp(t->name, "GameDisplay") == 0) {
+        values[count] = *value;
+        strlcpy(labels[count++], "Chosen display (not connected)", sizeof(labels[0]));
+    }
+    // display names go between our separators
+    for (int c = 0; c < count; c++)
+        for (char *p = labels[c]; *p != '\0'; p++)
+            if ((unsigned char)*p < 0x20)
+                *p = ' ';
+    return count;
+}
+
 // one line per setting: name, label, description, category, kind, values, labels, value, default, live, separated
 // by \x1f, with values and labels separated by \x1e (the Lua half turns this into tables)
 static int lua_list(lua_State *s) {
@@ -260,18 +292,20 @@ static int lua_list(lua_State *s) {
     char *text = calloc(1, size);
     for (size_t i = 0; text != NULL && i < Setting_Count; i++) {
         const setting_t *t = &settings[i];
-        char values[256] = "", labels[512] = "";
-        int count = t->count;
+        char values[256] = "", labels[Max_Row_Choices * 65] = "";
+        int choice_values[Max_Row_Choices], value;
+        char choice_labels[Max_Row_Choices][64];
+        int count = row_choices(t, choice_values, choice_labels, &value);
         for (int c = 0; c < count; c++) {
             char v[32];
-            snprintf(v, sizeof(v), "%s%d", c ? "\x1e" : "", t->values[c]);
+            snprintf(v, sizeof(v), "%s%d", c ? "\x1e" : "", choice_values[c]);
             strlcat(values, v, sizeof(values));
             if (c)
                 strlcat(labels, "\x1e", sizeof(labels));
-            strlcat(labels, t->labels[c], sizeof(labels));
+            strlcat(labels, choice_labels[c], sizeof(labels));
         }
         used += snprintf(text + used, size - used, "%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%d\x1f%d\x1f%d\n", t->name, t->label,
-                         t->description, t->category, count ? "choice" : "toggle", values, labels, read_value(t), t->fallback,
+                         t->description, t->category, count ? "choice" : "toggle", values, labels, value, t->fallback,
                          live_now(t) ? 1 : 0);
         if (used >= size)
             break;
@@ -291,18 +325,21 @@ static int lua_set(lua_State *s) {
     }
     int value = (int)strtod(value_text, NULL);
     int before = read_value(t);
+    // a display picked by name (Game display 100 and up) is saved as 3, "the chosen display", whose UUID
+    // display_follow keeps in displays.ini
+    int saved = display_follow_owns(t->name) ? display_follow_persisted_value(t->name, value) : value;
     char text[32];
-    if (t->hex && value >= 0)
-        snprintf(text, sizeof(text), "%06X", value);
+    if (t->hex && saved >= 0)
+        snprintf(text, sizeof(text), "%06X", saved);
     else
-        snprintf(text, sizeof(text), "%d", value);
+        snprintf(text, sizeof(text), "%d", saved);
     if (!settings_write(t->name, text)) {
         printf("BO3MacFix: couldn't save %s to settings.ini\n", t->name);
         hks_push_nil(s);
         return 1;
     }
     bool applied = live_now(t) && apply_live(t, value);
-    bool restart = !applied && value != before;
+    bool restart = !applied && saved != before;
     printf("BO3MacFix: set %s = %s%s\n", t->name, text, applied ? "" : restart ? " (takes effect after a restart)" : "");
     if (restart)
         restart_pending = true;

@@ -16,11 +16,62 @@ int display_policy_find(const DisplayInfo *displays, int count, uint32_t id) {
     return -1;
 }
 
-int display_policy_find_uuid(const DisplayInfo *displays, int count, const char *uuid) {
-    for (int i = 0; uuid != NULL && uuid[0] != '\0' && i < count; i++)
-        if (strcmp(displays[i].uuid, uuid) == 0)
+int display_policy_find_key(const DisplayInfo *displays, int count, const char *key) {
+    for (int i = 0; key != NULL && key[0] != '\0' && i < count; i++)
+        if (strcmp(displays[i].key, key) == 0)
             return i;
     return -1;
+}
+
+void display_policy_keys(DisplayInfo *displays, int count) {
+    for (int i = 0; i < count; i++) {
+        strlcpy(displays[i].key, displays[i].uuid, sizeof(displays[i].key));
+        for (int j = 0; displays[i].uuid[0] != '\0' && j < i; j++) {
+            if (strcmp(displays[j].uuid, displays[i].uuid) == 0) {
+                snprintf(displays[i].key, sizeof(displays[i].key), "%s#%u", displays[i].uuid, displays[i].unit);
+                break;
+            }
+        }
+    }
+}
+
+static const RememberedDisplay *find_remembered(const DisplayStore *store, const char *key) {
+    for (int i = 0; key[0] != '\0' && i < store->count; i++)
+        if (strcmp(store->displays[i].key, key) == 0)
+            return &store->displays[i];
+    return NULL;
+}
+
+// the same monitor: its vendor, model and serial (identical cheap monitors can share a serial, but never have none)
+static int same_serial(const DisplayInfo *display, const RememberedDisplay *remembered) {
+    return remembered->serial != 0 && display->serial == remembered->serial && display->vendor == remembered->vendor &&
+           display->model == remembered->model;
+}
+
+// the same kind of monitor: vendor, model, name and native size
+static int same_kind(const DisplayInfo *display, const RememberedDisplay *remembered) {
+    return display->vendor == remembered->vendor && display->model == remembered->model &&
+           strcmp(display->name, remembered->name) == 0 && display->native_w == remembered->native_w &&
+           display->native_h == remembered->native_h;
+}
+
+int display_policy_find_remembered(const DisplayInfo *displays, int count, const DisplayStore *store, const char *key) {
+    int i = display_policy_find_key(displays, count, key);
+    const RememberedDisplay *remembered = i < 0 ? find_remembered(store, key) : NULL;
+    if (i >= 0 || remembered == NULL)
+        return i;
+    // on another port, with another UUID: the same serial, else the only display of its kind that isn't known as
+    // another one
+    int kind = -1, kinds = 0;
+    for (int j = 0; j < count; j++) {
+        if (same_serial(&displays[j], remembered))
+            return j;
+        if (same_kind(&displays[j], remembered) && find_remembered(store, displays[j].key) == NULL) {
+            kind = j;
+            kinds++;
+        }
+    }
+    return kinds == 1 ? kind : -1;
 }
 
 static int find_main(const DisplayInfo *displays, int count) {
@@ -37,13 +88,19 @@ static int find_builtin(const DisplayInfo *displays, int count) {
     return -1;
 }
 
-int display_policy_target(const DisplayInfo *displays, int count, int game_display, const char *last_external) {
-    if (game_display == 1) {
+int display_policy_target(const DisplayInfo *displays, int count, int game_display, const DisplayStore *store) {
+    if (game_display == Game_Display_Builtin) {
         int builtin = find_builtin(displays, count);
         return builtin >= 0 ? builtin : find_main(displays, count);
     }
-    if (game_display == 2) {
-        int last = display_policy_find_uuid(displays, count, last_external);
+    if (game_display == Game_Display_Chosen) {
+        int chosen = display_policy_find_remembered(displays, count, store, store->chosen);
+        if (chosen >= 0)
+            return chosen;
+        game_display = Game_Display_External;
+    }
+    if (game_display == Game_Display_External) {
+        int last = display_policy_find_remembered(displays, count, store, store->last_external);
         if (last >= 0 && !displays[last].builtin)
             return last;
         int best = -1;
@@ -63,6 +120,38 @@ int display_policy_target(const DisplayInfo *displays, int count, int game_displ
     return find_main(displays, count);
 }
 
+int display_policy_choices(const DisplayInfo *displays, int count, int *values, char labels[][64], int max) {
+    static const char *const rules[] = { "Main display", "Built-in", "External" };
+    int n = 0;
+    for (int i = 0; i < 3 && n < max; i++, n++) {
+        values[n] = i;
+        strlcpy(labels[n], rules[i], 64);
+    }
+    for (int i = 0; i < count && n < max; i++, n++) {
+        // a second display with the same name is "<name> (2)"
+        int same = 1;
+        for (int j = 0; j < i; j++)
+            same += strcmp(displays[j].name, displays[i].name) == 0;
+        values[n] = Game_Display_Pick + i;
+        if (same > 1)
+            snprintf(labels[n], 64, "%s (%d)", displays[i].name, same);
+        else
+            strlcpy(labels[n], displays[i].name, 64);
+    }
+    return n;
+}
+
+int display_policy_current(int game_display, const DisplayInfo *displays, int count, const DisplayStore *store) {
+    if (game_display != Game_Display_Chosen)
+        return game_display;
+    int chosen = display_policy_find_remembered(displays, count, store, store->chosen);
+    return chosen >= 0 ? Game_Display_Pick + chosen : Game_Display_Chosen;
+}
+
+int display_policy_persisted(const char *name, int value) {
+    return strcmp(name, "GameDisplay") == 0 && value >= Game_Display_Pick ? Game_Display_Chosen : value;
+}
+
 int display_policy_refresh(int screen_fps, int mode_refresh) {
     if (screen_fps >= Display_Refresh_Low && screen_fps <= Display_Refresh_High)
         return screen_fps;
@@ -80,8 +169,11 @@ int display_policy_changed(const DisplayInfo *before, const DisplayInfo *after) 
 
 void display_policy_shape(const DisplayInfo *display, RememberedDisplay *out) {
     memset(out, 0, sizeof(*out));
-    strlcpy(out->uuid, display->uuid, sizeof(out->uuid));
+    strlcpy(out->key, display->key, sizeof(out->key));
     strlcpy(out->name, display->name, sizeof(out->name));
+    out->vendor = display->vendor;
+    out->model = display->model;
+    out->serial = display->serial;
     out->native_w = display->native_w;
     out->native_h = display->native_h;
     out->max_refresh = display->refresh;
@@ -96,7 +188,7 @@ void display_policy_decide(const RememberedDisplay *from, const GameValues *now,
     memset(out, 0, sizeof(*out));
     out->display = to->id;
     out->max_fps = -1;
-    out->moved = from->uuid[0] == '\0' || strcmp(from->uuid, to->uuid) != 0;
+    out->moved = from->key[0] == '\0' || strcmp(from->key, to->key) != 0;
     if (out->moved) {
         if (to_memory != NULL && to_memory->width > 0 && to_memory->height > 0) {
             out->width = to_memory->width;
@@ -142,13 +234,6 @@ void display_policy_decide(const RememberedDisplay *from, const GameValues *now,
         out->max_fps = Game_MaxFPS_Max;
 }
 
-static const RememberedDisplay *find_remembered(const DisplayStore *store, const char *uuid) {
-    for (int i = 0; uuid[0] != '\0' && i < store->count; i++)
-        if (strcmp(store->displays[i].uuid, uuid) == 0)
-            return &store->displays[i];
-    return NULL;
-}
-
 int display_policy_launch(const DisplayStore *store, const DisplayInfo *displays, int count, const DisplayInfo *to,
                           const GameValues *now, int use_memory, int match_refresh, DisplayDecision *out) {
     RememberedDisplay from;
@@ -170,9 +255,9 @@ int display_policy_launch(const DisplayStore *store, const DisplayInfo *displays
             return 0;
         display_policy_shape(&displays[source], &from);
     }
-    if (strcmp(from.uuid, to->uuid) == 0)
+    if (strcmp(from.key, to->key) == 0)
         return 0;
-    display_policy_decide(&from, now, to, use_memory ? find_remembered(store, to->uuid) : NULL, match_refresh, out);
+    display_policy_decide(&from, now, to, use_memory ? find_remembered(store, to->key) : NULL, match_refresh, out);
     // what's already right stays a "keep"
     if (out->width == now->width && out->height == now->height)
         out->width = out->height = 0;
@@ -193,22 +278,25 @@ int display_policy_parse_game(const char *text, GameValues *out) {
     return game != NULL && sscanf(game + 5, "%dx%d", &out->width, &out->height) == 2 && out->width > 0 && out->height > 0;
 }
 
-RememberedDisplay *display_store_find(DisplayStore *store, const char *uuid) {
-    return (RememberedDisplay *)find_remembered(store, uuid);
+RememberedDisplay *display_store_find(DisplayStore *store, const char *key) {
+    return (RememberedDisplay *)find_remembered(store, key);
 }
 
 RememberedDisplay *display_store_add(DisplayStore *store, const DisplayInfo *display) {
-    if (display->uuid[0] == '\0')
+    if (display->key[0] == '\0')
         return NULL;
-    RememberedDisplay *entry = display_store_find(store, display->uuid);
+    RememberedDisplay *entry = display_store_find(store, display->key);
     if (entry == NULL) {
         if (store->count >= Store_Max)
             return NULL;
         entry = &store->displays[store->count++];
         memset(entry, 0, sizeof(*entry));
-        strlcpy(entry->uuid, display->uuid, sizeof(entry->uuid));
+        strlcpy(entry->key, display->key, sizeof(entry->key));
     }
     strlcpy(entry->name, display->name, sizeof(entry->name));
+    entry->vendor = display->vendor;
+    entry->model = display->model;
+    entry->serial = display->serial;
     if (display->native_w > 0) {
         entry->native_w = display->native_w;
         entry->native_h = display->native_h;
@@ -216,6 +304,47 @@ RememberedDisplay *display_store_add(DisplayStore *store, const DisplayInfo *dis
     if (display->refresh > 0)
         entry->max_refresh = display->refresh;
     return entry;
+}
+
+int display_store_adopt(DisplayStore *store, const DisplayInfo *displays, int count, int i, char *from, size_t n) {
+    const DisplayInfo *display = &displays[i];
+    if (display->key[0] == '\0' || find_remembered(store, display->key) != NULL)
+        return 0;
+    const RememberedDisplay *match = NULL;
+    for (int r = 0; match == NULL && r < store->count; r++)
+        if (same_serial(display, &store->displays[r]))
+            match = &store->displays[r];
+    if (match == NULL) {
+        // one of its kind, and only one: a remembered display that's connected right now is another display
+        int kinds = 0;
+        for (int r = 0; r < store->count; r++) {
+            const RememberedDisplay *entry = &store->displays[r];
+            if (display_policy_find_key(displays, count, entry->key) < 0 && same_kind(display, entry)) {
+                match = entry;
+                kinds++;
+            }
+        }
+        if (kinds != 1)
+            return 0;
+    }
+    RememberedDisplay old = *match;
+    RememberedDisplay *entry = display_store_add(store, display);
+    if (entry == NULL)
+        return 0;
+    entry->width = old.width;
+    entry->height = old.height;
+    entry->refresh = old.refresh;
+    // the same monitor under its new key: what pointed at the old one points at this one, unless that's connected too
+    if (display_policy_find_key(displays, count, old.key) < 0) {
+        if (strcmp(store->last_display, old.key) == 0)
+            strlcpy(store->last_display, display->key, sizeof(store->last_display));
+        if (strcmp(store->last_external, old.key) == 0)
+            strlcpy(store->last_external, display->key, sizeof(store->last_external));
+        if (strcmp(store->chosen, old.key) == 0)
+            strlcpy(store->chosen, display->key, sizeof(store->chosen));
+    }
+    strlcpy(from, old.key, n);
+    return 1;
 }
 
 static char *trim(char *text) {
@@ -245,7 +374,7 @@ int display_store_load(DisplayStore *store, const char *path) {
             *end = '\0';
             entry = &store->displays[store->count++];
             memset(entry, 0, sizeof(*entry));
-            strlcpy(entry->uuid, p + 1, sizeof(entry->uuid));
+            strlcpy(entry->key, p + 1, sizeof(entry->key));
             continue;
         }
         char *equals = strchr(p, '=');
@@ -258,8 +387,18 @@ int display_store_load(DisplayStore *store, const char *path) {
                 strlcpy(store->last_display, value, sizeof(store->last_display));
             else if (strcmp(key, "LastExternal") == 0)
                 strlcpy(store->last_external, value, sizeof(store->last_external));
+            else if (strcmp(key, "Chosen") == 0)
+                strlcpy(store->chosen, value, sizeof(store->chosen));
+            else if (strcmp(key, "ChosenName") == 0)
+                strlcpy(store->chosen_name, value, sizeof(store->chosen_name));
         } else if (strcmp(key, "Name") == 0) {
             strlcpy(entry->name, value, sizeof(entry->name));
+        } else if (strcmp(key, "Vendor") == 0) {
+            entry->vendor = (uint32_t)strtoul(value, NULL, 10);
+        } else if (strcmp(key, "Model") == 0) {
+            entry->model = (uint32_t)strtoul(value, NULL, 10);
+        } else if (strcmp(key, "Serial") == 0) {
+            entry->serial = (uint32_t)strtoul(value, NULL, 10);
         } else if (strcmp(key, "Native") == 0) {
             sscanf(value, "%dx%d", &entry->native_w, &entry->native_h);
         } else if (strcmp(key, "MaxRefresh") == 0) {
@@ -285,10 +424,12 @@ int display_store_save(const DisplayStore *store, const char *path) {
         fprintf(fp, "LastDisplay = %s\n", store->last_display);
     if (store->last_external[0] != '\0')
         fprintf(fp, "LastExternal = %s\n", store->last_external);
+    if (store->chosen[0] != '\0')
+        fprintf(fp, "Chosen = %s\nChosenName = %s\n", store->chosen, store->chosen_name);
     for (int i = 0; i < store->count; i++) {
         const RememberedDisplay *entry = &store->displays[i];
-        fprintf(fp, "\n[%s]\nName = %s\nNative = %dx%d\nMaxRefresh = %d\n", entry->uuid, entry->name, entry->native_w,
-                entry->native_h, entry->max_refresh);
+        fprintf(fp, "\n[%s]\nName = %s\nVendor = %u\nModel = %u\nSerial = %u\nNative = %dx%d\nMaxRefresh = %d\n", entry->key,
+                entry->name, entry->vendor, entry->model, entry->serial, entry->native_w, entry->native_h, entry->max_refresh);
         if (entry->width > 0 && entry->height > 0)
             fprintf(fp, "WindowSize = %dx%d\n", entry->width, entry->height);
         if (entry->refresh > 0)
@@ -327,4 +468,38 @@ double display_debounce_wait(const DisplayDebounce *d, double now, double settle
 
 void display_debounce_clear(DisplayDebounce *d) {
     memset(d, 0, sizeof(*d));
+}
+
+void cursor_edge_reset(CursorEdge *edge) {
+    memset(edge, 0, sizeof(*edge));
+}
+
+CursorAction cursor_edge_sample(CursorEdge *edge, double now, int outside) {
+    if (!outside) {
+        // back on the game's display: a let-through is over, and a pause ends the attempt
+        if (edge->released)
+            cursor_edge_reset(edge);
+        else if (edge->in_attempt && now - edge->last_outside >= Edge_Attempt_Gap) {
+            edge->in_attempt = 0;
+            edge->attempt_end = edge->last_outside;
+        }
+        return Cursor_Stay;
+    }
+    if (edge->released)
+        return Cursor_Let_Through;
+    if (edge->in_attempt && now - edge->last_outside < Edge_Attempt_Gap) {
+        // still pushing against the edge
+        edge->pushed += fmin(now - edge->last_outside, Edge_Step_Max);
+    } else {
+        // a new attempt; one soon after the last is on purpose
+        if (edge->in_attempt)
+            edge->attempt_end = edge->last_outside;
+        edge->released = edge->attempt_end > 0 && now - edge->attempt_end < Edge_Again_Window;
+        edge->in_attempt = 1;
+        edge->pushed = 0;
+    }
+    edge->last_outside = now;
+    if (edge->pushed >= Edge_Push_Total)
+        edge->released = 1;
+    return edge->released ? Cursor_Let_Through : Cursor_Pull_Back;
 }

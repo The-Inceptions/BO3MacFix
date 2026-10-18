@@ -27,7 +27,7 @@
 
 extern uint64_t game_base_address;
 
-static const char *const game_display_names[] = { "Main display", "Built-in", "External" };
+static const char *const game_display_names[] = { "Main display", "Built-in", "External", "Chosen display" };
 static const char *const option_names[] = { "DisplayFollow", "GameDisplay", "DisplayMemory", "MatchRefreshRate", "ConfineCursor" };
 
 // guards what other threads read or change: the snapshot, the game's display and the store
@@ -41,7 +41,7 @@ static uint64_t store_version;
 // one writer of displays.ini at a time, outside `lock` so a slow disk never holds up the others
 static pthread_mutex_t save_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t saved_version;
-static int started, follow, game_display, use_memory = 1, match_refresh = 1, confine = 1, debug;
+static int started, follow, game_display, use_memory = 1, match_refresh = 1, confine, debug;
 static _Atomic uint64_t expect_until_ns;
 
 // main thread only
@@ -50,8 +50,9 @@ static int appkit_started, sleeping;
 static double woke_at, gone_since;
 static DisplayDebounce debounce;
 static dispatch_source_t timer, cursor_timer;
-static int cursor_timer_on;
+static int cursor_timer_on, told_let_through;
 static id cursor_monitor;
+static CursorEdge edge;
 static DisplayDecision pending;
 static int pending_rehome, pending_request, pending_tries, pending_generation;
 
@@ -130,6 +131,10 @@ static int take_snapshot(DisplayInfo *out, int max) {
                 }
                 d->builtin = CGDisplayIsBuiltin(id) != 0;
                 d->main = CGDisplayIsMain(id) != 0;
+                d->vendor = CGDisplayVendorNumber(id);
+                d->model = CGDisplayModelNumber(id);
+                d->serial = CGDisplaySerialNumber(id);
+                d->unit = CGDisplayUnitNumber(id);
                 CGRect bounds = CGDisplayBounds(id);
                 d->x = (int)bounds.origin.x;
                 d->y = (int)bounds.origin.y;
@@ -160,6 +165,7 @@ static int take_snapshot(DisplayInfo *out, int max) {
             }
         }
     }
+    display_policy_keys(out, n);
     return n;
 }
 
@@ -200,6 +206,59 @@ int display_follow_current(DisplayInfo *out) {
     return i >= 0;
 }
 
+static void save_store(const DisplayStore *copy, uint64_t version);
+
+// the settings page's GameDisplay choices, logged at launch and whenever they change (the test harness reads the
+// 100 + i values from it)
+static void log_choices(const int *values, char labels[][64], int n) {
+    static char last[1024];
+    char line[1024] = "display: game display choices:";
+    for (int i = 0; i < n; i++) {
+        char item[96];
+        snprintf(item, sizeof(item), "%s %d %s", i > 0 ? ";" : "", values[i], labels[i]);
+        strlcat(line, item, sizeof(line));
+    }
+    if (strcmp(line, last) == 0)
+        return;
+    strlcpy(last, line, sizeof(last));
+    printf("%s\n", line);
+}
+
+// makes a new snapshot the current one (the old one goes to `before` if it's wanted). A display displays.ini doesn't
+// know may be a remembered one on another port, with another UUID: it gets that one's memory.
+static void use_snapshot(const DisplayInfo *current, int count, DisplayInfo *before, int *before_count) {
+    char told[Display_Max][160];
+    int told_count = 0;
+    DisplayStore copy;
+    uint64_t version = 0;
+    pthread_mutex_lock(&lock);
+    if (before != NULL) {
+        *before_count = display_count;
+        memcpy(before, displays, sizeof(displays));
+    }
+    memcpy(displays, current, sizeof(displays));
+    display_count = count;
+    for (int i = 0; i < count; i++) {
+        char from[52];
+        if (display_store_adopt(&store, displays, count, i, from, sizeof(from))) {
+            snprintf(told[told_count++], sizeof(told[0]), "display: \"%s\" looks like the one remembered as %.8s",
+                     displays[i].name, from);
+            version = ++store_version;
+        }
+    }
+    if (version != 0)
+        copy = store;
+    int values[3 + Display_Max];
+    char labels[3 + Display_Max][64];
+    int choices = display_policy_choices(displays, count, values, labels, 3 + Display_Max);
+    pthread_mutex_unlock(&lock);
+    for (int i = 0; i < told_count; i++)
+        printf("%s\n", told[i]);
+    if (version != 0)
+        save_store(&copy, version);
+    log_choices(values, labels, choices);
+}
+
 #pragma mark - the cursor
 
 static uint8_t *sdl_mouse(void) {
@@ -227,7 +286,15 @@ static void keep_cursor(void) {
     }
     CGPoint point = CGEventGetLocation(event);
     CFRelease(event);
-    if (CGRectContainsPoint(bounds, point))
+    // a soft edge: a crossing is pulled back, pushing on (or a second try) lets it through, see display_policy.h
+    CursorAction action = cursor_edge_sample(&edge, now_seconds(), !CGRectContainsPoint(bounds, point));
+    if (!edge.released) {
+        told_let_through = 0;
+    } else if (!told_let_through) {
+        told_let_through = 1;
+        printf("display: letting the pointer off the game's display\n");
+    }
+    if (action != Cursor_Pull_Back)
         return;
     point.x = fmin(fmax(point.x, CGRectGetMinX(bounds)), CGRectGetMaxX(bounds) - 1);
     point.y = fmin(fmax(point.y, CGRectGetMinY(bounds)), CGRectGetMaxY(bounds) - 1);
@@ -238,8 +305,8 @@ static void keep_cursor(void) {
         printf("display: pointer brought back onto display %u at %.0f,%.0f\n", game_id, point.x, point.y);
 }
 
-// a look every 50 ms while it could matter (ConfineCursor on, the game active, more than one display), for a pointer
-// that something else moved, which sends the game no mouse events. Nothing runs with one display.
+// a look every 50 ms while it could matter (ConfineCursor on, the game active, more than one display), so a pointer that
+// something else moved (which sends the game no mouse events) counts too. Nothing runs with one display.
 static void update_cursor_timer(void) {
     if (!appkit_started)
         return;
@@ -344,8 +411,8 @@ static void run_move(int generation) {
     int i = display_policy_find(displays, display_count, game_id);
     if (i >= 0)
         game_info = displays[i];
-    if (i >= 0 && !displays[i].builtin && strcmp(store.last_external, displays[i].uuid) != 0) {
-        strlcpy(store.last_external, displays[i].uuid, sizeof(store.last_external));
+    if (i >= 0 && !displays[i].builtin && strcmp(store.last_external, displays[i].key) != 0) {
+        strlcpy(store.last_external, displays[i].key, sizeof(store.last_external));
         display_store_add(&store, &displays[i]);
         copy = store;
         version = ++store_version;
@@ -396,16 +463,12 @@ static void evaluate(void) {
     if (count <= 0)
         return;
     uint32_t sdl_first = sdl_displays_id(0);
+    int before_count = 0;
+    use_snapshot(current, count, before, &before_count);
     pthread_mutex_lock(&lock);
-    int before_count = display_count;
-    memcpy(before, displays, sizeof(before));
-    memcpy(displays, current, sizeof(displays));
-    display_count = count;
     if (game_id == 0)
         game_id = sdl_first != 0 ? sdl_first : CGMainDisplayID();
     uint32_t game = game_id;
-    char last_external[40];
-    strlcpy(last_external, store.last_external, sizeof(last_external));
     pthread_mutex_unlock(&lock);
     log_changes(before, before_count, current, count);
     update_cursor_timer();
@@ -423,8 +486,14 @@ static void evaluate(void) {
         return;
     }
     // windowed: no forced moves, SDL's display 0 just follows the window once it's settled on a screen
-    int target = fullscreen == 0 && window_display != 0 ? display_policy_find(current, count, window_display)
-                                                         : display_policy_target(current, count, game_display, last_external);
+    int target;
+    if (fullscreen == 0 && window_display != 0) {
+        target = display_policy_find(current, count, window_display);
+    } else {
+        pthread_mutex_lock(&lock);
+        target = display_policy_target(current, count, game_display, &store);
+        pthread_mutex_unlock(&lock);
+    }
     int here = display_policy_find(current, count, game);
     if (game_info.id != game) {
         int old = display_policy_find(before, before_count, game);
@@ -485,7 +554,7 @@ static void evaluate(void) {
                 version = ++store_version;
             }
         }
-        RememberedDisplay *entry = use_memory ? display_store_find(&store, current[target].uuid) : NULL;
+        RememberedDisplay *entry = use_memory ? display_store_find(&store, current[target].key) : NULL;
         if (entry != NULL)
             memory = *entry;
         pthread_mutex_unlock(&lock);
@@ -571,11 +640,9 @@ static void start_appkit(void) {
     // AppKit's names and refresh rates, without treating them as a change
     DisplayInfo current[Display_Max];
     int count = take_snapshot(current, Display_Max);
+    if (count > 0)
+        use_snapshot(current, count, NULL, NULL);
     pthread_mutex_lock(&lock);
-    if (count > 0) {
-        memcpy(displays, current, sizeof(displays));
-        display_count = count;
-    }
     if (game_id == 0)
         game_id = CGMainDisplayID();
     int i = display_policy_find(displays, display_count, game_id);
@@ -610,6 +677,7 @@ static void start_appkit(void) {
         woke();
     }];
     [center addObserverForName:NSApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
+        cursor_edge_reset(&edge);
         update_cursor_timer();
     }];
     [center addObserverForName:NSApplicationDidResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
@@ -635,7 +703,10 @@ void display_follow_init(int follow_setting) {
     started = 1;
     // a plain exit() runs atexit handlers; ExitFix's _exit on the game thread calls display_follow_save itself
     atexit(save_at_exit);
-    if (follow)
+    if (follow && game_display == Game_Display_Chosen && store.chosen_name[0] != '\0')
+        printf("display: following display changes, GameDisplay = %s (\"%s\")\n", game_display_names[game_display],
+               store.chosen_name);
+    else if (follow)
         printf("display: following display changes, GameDisplay = %s\n", game_display_names[game_display]);
     else
         printf("display: not following display changes (DisplayFollow = 0)\n");
@@ -650,12 +721,10 @@ uint32_t display_follow_launch_target(void) {
         return 0;
     DisplayInfo current[Display_Max];
     int count = take_snapshot(current, Display_Max);
+    if (count > 0)
+        use_snapshot(current, count, NULL, NULL);
     pthread_mutex_lock(&lock);
-    if (count > 0) {
-        memcpy(displays, current, sizeof(displays));
-        display_count = count;
-    }
-    int target = follow ? display_policy_target(current, count, game_display, store.last_external) : -1;
+    int target = follow ? display_policy_target(current, count, game_display, &store) : -1;
     game_id = target >= 0 ? current[target].id : CGMainDisplayID();
     int i = display_policy_find(current, count, game_id);
     if (i >= 0)
@@ -740,13 +809,31 @@ int display_follow_set_option(const char *name, int value) {
     if (!display_follow_owns(name))
         return 0;
     int look_again = 0;
+    DisplayStore copy;
+    uint64_t version = 0;
+    char told[128] = "";
     pthread_mutex_lock(&lock);
     if (strcmp(name, "DisplayFollow") == 0) {
         look_again = !follow && value != 0;
         follow = value != 0;
     } else if (strcmp(name, "GameDisplay") == 0) {
-        look_again = game_display != value;
-        game_display = value >= 0 && value <= 2 ? value : 0;
+        int rule = value < 0 || value > Game_Display_Chosen ? Game_Display_Main : value;
+        if (value >= Game_Display_Pick) {
+            // a display picked by name on the settings page becomes the chosen display (gone since the page listed it:
+            // nothing changes)
+            int i = value - Game_Display_Pick;
+            rule = game_display;
+            if (i < display_count && display_store_add(&store, &displays[i]) != NULL) {
+                strlcpy(store.chosen, displays[i].key, sizeof(store.chosen));
+                strlcpy(store.chosen_name, displays[i].name, sizeof(store.chosen_name));
+                copy = store;
+                version = ++store_version;
+                rule = Game_Display_Chosen;
+                snprintf(told, sizeof(told), "display: the game's display is \"%s\" now", displays[i].name);
+            }
+        }
+        look_again = game_display != rule || version != 0;
+        game_display = rule;
     } else if (strcmp(name, "DisplayMemory") == 0) {
         use_memory = value != 0;
     } else if (strcmp(name, "MatchRefreshRate") == 0) {
@@ -755,6 +842,10 @@ int display_follow_set_option(const char *name, int value) {
         confine = value != 0;
     }
     pthread_mutex_unlock(&lock);
+    if (version != 0)
+        save_store(&copy, version);
+    if (told[0] != '\0')
+        printf("%s\n", told);
     if (!started)
         return 1;
     // the settings page runs on the engine thread: move (or change the cursor) from the main thread, without waiting
@@ -787,9 +878,9 @@ void display_follow_save(void) {
     RememberedDisplay *entry = i >= 0 ? display_store_add(&store, &displays[i]) : NULL;
     if (entry != NULL) {
         // config.ini (which the game saved just before quitting) now has this display's values
-        strlcpy(store.last_display, entry->uuid, sizeof(store.last_display));
+        strlcpy(store.last_display, entry->key, sizeof(store.last_display));
         if (!displays[i].builtin)
-            strlcpy(store.last_external, entry->uuid, sizeof(store.last_external));
+            strlcpy(store.last_external, entry->key, sizeof(store.last_external));
         if (use_memory && have_values) {
             entry->width = values.width;
             entry->height = values.height;
@@ -813,5 +904,23 @@ void display_follow_print_state(const char *why) {
     present_describe(present, sizeof(present));
     printf("display state: display=%u uuid=%.8s builtin=%d pixels=%dx%d scale=%g hz=%d %s %s %s cursor=%s why=%s\n", d.id,
            d.uuid, d.builtin, d.pixel_w, d.pixel_h, d.scale, d.refresh, sdl, engine, present,
-           cursor_confined() ? "confined" : "free", why);
+           cursor_confined() && !edge.released ? "confined" : "free", why);
+}
+
+int display_follow_game_display_choices(int *values, char labels[][64], int max) {
+    pthread_mutex_lock(&lock);
+    int n = display_policy_choices(displays, display_count, values, labels, max);
+    pthread_mutex_unlock(&lock);
+    return n;
+}
+
+int display_follow_game_display_current(void) {
+    pthread_mutex_lock(&lock);
+    int value = display_policy_current(game_display, displays, display_count, &store);
+    pthread_mutex_unlock(&lock);
+    return value;
+}
+
+int display_follow_persisted_value(const char *name, int value) {
+    return display_policy_persisted(name, value);
 }

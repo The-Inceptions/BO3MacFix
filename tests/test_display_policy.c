@@ -1,5 +1,5 @@
 // Tests for display_policy.c: which display the game uses, the resolution and refresh rate it gets there,
-// displays.ini, and the debounce. No game or display needed.
+// displays.ini, telling displays apart, the debounce, and ConfineCursor's soft edge. No game or display needed.
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,12 +8,21 @@
 
 #include "../source/display_policy.h"
 
-static const DisplayInfo builtin = { 1, "37D8832A-2D66-02CA-B9F7-8F30A301B230", "Built-in Retina Display", 1, 1,
-                                     0, 0, 1728, 1117, 3456, 2234, 3456, 2234, 2.0, 120, 1, 32 };
-static const DisplayInfo gaming = { 2, "A5B77482-F6CF-4007-8E6B-3044BFC95B55", "Gaming monitor", 0, 0,
-                                    1728, 0, 1920, 1080, 3840, 2160, 3840, 2160, 2.0, 240, 1, 0 };
-static const DisplayInfo tv = { 3, "CB214AE0-3710-4F1F-8869-3AF9C23E6F65", "TV", 0, 0,
-                                -1920, 0, 1920, 1080, 1920, 1080, 1920, 1080, 1.0, 60, 0, 0 };
+#define Builtin_UUID "37D8832A-2D66-02CA-B9F7-8F30A301B230"
+#define Gaming_UUID "A5B77482-F6CF-4007-8E6B-3044BFC95B55"
+#define TV_UUID "CB214AE0-3710-4F1F-8869-3AF9C23E6F65"
+
+static const DisplayInfo builtin = { .id = 1, .uuid = Builtin_UUID, .key = Builtin_UUID, .name = "Built-in Retina Display",
+                                     .builtin = 1, .main = 1, .w = 1728, .h = 1117, .pixel_w = 3456, .pixel_h = 2234,
+                                     .native_w = 3456, .native_h = 2234, .scale = 2.0, .refresh = 120, .variable_refresh = 1,
+                                     .notch = 32, .vendor = 1552, .model = 41011 };
+static const DisplayInfo gaming = { .id = 2, .uuid = Gaming_UUID, .key = Gaming_UUID, .name = "Gaming monitor", .x = 1728,
+                                    .w = 1920, .h = 1080, .pixel_w = 3840, .pixel_h = 2160, .native_w = 3840, .native_h = 2160,
+                                    .scale = 2.0, .refresh = 240, .variable_refresh = 1, .vendor = 1138, .model = 1700,
+                                    .serial = 777 };
+static const DisplayInfo tv = { .id = 3, .uuid = TV_UUID, .key = TV_UUID, .name = "TV", .x = -1920, .w = 1920, .h = 1080,
+                                .pixel_w = 1920, .pixel_h = 1080, .native_w = 1920, .native_h = 1080, .scale = 1.0, .refresh = 60,
+                                .vendor = 19501, .model = 2 };
 
 static RememberedDisplay shape(const DisplayInfo *display) {
     RememberedDisplay out;
@@ -21,31 +30,167 @@ static RememberedDisplay shape(const DisplayInfo *display) {
     return out;
 }
 
+// another of the same kind of monitor: a serial-less XB273K GP with its own UUID
+static DisplayInfo another(const DisplayInfo *display, uint32_t id, const char *uuid) {
+    DisplayInfo out = *display;
+    out.id = id;
+    out.main = 0;
+    strcpy(out.uuid, uuid);
+    strcpy(out.key, uuid);
+    return out;
+}
+
 static void test_target(void) {
     DisplayInfo all[] = { builtin, gaming, tv };
-    assert(display_policy_target(all, 3, 0, "") == 0);                   // Main display
-    assert(display_policy_target(all, 3, 1, "") == 0);                   // Built-in
-    assert(display_policy_target(all, 3, 2, "") == 1);                   // External: the fastest one
-    assert(display_policy_target(all, 3, 2, tv.uuid) == 2);              // External: the last one used, when it's there
-    assert(display_policy_target(all, 3, 2, builtin.uuid) == 1);         // a built-in is never "the last external"
+    DisplayStore store = { 0 };
+    assert(display_policy_target(all, 3, 0, &store) == 0);              // Main display
+    assert(display_policy_target(all, 3, 1, &store) == 0);              // Built-in
+    assert(display_policy_target(all, 3, 2, &store) == 1);              // External: the fastest one
+    strcpy(store.last_external, TV_UUID);
+    assert(display_policy_target(all, 3, 2, &store) == 2);              // External: the last one used, when it's there
+    strcpy(store.last_external, Builtin_UUID);
+    assert(display_policy_target(all, 3, 2, &store) == 1);              // a built-in is never "the last external"
 
     // the gaming monitor is the main display (lid closed, or set as main)
     DisplayInfo desk[] = { gaming, tv };
     desk[0].main = 1;
-    assert(display_policy_target(desk, 2, 0, "") == 0);
-    assert(display_policy_target(desk, 2, 1, "") == 0);                  // no built-in: the main display
-    assert(display_policy_target(desk, 2, 2, tv.uuid) == 1);
+    strcpy(store.last_external, TV_UUID);
+    assert(display_policy_target(desk, 2, 0, &store) == 0);
+    assert(display_policy_target(desk, 2, 1, &store) == 0);             // no built-in: the main display
+    assert(display_policy_target(desk, 2, 2, &store) == 1);
 
     DisplayInfo laptop[] = { builtin };
-    assert(display_policy_target(laptop, 1, 2, gaming.uuid) == 0);       // no external: the built-in
-    assert(display_policy_target(NULL, 0, 0, "") == -1);
+    assert(display_policy_target(laptop, 1, 2, &store) == 0);           // no external: the built-in
+    assert(display_policy_target(NULL, 0, 0, &store) == -1);
 
     // the same refresh rate: the one with more pixels
-    DisplayInfo two[] = { builtin, tv, tv };
-    two[2].id = 4;
+    DisplayStore none = { 0 };
+    DisplayInfo two[] = { builtin, tv, another(&tv, 4, "11111111-0000-0000-0000-000000000004") };
     two[2].native_w = 3840;
     two[2].native_h = 2160;
-    assert(display_policy_target(two, 3, 2, "") == 2);
+    assert(display_policy_target(two, 3, 2, &none) == 2);
+}
+
+static void test_chosen(void) {
+    DisplayInfo all[] = { builtin, gaming, tv };
+    DisplayStore store = { 0 };
+    display_store_add(&store, &tv);
+    strcpy(store.chosen, TV_UUID);
+    strcpy(store.chosen_name, tv.name);
+    assert(display_policy_target(all, 3, 3, &store) == 2);              // the chosen display, though it's slower
+
+    // not connected: the External rule, then the built-in, then the main display
+    DisplayInfo no_tv[] = { builtin, gaming };
+    assert(display_policy_target(no_tv, 2, 3, &store) == 1);
+    DisplayInfo laptop[] = { builtin };
+    assert(display_policy_target(laptop, 1, 3, &store) == 0);
+    DisplayInfo desk[] = { gaming };
+    desk[0].main = 1;
+    assert(display_policy_target(desk, 1, 3, &store) == 0);
+
+    // nothing chosen yet: as External
+    DisplayStore empty = { 0 };
+    empty.count = 0;
+    assert(display_policy_target(all, 3, 3, &empty) == 1);
+
+    // the chosen monitor on another port (another UUID, the same serial)
+    DisplayStore monitor = { 0 };
+    display_store_add(&monitor, &gaming);
+    strcpy(monitor.chosen, Gaming_UUID);
+    DisplayInfo moved[] = { builtin, tv, another(&gaming, 9, "22222222-0000-0000-0000-000000000009") };
+    assert(display_policy_target(moved, 3, 3, &monitor) == 2);
+}
+
+static void test_choices(void) {
+    DisplayInfo xb = { .id = 5, .uuid = "33333333-0000-0000-0000-000000000005", .key = "33333333-0000-0000-0000-000000000005",
+                       .name = "XB273K GP", .native_w = 3840, .native_h = 2160, .refresh = 120, .vendor = 1138, .model = 1800 };
+    DisplayInfo all[] = { builtin, xb, another(&xb, 6, "33333333-0000-0000-0000-000000000006") };
+    int values[8];
+    char labels[8][64];
+    int n = display_policy_choices(all, 3, values, labels, 8);
+    assert(n == 6);
+    assert(values[0] == 0 && strcmp(labels[0], "Main display") == 0);
+    assert(values[1] == 1 && strcmp(labels[1], "Built-in") == 0);
+    assert(values[2] == 2 && strcmp(labels[2], "External") == 0);
+    assert(values[3] == 100 && strcmp(labels[3], "Built-in Retina Display") == 0);
+    assert(values[4] == 101 && strcmp(labels[4], "XB273K GP") == 0);
+    assert(values[5] == 102 && strcmp(labels[5], "XB273K GP (2)") == 0);
+    assert(display_policy_choices(all, 3, values, labels, 4) == 4 && values[3] == 100);
+
+    // what the page shows, and what settings.ini keeps
+    DisplayStore store = { 0 };
+    display_store_add(&store, &all[2]);
+    strcpy(store.chosen, all[2].key);
+    assert(display_policy_current(2, all, 3, &store) == 2);
+    assert(display_policy_current(3, all, 3, &store) == 102);
+    DisplayInfo laptop[] = { builtin, tv };
+    assert(display_policy_current(3, laptop, 2, &store) == 3);          // the chosen one isn't connected
+    // without it, the other serial-less XB273K GP (unknown to displays.ini) can't be told apart from it
+    assert(display_policy_current(3, all, 2, &store) == 101);
+    assert(display_policy_persisted("GameDisplay", 102) == 3);
+    assert(display_policy_persisted("GameDisplay", 2) == 2);
+    assert(display_policy_persisted("ConfineCursor", 1) == 1);
+}
+
+static void test_identity(void) {
+    // two identical monitors that macOS gave the same UUID: the second is keyed by its unit number
+    DisplayInfo pair[] = { gaming, gaming };
+    pair[1].id = 7;
+    pair[1].unit = 3;
+    display_policy_keys(pair, 2);
+    assert(strcmp(pair[0].key, Gaming_UUID) == 0 && strcmp(pair[1].key, Gaming_UUID "#3") == 0);
+
+    // the gaming monitor on another port: a new UUID, the same vendor, model and serial
+    DisplayStore store = { 0 };
+    RememberedDisplay *old = display_store_add(&store, &gaming);
+    old->width = 3840;
+    old->height = 2160;
+    old->refresh = 240;
+    strcpy(store.last_external, Gaming_UUID);
+    strcpy(store.chosen, Gaming_UUID);
+    strcpy(store.last_display, Gaming_UUID);
+    DisplayInfo now[] = { builtin, another(&gaming, 9, "22222222-0000-0000-0000-000000000009") };
+    char from[64];
+    assert(!display_store_adopt(&store, now, 2, 0, from, sizeof(from)));   // no match for the built-in
+    assert(display_store_adopt(&store, now, 2, 1, from, sizeof(from)) && strcmp(from, Gaming_UUID) == 0);
+    RememberedDisplay *adopted = display_store_find(&store, now[1].key);
+    assert(adopted != NULL && adopted->width == 3840 && adopted->height == 2160 && adopted->refresh == 240);
+    assert(strcmp(store.last_external, now[1].key) == 0 && strcmp(store.chosen, now[1].key) == 0 &&
+           strcmp(store.last_display, now[1].key) == 0);
+    assert(!display_store_adopt(&store, now, 2, 1, from, sizeof(from)));   // known now
+
+    // serial-less: the same vendor, model, name and native size, if exactly one remembered display is like it
+    DisplayInfo xb = { .id = 5, .uuid = "33333333-0000-0000-0000-000000000005", .key = "33333333-0000-0000-0000-000000000005",
+                       .name = "XB273K GP", .native_w = 3840, .native_h = 2160, .refresh = 120, .vendor = 1138, .model = 1800 };
+    DisplayStore one = { 0 };
+    display_store_add(&one, &xb)->width = 2560;
+    DisplayInfo plugged[] = { builtin, another(&xb, 8, "44444444-0000-0000-0000-000000000008") };
+    assert(display_store_adopt(&one, plugged, 2, 1, from, sizeof(from)) && strcmp(from, xb.key) == 0);
+    assert(display_store_find(&one, plugged[1].key)->width == 2560);
+
+    // two like it: no telling which, so no memory
+    DisplayStore two = { 0 };
+    display_store_add(&two, &xb);
+    DisplayInfo xb2 = another(&xb, 6, "33333333-0000-0000-0000-000000000006");
+    display_store_add(&two, &xb2);
+    assert(!display_store_adopt(&two, plugged, 2, 1, from, sizeof(from)));
+
+    // the one like it is connected right now, so this is another monitor
+    DisplayStore connected = { 0 };
+    display_store_add(&connected, &xb);
+    DisplayInfo both[] = { xb, another(&xb, 8, "44444444-0000-0000-0000-000000000008") };
+    assert(!display_store_adopt(&connected, both, 2, 1, from, sizeof(from)));
+
+    // finding a remembered display that isn't under its key: by serial, else the only one of its kind
+    DisplayStore remembered = { 0 };
+    display_store_add(&remembered, &gaming);
+    display_store_add(&remembered, &xb);
+    DisplayInfo elsewhere[] = { builtin, another(&gaming, 9, "22222222-0000-0000-0000-000000000009"),
+                                another(&xb, 8, "44444444-0000-0000-0000-000000000008") };
+    assert(display_policy_find_remembered(elsewhere, 3, &remembered, Gaming_UUID) == 1);
+    assert(display_policy_find_remembered(elsewhere, 3, &remembered, xb.key) == 2);
+    assert(display_policy_find_remembered(elsewhere, 3, &remembered, TV_UUID) == -1);
+    assert(display_policy_find_remembered(elsewhere, 3, &remembered, Builtin_UUID) == 0);
 }
 
 static void test_moving(void) {
@@ -160,7 +305,7 @@ static void test_launch(void) {
     // last on the built-in: config.ini's values are the built-in's
     RememberedDisplay *entry = display_store_add(&store, &builtin);
     assert(entry != NULL);
-    strcpy(store.last_display, builtin.uuid);
+    strcpy(store.last_display, Builtin_UUID);
     assert(!display_policy_launch(&store, all, 2, &builtin, &now, 1, 1, &d));
     assert(display_policy_launch(&store, all, 2, &gaming, &now, 1, 1, &d));
     assert(d.width == 2816 && d.height == 1584 && d.refresh == 240 && d.max_fps == 240);
@@ -211,24 +356,30 @@ static void test_store(void) {
     close(fd);
 
     DisplayStore store = { 0 };
-    RememberedDisplay *a = display_store_add(&store, &builtin), *b = display_store_add(&store, &gaming);
+    RememberedDisplay *a = display_store_add(&store, &builtin);
+    display_store_add(&store, &gaming);
     a->width = 2624;
     a->height = 1696;
     a->refresh = 120;
     assert(display_store_add(&store, &builtin) == a && store.count == 2);
-    strcpy(store.last_display, gaming.uuid);
-    strcpy(store.last_external, gaming.uuid);
+    DisplayInfo second = gaming;
+    strcpy(second.key, Gaming_UUID "#3");
+    display_store_add(&store, &second);
+    strcpy(store.last_display, Gaming_UUID);
+    strcpy(store.last_external, Gaming_UUID);
+    strcpy(store.chosen, Gaming_UUID "#3");
+    strcpy(store.chosen_name, "Gaming monitor (2)");
     assert(display_store_save(&store, path));
 
     DisplayStore loaded;
     assert(display_store_load(&loaded, path));
-    assert(loaded.count == 2 && strcmp(loaded.last_display, gaming.uuid) == 0 && strcmp(loaded.last_external, gaming.uuid) == 0);
-    RememberedDisplay *la = display_store_find(&loaded, builtin.uuid), *lb = display_store_find(&loaded, gaming.uuid);
-    assert(la != NULL && lb != NULL);
+    assert(loaded.count == 3 && strcmp(loaded.last_display, Gaming_UUID) == 0 && strcmp(loaded.last_external, Gaming_UUID) == 0);
+    assert(strcmp(loaded.chosen, Gaming_UUID "#3") == 0 && strcmp(loaded.chosen_name, "Gaming monitor (2)") == 0);
+    RememberedDisplay *la = display_store_find(&loaded, Builtin_UUID), *lb = display_store_find(&loaded, Gaming_UUID);
+    assert(la != NULL && lb != NULL && display_store_find(&loaded, Gaming_UUID "#3") != NULL);
     assert(strcmp(la->name, builtin.name) == 0 && la->native_w == 3456 && la->native_h == 2234 && la->max_refresh == 120);
-    assert(la->width == 2624 && la->height == 1696 && la->refresh == 120);
-    assert(lb->native_w == 3840 && lb->max_refresh == 240 && lb->width == 0 && lb->refresh == 0);
-    (void)b;
+    assert(la->width == 2624 && la->height == 1696 && la->refresh == 120 && la->vendor == 1552 && la->model == 41011);
+    assert(lb->native_w == 3840 && lb->max_refresh == 240 && lb->width == 0 && lb->refresh == 0 && lb->serial == 777);
 
     FILE *fp = fopen(path, "w");
     fputs("// comment\nLastDisplay = abc\n\n[abc]\nName = Some TV (HDMI)\nUnknown = 1\nWindowSize = 1280x720\n", fp);
@@ -265,8 +416,64 @@ static void test_debounce(void) {
     assert(display_debounce_wait(&d, 5.5, 0.75, 5.0) == 0);
 }
 
+// the 50 ms timer's looks while the pointer sits on the game's display, from..to
+static void look_inside(CursorEdge *edge, double from, double to) {
+    for (double t = from; t < to; t += 0.05)
+        assert(cursor_edge_sample(edge, t, 0) == Cursor_Stay);
+}
+
+static void test_cursor_edge(void) {
+    // a single warp onto another display (what S9 does from another process): pulled back, and again later
+    CursorEdge edge = { 0 };
+    assert(cursor_edge_sample(&edge, 1.00, 1) == Cursor_Pull_Back);
+    look_inside(&edge, 1.05, 2.0);
+    assert(cursor_edge_sample(&edge, 2.00, 1) == Cursor_Pull_Back);
+
+    // an overshoot while moving fast (0.1 s past the edge, mouse events every 8 ms): held back the whole time
+    cursor_edge_reset(&edge);
+    for (double t = 10.0; t < 10.1; t += 0.008)
+        assert(cursor_edge_sample(&edge, t, 1) == Cursor_Pull_Back);
+    look_inside(&edge, 10.15, 11.0);
+    assert(!edge.released);
+
+    // pushing on for half a second gets through, and it stays free while it's off the game's display
+    cursor_edge_reset(&edge);
+    CursorAction action = Cursor_Pull_Back;
+    double t = 20.0;
+    for (; action == Cursor_Pull_Back && t < 21.0; t += 0.008)
+        action = cursor_edge_sample(&edge, t, 1);
+    assert(action == Cursor_Let_Through && t > 20.45 && t < 20.6);
+    assert(cursor_edge_sample(&edge, 21.5, 1) == Cursor_Let_Through);
+    // back on the game's display: the edge holds again
+    assert(cursor_edge_sample(&edge, 22.0, 0) == Cursor_Stay && !edge.released);
+    assert(cursor_edge_sample(&edge, 22.05, 1) == Cursor_Pull_Back);
+
+    // a second try soon after the first (a pause on the game's display in between) gets through
+    cursor_edge_reset(&edge);
+    assert(cursor_edge_sample(&edge, 30.00, 1) == Cursor_Pull_Back);
+    look_inside(&edge, 30.05, 30.3);
+    assert(cursor_edge_sample(&edge, 30.30, 1) == Cursor_Let_Through);
+    assert(cursor_edge_sample(&edge, 30.35, 1) == Cursor_Let_Through);
+
+    // a second try after 0.6 s is a new first try
+    cursor_edge_reset(&edge);
+    assert(cursor_edge_sample(&edge, 40.00, 1) == Cursor_Pull_Back);
+    look_inside(&edge, 40.05, 40.8);
+    assert(cursor_edge_sample(&edge, 40.80, 1) == Cursor_Pull_Back);
+
+    // the game becoming active again re-arms it
+    cursor_edge_reset(&edge);
+    edge.released = 1;
+    assert(cursor_edge_sample(&edge, 50.0, 1) == Cursor_Let_Through);
+    cursor_edge_reset(&edge);
+    assert(cursor_edge_sample(&edge, 50.1, 1) == Cursor_Pull_Back);
+}
+
 int main(void) {
     test_target();
+    test_chosen();
+    test_choices();
+    test_identity();
     test_moving();
     test_same_display_changed();
     test_refresh();
@@ -274,6 +481,7 @@ int main(void) {
     test_parse();
     test_store();
     test_debounce();
+    test_cursor_edge();
     printf("display policy tests passed\n");
     return 0;
 }
