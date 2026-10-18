@@ -32,6 +32,8 @@ bool prepatch_set_value(uint32_t offset, uint32_t value);
 
 // prints what was set up from the pre-patched copy, and whether any game code page was written
 void prepatch_report(void);
+// the same at quit, which also counts what settings changed from the menu while the game ran
+void prepatch_report_at_quit(void);
 
 // for the launcher, which loads BO3MacFix.dylib to call these. Both return 0 on success, otherwise -1 with the
 // reason in message.

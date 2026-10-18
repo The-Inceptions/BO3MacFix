@@ -14,6 +14,7 @@
 #include <CoreAudio/CoreAudio.h>
 #include "display_follow.h"
 #include "dyld-interposing.h"
+#include "prepatch.h"
 #include "qol.h"
 
 static bool exit_fix = false;
@@ -30,6 +31,7 @@ static atomic_bool audio_follow = false;
 __attribute__((noreturn)) void exit_new(int status) {
     if (exit_fix && !pthread_main_np()) {
         printf("BO3MacFix: the game quit with status %i, ending it without running static destructors\n", status);
+        prepatch_report_at_quit();
         display_follow_save();
         fflush(NULL);
         _exit(status);

@@ -436,6 +436,13 @@ void prepatch_report(void) {
            written_code_pages());
 }
 
+void prepatch_report_at_quit(void) {
+    if (!prepatch_active())
+        return;
+    printf("BO3MacFix: pre-patched executable at quit: %i of %u hooks set, %i done in memory, %i refused, game code "
+           "pages written: %i\n", hooks_set, header->hook_count, in_memory, refused, written_code_pages());
+}
+
 #pragma mark - building the copy
 
 typedef struct {
