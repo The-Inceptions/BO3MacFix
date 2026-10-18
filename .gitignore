@@ -23,3 +23,4 @@ tests/test_settings_ini
 tests/test_notice_queue
 tests/test_controllers
 tests/test_gc_bridge
+tests/test_frame_limit

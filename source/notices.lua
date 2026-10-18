@@ -1,7 +1,8 @@
--- BO3MacFix's on-screen notices and PauseOnDisconnect, the UI half of notices.m. The first menu made in each UI Lua
--- state loads this. A timer then looks four times a second for a notice to show (one at a time, each for four seconds
--- at the top of the screen) and for a request to pause because a controller disconnected. The argument says to log
--- every menu made (BO3MACFIX_NOTICESDEBUG=1).
+-- BO3MacFix's on-screen notices and PauseOnDisconnect, the UI half of notices.m, and whether the pause menu is open
+-- in a match for PauseMenuFPS. The first menu made in each UI Lua state loads this. A timer then looks four times a
+-- second for a notice to show (one at a time, each for four seconds at the top of the screen), for a request to pause
+-- because a controller disconnected, and at the pause menu. The argument says to log every menu made
+-- (BO3MACFIX_NOTICESDEBUG=1).
 local debug_menus = ...
 local bo3macfix = BO3MacFix
 if bo3macfix == nil or bo3macfix.TakeNotice == nil or LUI == nil or LUI.roots == nil or LUI.UITimer == nil then
@@ -9,6 +10,7 @@ if bo3macfix == nil or bo3macfix.TakeNotice == nil or LUI == nil or LUI.roots ==
 end
 local log = bo3macfix.NoticeLog or function() end
 local take_notice, take_pause, pause_game = bo3macfix.TakeNotice, bo3macfix.TakePauseRequest, bo3macfix.PauseGame
+local tell_pause_menu = bo3macfix.PauseMenuOpen or function() end
 local clock = bo3macfix.NoticeClock -- seconds
 
 local POLL_MS, SHOW, FADE = 250, 4.0, 0.5
@@ -83,8 +85,10 @@ local function fade_out()
     toast:setAlpha(0)
 end
 
--- the pause menu (StartMenu_Main) is open, from NoticesMenuCreated
-local pause_menu_open = false
+-- the pause menu (StartMenu_Main) from NoticesMenuCreated until it closes, and whether it has been on a root yet
+local pause_menu, pause_menu_shown = nil, false
+-- whether BO3MacFix was last told the pause menu is open in a match
+local told_open = false
 
 -- an Engine function's answer as true or false (some return 0 or 1), nil if there's no such function or it failed
 local function ask(fn, ...)
@@ -102,7 +106,7 @@ local function try_pause(forced)
         why = "not in a match"
     elseif can_pause == false then
         why = "this game can't pause"
-    elseif pause_menu_open then
+    elseif pause_menu ~= nil then
         why = "the pause menu is open already"
     elseif gamepad == false and not forced then
         why = "the last input came from the keyboard or mouse"
@@ -110,6 +114,33 @@ local function try_pause(forced)
     log("PauseOnDisconnect: in a match " .. tostring(in_game) .. ", can pause " .. tostring(can_pause) ..
         ", last input a controller " .. tostring(gamepad) .. (why and (", not pausing: " .. why) or ", pausing"))
     if why == nil then pause_game() end
+end
+
+local function pause_menu_closed(menu)
+    if menu ~= pause_menu then return end -- an older one
+    pause_menu = nil
+    if told_open then
+        told_open = false
+        tell_pause_menu(0)
+    end
+end
+
+-- PauseMenuFPS: while the pause menu is on a root in a match, BO3MacFix is told so on every poll (it stops counting it
+-- as open 2 seconds after the last time, so a UI state that goes away with the menu open, as when a map loads, doesn't
+-- leave the limit on), and once when that ends: the menu closed, or the match ended. A pause menu that has left its
+-- root without its close running (the UI closing everything at once) counts as closed.
+local function check_pause_menu()
+    local open = false
+    if pause_menu ~= nil then
+        if root_of(pause_menu) ~= nil then
+            pause_menu_shown = true
+            open = ask(Engine.IsInGame) == true
+        elseif pause_menu_shown then
+            pause_menu_closed(pause_menu)
+        end
+    end
+    if open or told_open then tell_pause_menu(open and 1 or 0) end
+    told_open = open
 end
 
 -- the latest menu made, until it's on a root (it goes on one after it's made, in the same frame)
@@ -164,6 +195,7 @@ local function poll()
             end
         end
     end
+    check_pause_menu()
     local forced = take_pause()
     if forced ~= nil then try_pause(forced) end
 end
@@ -189,8 +221,8 @@ function bo3macfix.NoticesMenuCreated(name, menu)
     start_timer()
     new_menu, new_menu_name, new_menu_looks = menu, name, 0
     if name == "StartMenu_Main" then
-        pause_menu_open = true
-        LUI.OverrideFunction_CallOriginalSecond(menu, "close", function() pause_menu_open = false end)
+        pause_menu, pause_menu_shown = menu, false
+        LUI.OverrideFunction_CallOriginalSecond(menu, "close", function() pause_menu_closed(menu) end)
     end
 end
 

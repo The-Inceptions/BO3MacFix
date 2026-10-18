@@ -8,12 +8,15 @@
 //   panel's resolution instead when the display is in a scaled mode.
 // - FrameStats: logs the frame rate, 1% low and worst frame time every few seconds, for benchmarking.
 // - BatteryFPS: paces frames to that rate only while the Mac runs on battery, to save power.
+// - PauseMenuFPS: paces frames to that rate while the pause menu is open in a match (notices.lua says when), to save
+//   power. The lowest of these three that applies wins, see frame_limit.c.
 // - MetalHUD: turns on macOS's Metal performance HUD.
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <mach/mach.h>
 #include <stdatomic.h>
 #include <dispatch/dispatch.h>
@@ -25,6 +28,7 @@
 #include <objc/runtime.h>
 #include <objc/message.h>
 
+#include "frame_limit.h"
 #include "gpu_tweaks.h"
 #include "metalfx.h"
 #include "prepatch.h"
@@ -32,13 +36,11 @@
 
 extern uint64_t game_base_address;
 
-static double present_min_duration; // 0 when not pacing
+static frame_limits_t limits; // FramePacingFPS, BatteryFPS, PauseMenuFPS, on battery or not, the pause menu's state
 static SEL sel_present_after_minimum_duration;
 static int metalfx_active = 0;
 static int frame_stats_seconds = 0; // 0 when not logging frame stats
 static atomic_uint frame_stats_session = 0; // goes up each time FrameStats is turned on from the menu
-static double battery_min_duration = 0; // 1/BatteryFPS, 0 when not limiting on battery
-static atomic_bool on_battery = false;
 
 static int compare_floats(const void *a, const void *b) {
     float x = *(const float *)a, y = *(const float *)b;
@@ -86,9 +88,9 @@ static void frame_stats_tick(void) {
     window_start = now;
 }
 
-// FramePacingFPS and BatteryFPS keep each frame on screen for at least 1/fps seconds, which a display with a fixed refresh
-// rate rounds up to whole refreshes: 120 fps on a 144 Hz display shows each frame for 2 refreshes, so 72 fps. Says so
-// when the game's display or the rate changes to one like that.
+// FramePacingFPS, BatteryFPS and PauseMenuFPS keep each frame on screen for at least 1/fps seconds, which a display
+// with a fixed refresh rate rounds up to whole refreshes: 120 fps on a 144 Hz display shows each frame for 2
+// refreshes, so 72 fps. Says so when the game's display or the rate changes to one like that.
 static void check_pacing(double min_duration) {
     static int last_fps = 0, last_display_fps = 0;
     int fps = (int)lround(1.0 / min_duration), display_fps = present_display_max_fps();
@@ -132,9 +134,14 @@ static void present_drawable(id command_buffer, SEL sel, id drawable) {
         frame_stats_tick();
     if (metalfx_active)
         metalfx_before_present(command_buffer);
-    double min_duration = present_min_duration;
-    if (battery_min_duration > min_duration && atomic_load(&on_battery))
-        min_duration = battery_min_duration;
+    // the lowest limit that applies to this frame; the pause menu's is logged here, where it starts or stops applying
+    int log;
+    int fps = frame_limit_for_frame(&limits, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), &log);
+    if (log > 0)
+        printf("BO3MacFix: pause menu open in a match, limiting to %i fps\n", fps);
+    else if (log < 0)
+        printf("BO3MacFix: pause menu closed, frame limit off\n");
+    double min_duration = fps > 0 ? 1.0 / fps : 0;
     static unsigned int paced_frames = 0;
     if (min_duration > 0 && paced_frames++ % 120 == 0)
         check_pacing(min_duration);
@@ -212,7 +219,7 @@ static void frame_pacing_patch(int fps, code_patch_fn checked_code_patch) {
         return;
     }
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
-    present_min_duration = 1.0 / fps;
+    atomic_store(&limits.pacing_fps, fps);
     printf("pacing frames at %i fps\n", fps);
 }
 
@@ -281,12 +288,12 @@ static bool running_on_battery(void) {
 static void start_battery_watch(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        atomic_store(&on_battery, running_on_battery());
+        atomic_store(&limits.on_battery, running_on_battery());
         dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
         dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC);
         dispatch_source_set_event_handler(timer, ^{
             bool battery = running_on_battery();
-            if (battery != atomic_exchange(&on_battery, battery) && battery_min_duration > 0)
+            if (battery != atomic_exchange(&limits.on_battery, battery) && atomic_load(&limits.battery_fps) > 0)
                 printf("%s, %s\n", battery ? "running on battery" : "plugged in", battery ? "limiting the frame rate" : "frame rate unlimited");
         });
         dispatch_resume(timer);
@@ -304,9 +311,25 @@ void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch) {
         return;
     }
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
-    battery_min_duration = 1.0 / fps;
+    atomic_store(&limits.battery_fps, fps);
     start_battery_watch();
-    printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&on_battery) ? "on battery" : "plugged in");
+    printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
+}
+
+void gpu_tweaks_pause_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
+    if (fps < 30 || fps > 240)
+        return;
+    if (!redirect_present(checked_code_patch)) {
+        printf("couldn't hook Aspyr's present, no PauseMenuFPS\n");
+        return;
+    }
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    atomic_store(&limits.pause_menu_fps, fps);
+    printf("limiting the frame rate to %i fps in the pause menu\n", fps);
+}
+
+void gpu_tweaks_pause_menu_open(bool open) {
+    frame_limit_set_pause_menu(&limits, open, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
 }
 
 void gpu_tweaks_metal_hud_init(int enabled) {
@@ -345,7 +368,7 @@ bool gpu_tweaks_set_pacing(int fps) {
     if (fps != 0 && !present_live())
         return false;
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
-    present_min_duration = fps != 0 ? 1.0 / fps : 0;
+    atomic_store(&limits.pacing_fps, fps);
     printf(fps != 0 ? "pacing frames at %i fps\n" : "not pacing frames\n", fps);
     return true;
 }
@@ -358,11 +381,22 @@ bool gpu_tweaks_set_battery_fps(int fps) {
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
     if (fps != 0)
         start_battery_watch();
-    battery_min_duration = fps != 0 ? 1.0 / fps : 0;
+    atomic_store(&limits.battery_fps, fps);
     if (fps != 0)
-        printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&on_battery) ? "on battery" : "plugged in");
+        printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
     else
         printf("not limiting the frame rate on battery\n");
+    return true;
+}
+
+bool gpu_tweaks_set_pause_menu_fps(int fps) {
+    if (fps != 0 && (fps < 30 || fps > 240))
+        return false;
+    if (fps != 0 && !present_live())
+        return false;
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    atomic_store(&limits.pause_menu_fps, fps);
+    printf(fps != 0 ? "limiting the frame rate to %i fps in the pause menu\n" : "not limiting the frame rate in the pause menu\n", fps);
     return true;
 }
 

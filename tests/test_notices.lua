@@ -1,6 +1,7 @@
 -- Runs source/notices.lua against a made-up LUI and Engine, with any Lua 5.x: lua tests/test_notices.lua
 -- Checks the toast's life (shown, faded, closed, one at a time), that it goes on the root of the latest menu and back
--- on top when a menu is made, and when PauseOnDisconnect pauses.
+-- on top when a menu is made, when PauseOnDisconnect pauses, and when BO3MacFix is told the pause menu is open in a
+-- match (PauseMenuFPS).
 local failures = 0
 local function check(condition, what)
     if not condition then
@@ -39,6 +40,7 @@ end
 local full, root0 = element(), element()
 local now = 0
 local queue, pause_request, pauses, logs = {}, nil, 0, {}
+local told = {} -- what PauseMenuOpen was told, in order
 local state = { in_game = true, can_pause = true, gamepad = true }
 BO3MacFix = {
     NoticeLog = function(text) table.insert(logs, text) end,
@@ -46,6 +48,7 @@ BO3MacFix = {
     TakeNotice = function() return table.remove(queue, 1) end,
     TakePauseRequest = function() local r = pause_request pause_request = nil return r end,
     PauseGame = function() pauses = pauses + 1 end,
+    PauseMenuOpen = function(open) table.insert(told, open) end,
 }
 LUI = {
     roots = { UIRootFull = full, UIRoot0 = root0 },
@@ -191,6 +194,103 @@ tick(5)
 table.insert(queue, "after a stray menu")
 tick()
 check(select(2, toast_on(root0)) == "after a stray menu", "toasts stay on the last root a menu went on")
+
+-- PauseMenuFPS: BO3MacFix is told the pause menu is open in a match on every poll while it is, and once when it isn't
+check(told[1] == 1 and told[#told] == 0, "the pause menu above was told open, then closed")
+local function open_pause_menu(root)
+    local menu = element()
+    BO3MacFix.NoticesMenuCreated("StartMenu_Main", menu)
+    root:addElement(menu)
+    return menu
+end
+-- what the UI closing everything at once can do: off its root without its close running
+local function drop(e)
+    local siblings = e.parent.children
+    for i, sibling in ipairs(siblings) do
+        if sibling == e then table.remove(siblings, i) break end
+    end
+    e.parent = nil
+end
+
+told = {}
+local menu = element()
+BO3MacFix.NoticesMenuCreated("StartMenu_Main", menu)
+tick()
+check(#told == 0, "not told before the pause menu is on a root")
+root0:addElement(menu)
+tick()
+check(#told == 1 and told[1] == 1, "told it's open once it's on a root in a match")
+tick(3)
+check(#told == 4 and told[4] == 1, "and again on every poll while it is")
+local options = element()
+BO3MacFix.NoticesMenuCreated("StartMenu_Options", options)
+root0:addElement(options)
+tick()
+check(#told == 5 and told[5] == 1, "still open with another menu opened over it")
+options:close()
+menu:close()
+check(#told == 6 and told[6] == 0, "told it's closed as soon as it closes")
+tick(3)
+check(#told == 6, "and nothing more after that")
+
+-- the main menu's start menu
+told = {}
+state.in_game = false
+local front = open_pause_menu(full)
+tick(2)
+check(#told == 0, "never told outside a match")
+front:close()
+check(#told == 0, "nor when it closes")
+state.in_game = true
+
+-- the match ends with it open
+told = {}
+local ending = open_pause_menu(root0)
+tick()
+state.in_game = false
+tick()
+check(#told == 2 and told[1] == 1 and told[2] == 0, "told it's closed when the match ends with it open")
+tick(2)
+check(#told == 2, "once")
+ending:close()
+check(#told == 2, "and its close after that says nothing more")
+state.in_game = true
+
+-- quitting to the main menu or a map loading drops it without its close running
+told = {}
+local dropped = open_pause_menu(root0)
+tick()
+drop(dropped)
+tick()
+check(#told == 2 and told[2] == 0, "told it's closed once it has left its root without its close running")
+tick(2)
+check(#told == 2, "once")
+local paused_before = pauses
+pause_request = false
+tick()
+check(pauses == paused_before + 1, "and PauseOnDisconnect counts it as closed")
+dropped:close()
+check(#told == 2, "its close later says nothing more")
+
+-- only the latest pause menu counts
+told = {}
+local older, newer = open_pause_menu(root0), open_pause_menu(root0)
+tick()
+older:close()
+tick()
+check(#told == 2 and told[2] == 1, "an older pause menu closing doesn't close the newer one")
+newer:close()
+check(#told == 3 and told[3] == 0, "the newer one closing does")
+
+-- an Engine.IsInGame that fails counts as not in a match
+told = {}
+local is_in_game = Engine.IsInGame
+Engine.IsInGame = function() error("boom") end
+local unsure = open_pause_menu(root0)
+tick(2)
+check(#told == 0, "not told it's open when Engine.IsInGame fails")
+unsure:close()
+Engine.IsInGame = is_in_game
 
 if failures == 0 then print("test_notices.lua: all passed") end
 os.exit(failures == 0 and 0 or 1)

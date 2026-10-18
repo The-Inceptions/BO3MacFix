@@ -1101,6 +1101,10 @@ __attribute__((constructor)) static void dylib_main() {
     gpu_tweaks_battery_fps_init(read_int_setting("BatteryFPS", 0), checked_code_patch);
     gpu_tweaks_metal_hud_init(read_int_setting("MetalHUD", 0));
 
+    // limit the frame rate while the pause menu is open in a match (PauseMenuFPS, 30 by default, 0 = off), which
+    // notices.lua sees, see gpu_tweaks.c
+    gpu_tweaks_pause_menu_fps_init(read_int_setting_or_env("PauseMenuFPS", 30), checked_code_patch);
+
     // quitting without Aspyr's shutdown crash, and game audio following the default output device (see qol.c)
     qol_init(read_int_setting("ExitFix", 1), read_int_setting("AudioFollowsDefault", 1));
 

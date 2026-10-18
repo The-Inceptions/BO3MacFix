@@ -16,5 +16,5 @@ void notices_set_pause_on_disconnect(int on);
 void notices_post(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
 // adds BO3MacFix.TakeNotice and friends to a UI Lua state that has the BO3MacFix table, and has its first menu load
-// notices.lua (called from settings_menu.c)
+// notices.lua (called from settings_menu.c, once for each new UI state, which also ends PauseMenuFPS's limit)
 void notices_lua_install(lua_State *s);

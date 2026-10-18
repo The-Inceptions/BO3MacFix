@@ -67,6 +67,7 @@ static const setting_t settings[] = {
     { "FramesInFlight", "Frames in flight", "How many frames the CPU may queue ahead of the GPU: fewer means less input lag.", "Graphics", false, 3, { 1, 2, 3 }, { "1 (least lag)", "2 (normal)", "3 (smoothest)" }, 2, false },
     { "FramePacingFPS", "Frame pacing", "Keeps each frame on screen for a minimum time, for even pacing below the refresh rate.", "Graphics", false, 6, { 0, 30, 45, 60, 90, 120 }, { "Off", "30", "45", "60", "90", "120" }, 0, Live_Present },
     { "BatteryFPS", "Battery frame limit", "Limits the frame rate only while the Mac runs on battery, to save power.", "Graphics", false, 5, { 0, 30, 45, 60, 90 }, { "Off", "30", "45", "60", "90" }, 0, Live_Present },
+    { "PauseMenuFPS", "Pause menu frame limit", "Limits the frame rate while the pause menu is open in a match, to save power.", "Graphics", false, 4, { 0, 30, 45, 60 }, { "Off", "30", "45", "60" }, 30, Live_Present },
     { "MetalFXUpscale", "MetalFX upscaling", "Upscales with MetalFX when the game runs below the screen's resolution. \"Panel resolution\" is for scaled monitor modes.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "On", "On, panel resolution" }, 0, Live_Never },
     { "MetalHUD", "Metal performance HUD", "Shows macOS's Metal HUD with the frame rate and GPU time.", "Graphics", Toggle(0) },
     { "DisplayFollow", "Follow display changes", "Moves the game when displays are plugged in or unplugged, and adapts its resolution and refresh rate to the new display.", "Display", Toggle_Live(1, Live_Always) },
@@ -125,6 +126,8 @@ static bool apply_live(const setting_t *t, int value) {
         return gpu_tweaks_set_pacing(value);
     if (strcmp(n, "BatteryFPS") == 0)
         return gpu_tweaks_set_battery_fps(value);
+    if (strcmp(n, "PauseMenuFPS") == 0)
+        return gpu_tweaks_set_pause_menu_fps(value);
     if (strcmp(n, "FrameStats") == 0)
         return gpu_tweaks_set_frame_stats(value);
     if (strcmp(n, "JobIdleFix") == 0)
