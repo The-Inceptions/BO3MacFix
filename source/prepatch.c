@@ -80,6 +80,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_R_CheckVidRestart, Push_R15 },
     { ADDR_R_SetWndParms, Push_R15 },
     { ADDR_Scr_ErrorInternal, Push_R15 },
+    { ADDR_Scr_EvalEquality, Push_R15 },
     { ADDR_Scr_LoadSourceText, Push_R15 },
     { ADDR_Scr_RuntimeErrorInternal, Push_R15 },
     { ADDR_SDL_SetWindowTitle, Push_R14 },
