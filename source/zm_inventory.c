@@ -13,7 +13,6 @@
 #define Allow_Ms 10000
 
 static uint64_t base;
-static atomic_bool hooked;
 static atomic_int allowed;
 static atomic_llong allowed_until;
 
@@ -96,14 +95,7 @@ bool zm_inventory_read(char *out, size_t out_size) {
     return true;
 }
 
-// CheatsOk is hooked only when a resumed game first needs it: a pre-patched copy without a slot for it (one made by an
-// older BO3MacFix) gets the hook written into the game's code, which brings back Rosetta's JIT, so not every game
-// should pay for it
-static void hook_cheats_ok(void);
-
 void zm_inventory_allow_cheats(int count) {
-    if (!atomic_exchange(&hooked, true))
-        hook_cheats_ok();
     atomic_store(&allowed_until, now_ms() + Allow_Ms);
     atomic_store(&allowed, count);
 }
@@ -127,7 +119,10 @@ void zm_inventory_init(uint64_t game_base) {
     base = game_base;
 }
 
-static void hook_cheats_ok(void) {
+// at start-up, before the game's threads run: the pre-patched copy has a slot for it, so that only stores a pointer.
+// Without one (a copy made by an older BO3MacFix, or the original executable) Dobby writes the game's code, and doing
+// that while the game runs crashed it (live, as the first weapon was given)
+void zm_inventory_install_hook(void) {
     if (base != 0)
         install_hook_CheatsOk((void *)(base + ADDR_CheatsOk));
 }

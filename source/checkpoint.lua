@@ -7,7 +7,8 @@
 -- - exactly: the round (AAE's Starting Round, 1 to 255) and the points (Starting Points);
 -- - partly: perks, as AAE's Perkaholic (every perk) or Spawn With Quick Revive (that one alone); the primary weapons,
 --   given back by name, Pack-a-Punched ones as their upgraded weapon but without camo, attachments or ammo type;
--- - only shown: the character and the scoreboard (kills, headshots, downs, revives), which nothing can set.
+-- - only shown: the scoreboard (kills, headshots, downs, revives), which nothing can set, and the character where the
+--   game has zmInventory.player_character_identity (not on Kino, whose HUD gets it from PlayerListZM's data).
 -- The arguments are checkpoint.c's functions (settings_menu.c), then test switches, nil normally: save so many seconds
 -- into a match; give these weapons (comma-separated) first; log what the match has so many seconds in.
 local save_fn, read_fn, apply_fn, clear_fn, resume_fn, weapons_fn, weapon_commands_fn, allow_cheats_fn, notice_fn,
@@ -91,11 +92,14 @@ local function clean(text)
     return string.sub((string.gsub(tostring(text or ""), "%c", " ")), 1, 200)
 end
 
--- the game's text for a string reference, without the spaces some have around them
+-- the game's text for a string reference, without the control characters and spaces it has around some (the
+-- scoreboard's headers, weapon names)
 local function localized(text)
     local result = text ~= nil and text ~= "" and call(Engine.Localize, text) or nil
     result = type(result) == "string" and result ~= "" and result or text
-    return type(result) == "string" and (string.gsub(string.gsub(result, "^%s+", ""), "%s+$", "")) or result
+    if type(result) ~= "string" then return result end
+    result = string.gsub(result, "%c", "")
+    return (string.gsub(string.gsub(result, "^%s+", ""), "%s+$", ""))
 end
 
 local function split(list)
@@ -148,10 +152,12 @@ local function collect(controller)
         local value = call(Engine.GetScoreboardColumnForClient, client, column)
         if type(header) == "string" and header ~= "" and value ~= nil and tostring(value) ~= "" then
             local name = localized(header)
-            table.insert(stats, name .. " " .. tostring(value))
             table.insert(headers, header)
-            if points == nil and (string.find(string.lower(header), "score", 1, true) or string.lower(name) == "score") then
-                points = tonumber(value)
+            -- the score is the points, which a resume restores; the rest is what it can't
+            if string.find(string.lower(header), "score", 1, true) or string.lower(name) == "score" then
+                if points == nil then points = tonumber(value) end
+            else
+                table.insert(stats, name .. " " .. tostring(value))
             end
         end
     end

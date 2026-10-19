@@ -22,7 +22,7 @@ Engine = {
     GetClientNum = function() return 0 end,
     GetScoreboardColumnHeader = function(c, column) return ({ [0] = "MPUI_KILLS", "MPUI_SCORE", "MPUI_DOWNS", "MPUI_REVIVES", "MPUI_HEADSHOTS" })[column] end,
     GetScoreboardColumnForClient = function(client, column) return ({ [0] = 812, 23450, 1, 3, 240 })[column] end,
-    Localize = function(text) return " " .. (string.gsub(string.lower(text), "^mpui_", "")) .. " " end,
+    Localize = function(text) return "\21 " .. (string.gsub(string.lower(text), "^mpui_", "")) .. " \20" end,
     GetCurrentMap = function() return map end,
     IsInGame = function() return in_game end,
     DvarString = function(_, name) return dvars[name] or "" end,
@@ -136,7 +136,7 @@ check(saved.Weapons == "ray_gun_upgraded,pistol_burst", "primary weapons: " .. t
 check(saved.Equipment == "frag_grenade,knife", "the rest: " .. tostring(saved.Equipment))
 check(saved.Held == "weapon_raygun (Pack-a-Punched)", "the weapon in hand: " .. tostring(saved.Held))
 check(saved.Character == "Richtofen", "the character on Kino: " .. tostring(saved.Character))
-check(saved.Stats == "kills 812, score 23450, downs 1, revives 3, headshots 240", "the scoreboard: " .. tostring(saved.Stats))
+check(saved.Stats == "kills 812, downs 1, revives 3, headshots 240", "the scoreboard but the score: " .. tostring(saved.Stats))
 check(string.find(message, "Saved Round 12, 23,450 points, zm_theater", 1, true) ~= nil, "the message: " .. tostring(message))
 check(string.find(save_row.description(), "ray gun (Pack-a-Punched)", 1, true) ~= nil, "the description lists the guns: " ..
     tostring(save_row.description()))
