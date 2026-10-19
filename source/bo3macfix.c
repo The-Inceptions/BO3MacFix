@@ -1002,8 +1002,6 @@ __attribute__((constructor)) static void dylib_main() {
 
     // apply the hooks
     install_hook_HKAI_InitMapData((void *)(game_base_address + ADDR_HKAI_InitMapData));
-    // the cheat check give and take make, for the weapons a resumed zombies game gets back (zm_inventory.c)
-    zm_inventory_install_hook();
     install_hook_load_workshop_texture((void *)(game_base_address + ADDR_load_workshop_texture));
     install_hook_Live_SystemInfo((void *)(game_base_address + ADDR_Live_SystemInfo));
     install_hook_someLoggingFunction((void *)(game_base_address + ADDR_someLoggingFunction));

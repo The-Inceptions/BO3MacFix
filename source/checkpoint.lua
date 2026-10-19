@@ -8,11 +8,16 @@
 -- - partly: perks, as AAE's Perkaholic (every perk) or Spawn With Quick Revive (that one alone); the primary weapons,
 --   given back by name, Pack-a-Punched ones as their upgraded weapon but without camo, attachments or ammo type;
 -- - only shown: the character and the scoreboard (kills, headshots, downs, revives), which nothing can set.
--- The arguments are test switches, nil normally: save so many seconds into a match; give these weapons (comma-separated)
--- first; log what the match has so many seconds in.
-local save_after, give_test, report_after = ...
+-- The arguments are checkpoint.c's functions (settings_menu.c), then test switches, nil normally: save so many seconds
+-- into a match; give these weapons (comma-separated) first; log what the match has so many seconds in.
+local save_fn, read_fn, apply_fn, clear_fn, resume_fn, weapons_fn, weapon_commands_fn, allow_cheats_fn, notice_fn,
+    save_after, give_test, report_after = ...
 local bo3macfix = BO3MacFix
-if bo3macfix == nil or bo3macfix.ReadCheckpoint == nil then return end
+if bo3macfix == nil or read_fn == nil then return end
+bo3macfix.SaveCheckpoint, bo3macfix.ReadCheckpoint, bo3macfix.ApplyCheckpoint = save_fn, read_fn, apply_fn
+bo3macfix.ClearCheckpoint, bo3macfix.CheckpointResume, bo3macfix.CheckpointWeapons = clear_fn, resume_fn, weapons_fn
+bo3macfix.CheckpointWeaponCommands, bo3macfix.CheckpointAllowCheats = weapon_commands_fn, allow_cheats_fn
+bo3macfix.CheckpointNotice = notice_fn
 local log = bo3macfix.Log or function() end
 
 local POLL_MS = 500
@@ -86,9 +91,11 @@ local function clean(text)
     return string.sub((string.gsub(tostring(text or ""), "%c", " ")), 1, 200)
 end
 
+-- the game's text for a string reference, without the spaces some have around them
 local function localized(text)
     local result = text ~= nil and text ~= "" and call(Engine.Localize, text) or nil
-    return type(result) == "string" and result ~= "" and result or text
+    result = type(result) == "string" and result ~= "" and result or text
+    return type(result) == "string" and (string.gsub(string.gsub(result, "^%s+", ""), "%s+$", "")) or result
 end
 
 local function split(list)
@@ -119,7 +126,9 @@ local function weapons_now()
     if type(text) ~= "string" then return nil end
     local primaries, others = {}, {}
     for name, kind in string.gmatch(text, "([%w_]+):(%-?%d+)") do
-        table.insert(tonumber(kind) == 0 and primaries or others, name)
+        -- zombies' weapons are the give command's names with _zm after them (ray_gun_upgraded_zm)
+        local weapon = string.gsub(name, "_zm$", "")
+        table.insert(tonumber(kind) == 0 and primaries or others, weapon)
     end
     return primaries, others, text
 end
@@ -129,17 +138,27 @@ local function collect(controller)
     local root, global = Engine.GetModelForController(controller), call(Engine.GetGlobalModel)
     local client = call(Engine.GetClientNum, controller) or 0
     local player = "PlayerList.client" .. tostring(client)
-    local round = tonumber(model_value(root, "gameScore.roundsPlayed"))
-    local points = tonumber(model_value(root, player .. ".playerScore") or model_value(global, player .. ".playerScore"))
-    -- the scoreboard: score, kills, downs, revives and headshots in zombies, named by its own headers
-    local stats = {}
+    -- the HUD's round is one less than gameScore.roundsPlayed (Kino resumed at round 3 drew three tallies with 4 here)
+    local played = tonumber(model_value(root, "gameScore.roundsPlayed"))
+    local round = played ~= nil and played - 1 or nil
+    -- the scoreboard: kills, score (the points), downs, revives and headshots in zombies, named by its own headers
+    local stats, points, headers = {}, nil, {}
     for column = 0, 4 do
         local header = call(Engine.GetScoreboardColumnHeader, controller, column)
         local value = call(Engine.GetScoreboardColumnForClient, client, column)
         if type(header) == "string" and header ~= "" and value ~= nil and tostring(value) ~= "" then
-            table.insert(stats, localized(header) .. " " .. tostring(value))
-            if points == nil and column == 0 then points = tonumber(value) end
+            local name = localized(header)
+            table.insert(stats, name .. " " .. tostring(value))
+            table.insert(headers, header)
+            if points == nil and (string.find(string.lower(header), "score", 1, true) or string.lower(name) == "score") then
+                points = tonumber(value)
+            end
         end
+    end
+    -- the score list's own number for the player, if the scoreboard has none (PlayerList.client<N>.playerScore isn't
+    -- the points: it went 1, 3 with the kills)
+    if points == nil then
+        points = tonumber(model_value(root, player .. ".playerScoreShown") or model_value(global, player .. ".playerScoreShown"))
     end
     if round == nil or round < 1 or points == nil then return nil end
     local perks = {}
@@ -154,7 +173,8 @@ local function collect(controller)
         held = held .. " (Pack-a-Punched)"
     end
     local identity = tonumber(model_value(root, "zmInventory.player_character_identity"))
-    local icon = model_value(root, player .. ".zombiePlayerIcon") or model_value(global, player .. ".zombiePlayerIcon")
+    local icon = model_value(root, player .. ".zombiePlayerIcon") or model_value(global, player .. ".zombiePlayerIcon") or
+        model_value(root, player .. ".portraitIcon") or model_value(global, player .. ".portraitIcon")
     local map = current_map()
     local character = identity ~= nil and not OTHER_CREW[map] and CHARACTERS[identity] or nil
     if character == nil and icon ~= nil and tostring(icon) ~= "" then character = tostring(icon) end
@@ -170,7 +190,12 @@ local function collect(controller)
         table.concat(perks, ",") .. ", weapons " .. tostring(raw) .. ", held " .. tostring(held) .. " (" ..
         viewmodel .. ", AAT " .. tostring(model_value(root, "currentWeapon.aatIcon")) .. ", PaP level " ..
         tostring(model_value(root, "hudItems.paplv")) .. "), character " .. tostring(identity) .. "/" ..
-        tostring(icon) .. ", scoreboard " .. table.concat(stats, ", ")
+        tostring(icon) .. ", scoreboard " .. table.concat(stats, ", ") .. " (" .. table.concat(headers, ",") ..
+        "), models: roundsPlayed " .. tostring(played)
+    for _, name in ipairs({ "playerScore", "playerScoreShown", "zombiePlayerIcon", "portraitIcon", "playerName", "clientNum" }) do
+        seen = seen .. ", " .. name .. " " .. tostring(model_value(root, player .. "." .. name)) .. "/" ..
+            tostring(model_value(global, player .. "." .. name))
+    end
     return table.concat(lines, "\n"), seen
 end
 

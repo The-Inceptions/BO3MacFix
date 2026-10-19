@@ -19,8 +19,8 @@ static int lua_log(lua_State *s) {
     return 0;
 }
 
-// saving and resuming a zombies game (checkpoint.c, zm_inventory.c), for checkpoint.lua: BO3MacFix.SaveCheckpoint and
-// the rest below
+// saving and resuming a zombies game (checkpoint.c, zm_inventory.c): the C functions checkpoint.lua gets when it loads,
+// as BO3MacFix.SaveCheckpoint and the rest
 static const checkpoint_paths_t checkpoint_paths = { Checkpoint_File, Checkpoint_Players_Folder };
 
 // SaveCheckpoint("Key=value" lines): whether it was saved
@@ -114,30 +114,6 @@ static int lua_checkpoint_notice(lua_State *s) {
     return 0;
 }
 
-static const char checkpoint_lua_start[] =
-    "local save, read, apply, clear, resume, weapons, weapon_commands, allow_cheats, notice = ...\n"
-    "BO3MacFix.SaveCheckpoint, BO3MacFix.ReadCheckpoint, BO3MacFix.ApplyCheckpoint = save, read, apply\n"
-    "BO3MacFix.ClearCheckpoint, BO3MacFix.CheckpointResume, BO3MacFix.CheckpointWeapons = clear, resume, weapons\n"
-    "BO3MacFix.CheckpointWeaponCommands, BO3MacFix.CheckpointAllowCheats = weapon_commands, allow_cheats\n"
-    "BO3MacFix.CheckpointNotice = notice\n";
-
-static void checkpoint_lua_install(lua_State *s) {
-    ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
-    if (hks_load_source(s, checkpoint_lua_start, sizeof(checkpoint_lua_start) - 1, "=BO3MacFix checkpoint start")) {
-        hks_push_cfunction(s, lua_checkpoint_save, "CheckpointSave");
-        hks_push_cfunction(s, lua_checkpoint_read, "CheckpointRead");
-        hks_push_cfunction(s, lua_checkpoint_apply, "CheckpointApply");
-        hks_push_cfunction(s, lua_checkpoint_clear, "CheckpointClear");
-        hks_push_cfunction(s, lua_checkpoint_resume, "CheckpointResume");
-        hks_push_cfunction(s, lua_checkpoint_weapons, "CheckpointWeapons");
-        hks_push_cfunction(s, lua_checkpoint_weapon_commands, "CheckpointWeaponCommands");
-        hks_push_cfunction(s, lua_checkpoint_allow_cheats, "CheckpointAllowCheats");
-        hks_push_cfunction(s, lua_checkpoint_notice, "CheckpointNotice");
-        hks_pcall(s, 9, 0);
-    }
-    HKS_TOP(s) = HKS_BASE(s) + top;
-}
-
 // pushes the environment variable's value, or nil
 static void push_env(lua_State *s, const char *name) {
     const char *value = getenv(name);
@@ -150,7 +126,6 @@ static void push_env(lua_State *s, const char *name) {
 static int lua_install(lua_State *s) {
     settings_lua_install(s);
     notices_lua_install(s);
-    checkpoint_lua_install(s);
     return 0;
 }
 
@@ -163,13 +138,24 @@ static int lua_load_menu(lua_State *s) {
         hks_pcall(s, 1, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
-    // then checkpoint.lua, with the test switches: save so many seconds into a match, give these weapons first, log
-    // what the match has so many seconds in
+    // then checkpoint.lua, given its C functions here rather than when the state is set up: compiling and running any
+    // more Lua in lua_install, while All-around Enhancement's scripts load, makes AAE quit the game at a map's load.
+    // Then the test switches: save so many seconds into a match, give these weapons first, log what the match has
+    // so many seconds in.
     if (hks_load_source(s, (const char *)checkpoint_lua, checkpoint_lua_len, "=BO3MacFix checkpoint")) {
+        hks_push_cfunction(s, lua_checkpoint_save, "CheckpointSave");
+        hks_push_cfunction(s, lua_checkpoint_read, "CheckpointRead");
+        hks_push_cfunction(s, lua_checkpoint_apply, "CheckpointApply");
+        hks_push_cfunction(s, lua_checkpoint_clear, "CheckpointClear");
+        hks_push_cfunction(s, lua_checkpoint_resume, "CheckpointResume");
+        hks_push_cfunction(s, lua_checkpoint_weapons, "CheckpointWeapons");
+        hks_push_cfunction(s, lua_checkpoint_weapon_commands, "CheckpointWeaponCommands");
+        hks_push_cfunction(s, lua_checkpoint_allow_cheats, "CheckpointAllowCheats");
+        hks_push_cfunction(s, lua_checkpoint_notice, "CheckpointNotice");
         push_env(s, "BO3MACFIX_CHECKPOINT_SAVE");
         push_env(s, "BO3MACFIX_CHECKPOINT_GIVE");
         push_env(s, "BO3MACFIX_CHECKPOINT_REPORT");
-        hks_pcall(s, 3, 0);
+        hks_pcall(s, 12, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;
