@@ -42,6 +42,7 @@
 #include "prepatch.h"
 #include "qol.h"
 #include "rawmouse.h"
+#include "zm_inventory.h"
 #include "sdl_displays.h"
 #include "settings_ini.h"
 #include "settings_menu.h"
@@ -971,14 +972,23 @@ __attribute__((constructor)) static void dylib_main() {
 
     // a checkpoint resume set up last time (checkpoint.c) and not undone: the game quit before getting back to the
     // menus. Put the player's own starting round and points back in AAE's mutations file before AAE loads it.
+    const checkpoint_paths_t checkpoint_paths = { Checkpoint_File, Checkpoint_Players_Folder };
     char checkpoint_commands[512];
-    if (checkpoint_clear(&(checkpoint_paths_t){ Checkpoint_File, Checkpoint_Players_Folder }, NULL, NULL,
-                         checkpoint_commands, sizeof(checkpoint_commands)))
+    if (checkpoint_clear(&checkpoint_paths, NULL, checkpoint_commands, sizeof(checkpoint_commands)))
         printf("BO3MacFix: checkpoint: undid the resume set up last time\n");
+    // for testing: BO3MACFIX_CHECKPOINT_RESUME=1 sets the resume up now, as the settings page would in the menus, so a
+    // game started from the command line resumes the checkpoint
+    const char *resume_test = getenv("BO3MACFIX_CHECKPOINT_RESUME");
+    if (resume_test != NULL && atoi(resume_test) != 0)
+        printf("BO3MacFix: checkpoint: %s\n",
+               checkpoint_apply(&checkpoint_paths, "_Default", checkpoint_commands, sizeof(checkpoint_commands))
+                   ? "set up the resume for this launch (BO3MACFIX_CHECKPOINT_RESUME)"
+                   : "couldn't set up the resume (BO3MACFIX_CHECKPOINT_RESUME)");
 
     // get the base address of the binary
     game_base_address = get_base_address();
     prepatch_init(game_base_address);
+    zm_inventory_init(game_base_address);
 
     // test switch: leave the game's code exactly as shipped (no hooks, no byte patches), to measure whether
     // patching code in memory makes Rosetta run the game through its JIT instead of its ahead-of-time translation.
@@ -992,6 +1002,8 @@ __attribute__((constructor)) static void dylib_main() {
 
     // apply the hooks
     install_hook_HKAI_InitMapData((void *)(game_base_address + ADDR_HKAI_InitMapData));
+    // the cheat check give and take make, which lets a resumed zombies game get its weapons back (zm_inventory.c)
+    zm_inventory_install_hook();
     install_hook_load_workshop_texture((void *)(game_base_address + ADDR_load_workshop_texture));
     install_hook_Live_SystemInfo((void *)(game_base_address + ADDR_Live_SystemInfo));
     install_hook_someLoggingFunction((void *)(game_base_address + ADDR_someLoggingFunction));

@@ -4,11 +4,13 @@
 #include <stdlib.h>
 #include <time.h>
 #include "checkpoint.h"
+#include "checkpoint_lua.h"
 #include "havok.h"
 #include "notices.h"
 #include "settings.h"
 #include "settings_menu.h"
 #include "settings_menu_lua.h"
+#include "zm_inventory.h"
 
 // BO3MacFix.Log(text): the page's messages go in BO3MacFix's log
 static int lua_log(lua_State *s) {
@@ -17,7 +19,8 @@ static int lua_log(lua_State *s) {
     return 0;
 }
 
-// the zombies checkpoint (checkpoint.c), BO3MacFix.SaveCheckpoint and the rest below
+// saving and resuming a zombies game (checkpoint.c, zm_inventory.c): the C functions checkpoint.lua gets when it loads,
+// as BO3MacFix.SaveCheckpoint and the rest
 static const checkpoint_paths_t checkpoint_paths = { Checkpoint_File, Checkpoint_Players_Folder };
 
 // SaveCheckpoint("Key=value" lines): whether it was saved
@@ -36,11 +39,10 @@ static int lua_checkpoint_read(lua_State *s) {
     return 1;
 }
 
-// ApplyCheckpoint(preset, previous round, previous points): the console commands to run, nil if it couldn't
+// ApplyCheckpoint(preset): the console commands to run, nil if it couldn't
 static int lua_checkpoint_apply(lua_State *s) {
-    const char *preset = hks_check_string(s, 1), *round = hks_check_string(s, 2), *points = hks_check_string(s, 3);
     char commands[512];
-    bool applied = checkpoint_apply(&checkpoint_paths, preset, round, points, commands, sizeof(commands));
+    bool applied = checkpoint_apply(&checkpoint_paths, hks_check_string(s, 1), commands, sizeof(commands));
     printf("BO3MacFix: checkpoint: %s\n", applied ? "the next game resumes it" : "couldn't set up the resume");
     if (applied)
         hks_push_string(s, commands);
@@ -49,13 +51,12 @@ static int lua_checkpoint_apply(lua_State *s) {
     return 1;
 }
 
-// ClearCheckpoint(current round, current points): the console commands to run, nil if no resume was set up
+// ClearCheckpoint("dvar=value" lines with the options' current values): the console commands to run, nil if no resume
+// was set up
 static int lua_checkpoint_clear(lua_State *s) {
-    const char *round = hks_check_string(s, 1), *points = hks_check_string(s, 2);
     char commands[512];
-    bool cleared = checkpoint_clear(&checkpoint_paths, round, points, commands, sizeof(commands));
-    if (cleared) {
-        printf("BO3MacFix: checkpoint: resume undone, the starting round and points are the player's own again\n");
+    if (checkpoint_clear(&checkpoint_paths, hks_check_string(s, 1), commands, sizeof(commands))) {
+        printf("BO3MacFix: checkpoint: resume undone, the starting options are the player's own again\n");
         hks_push_string(s, commands);
     } else {
         hks_push_nil(s);
@@ -63,37 +64,68 @@ static int lua_checkpoint_clear(lua_State *s) {
     return 1;
 }
 
-// CheckpointResume(mark): 0 no resume set up, 1 set up, 2 a game has started with it; with mark, notes that one has
+// CheckpointResume(mark): 0 no resume set up, 1 set up, 2 a game has started with it, 3 that game got its weapons
+// back; mark 1 notes that a game has started with it, mark 2 that it got its weapons
 static int lua_checkpoint_resume(lua_State *s) {
     float mark = 0;
-    if (hks_number_arg(s, 1, &mark) && mark != 0 && checkpoint_mark_in_use(&checkpoint_paths))
+    if (hks_number_arg(s, 1, &mark) && mark == 1 && checkpoint_mark_in_use(&checkpoint_paths))
         printf("BO3MacFix: checkpoint: a game started with the resume\n");
+    if (mark == 2 && checkpoint_mark_weapons_given(&checkpoint_paths))
+        printf("BO3MacFix: checkpoint: this game has had its weapons back\n");
     hks_push_number(s, (float)checkpoint_resume_state(&checkpoint_paths));
     return 1;
 }
 
-static const char checkpoint_lua[] =
-    "local save, read, apply, clear, resume = ...\n"
-    "BO3MacFix.SaveCheckpoint, BO3MacFix.ReadCheckpoint, BO3MacFix.ApplyCheckpoint = save, read, apply\n"
-    "BO3MacFix.ClearCheckpoint, BO3MacFix.CheckpointResume = clear, resume\n";
+// CheckpointWeapons(): the local player's weapons as "name:type" separated by commas, nil without a game hosted here
+static int lua_checkpoint_weapons(lua_State *s) {
+    char weapons[1024];
+    if (zm_inventory_read(weapons, sizeof(weapons)))
+        hks_push_string(s, weapons);
+    else
+        hks_push_nil(s);
+    return 1;
+}
 
-static void checkpoint_lua_install(lua_State *s) {
-    ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
-    if (hks_load_source(s, checkpoint_lua, sizeof(checkpoint_lua) - 1, "=BO3MacFix checkpoint")) {
-        hks_push_cfunction(s, lua_checkpoint_save, "CheckpointSave");
-        hks_push_cfunction(s, lua_checkpoint_read, "CheckpointRead");
-        hks_push_cfunction(s, lua_checkpoint_apply, "CheckpointApply");
-        hks_push_cfunction(s, lua_checkpoint_clear, "CheckpointClear");
-        hks_push_cfunction(s, lua_checkpoint_resume, "CheckpointResume");
-        hks_pcall(s, 5, 0);
+// CheckpointWeaponCommands(saved, held): the take and give commands that turn held into saved, nil if malformed
+static int lua_checkpoint_weapon_commands(lua_State *s) {
+    char commands[1024];
+    if (checkpoint_weapon_commands(hks_check_string(s, 1), hks_check_string(s, 2), commands, sizeof(commands)) >= 0)
+        hks_push_string(s, commands);
+    else
+        hks_push_nil(s);
+    return 1;
+}
+
+// CheckpointAllowCheats(count): lets the next count give and take commands past the game's cheat check
+static int lua_checkpoint_allow_cheats(lua_State *s) {
+    float count = 0;
+    if (hks_number_arg(s, 1, &count) && count > 0 && count <= 32) {
+        zm_inventory_allow_cheats((int)count);
+        printf("BO3MacFix: checkpoint: letting %d give and take commands through\n", (int)count);
     }
-    HKS_TOP(s) = HKS_BASE(s) + top;
+    return 0;
+}
+
+// CheckpointNotice(text): shows text in the game, like BO3MacFix's other notices
+static int lua_checkpoint_notice(lua_State *s) {
+    const char *text = hks_check_string(s, 1);
+    if (text != NULL)
+        notices_post("%s", text);
+    return 0;
+}
+
+// pushes the environment variable's value, or nil
+static void push_env(lua_State *s, const char *name) {
+    const char *value = getenv(name);
+    if (value != NULL && value[0] != '\0')
+        hks_push_string(s, value);
+    else
+        hks_push_nil(s);
 }
 
 static int lua_install(lua_State *s) {
     settings_lua_install(s);
     notices_lua_install(s);
-    checkpoint_lua_install(s);
     return 0;
 }
 
@@ -104,6 +136,26 @@ static int lua_load_menu(lua_State *s) {
         const char *open = getenv("BO3MACFIX_OPENSETTINGS");
         hks_push_boolean(s, open != NULL && atoi(open) != 0);
         hks_pcall(s, 1, 0);
+    }
+    HKS_TOP(s) = HKS_BASE(s) + top;
+    // then checkpoint.lua, given its C functions here rather than when the state is set up: compiling and running any
+    // more Lua in lua_install, while All-around Enhancement's scripts load, makes AAE quit the game at a map's load.
+    // Then the test switches: save so many seconds into a match, give these weapons first, log what the match has
+    // so many seconds in.
+    if (hks_load_source(s, (const char *)checkpoint_lua, checkpoint_lua_len, "=BO3MacFix checkpoint")) {
+        hks_push_cfunction(s, lua_checkpoint_save, "CheckpointSave");
+        hks_push_cfunction(s, lua_checkpoint_read, "CheckpointRead");
+        hks_push_cfunction(s, lua_checkpoint_apply, "CheckpointApply");
+        hks_push_cfunction(s, lua_checkpoint_clear, "CheckpointClear");
+        hks_push_cfunction(s, lua_checkpoint_resume, "CheckpointResume");
+        hks_push_cfunction(s, lua_checkpoint_weapons, "CheckpointWeapons");
+        hks_push_cfunction(s, lua_checkpoint_weapon_commands, "CheckpointWeaponCommands");
+        hks_push_cfunction(s, lua_checkpoint_allow_cheats, "CheckpointAllowCheats");
+        hks_push_cfunction(s, lua_checkpoint_notice, "CheckpointNotice");
+        push_env(s, "BO3MACFIX_CHECKPOINT_SAVE");
+        push_env(s, "BO3MACFIX_CHECKPOINT_GIVE");
+        push_env(s, "BO3MACFIX_CHECKPOINT_REPORT");
+        hks_pcall(s, 12, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;
