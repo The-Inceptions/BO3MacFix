@@ -108,6 +108,66 @@ static int lua_checkpoint_allow_cheats(lua_State *s) {
     return 0;
 }
 
+// CheckpointLoadout(): the local player's full loadout as "Guns=...\nGunInHand=...\nPerkList=..." lines (zm_loadout.h),
+// nil without a game hosted here
+static int lua_checkpoint_loadout(lua_State *s) {
+    static loadout_t loadout;
+    static char guns[1024], perks[1024], lines[2304];
+    char note[256];
+    if (!zm_inventory_read_loadout(&loadout, note, sizeof(note))) {
+        hks_push_nil(s);
+        return 1;
+    }
+    if (note[0] != '\0')
+        printf("BO3MacFix: checkpoint: loadout: %s\n", note);
+    if (!loadout_format_guns(&loadout, guns, sizeof(guns)) || !loadout_format_perks(&loadout, perks, sizeof(perks))) {
+        printf("BO3MacFix: checkpoint: the loadout doesn't fit in checkpoint.ini\n");
+        hks_push_nil(s);
+        return 1;
+    }
+    snprintf(lines, sizeof(lines), "Guns=%s\nGunInHand=%s\nPerkList=%s", guns,
+             loadout.held >= 0 ? loadout.guns[loadout.held].name : "", perks);
+    hks_push_string(s, lines);
+    return 1;
+}
+
+// CheckpointRestoreLoadout(): sets the checkpoint's full loadout up for zm_inventory.c to give back, and returns the
+// give command that does it; nil if the checkpoint has none
+static int lua_checkpoint_restore_loadout(lua_State *s) {
+    static loadout_t loadout;
+    if (!checkpoint_loadout(&checkpoint_paths, &loadout)) {
+        hks_push_nil(s);
+        return 1;
+    }
+    hks_push_string(s, zm_inventory_set_restore(&loadout));
+    return 1;
+}
+
+// CheckpointRestoreResult(): once the loadout's give command has run, what it did (loadout_result_text); nil before
+static int lua_checkpoint_restore_result(lua_State *s) {
+    char text[512];
+    if (zm_inventory_restore_result(text, sizeof(text)))
+        hks_push_string(s, text);
+    else
+        hks_push_nil(s);
+    return 1;
+}
+
+// CheckpointTestLoadout(guns, perks, pap): for the test switches, a Guns and a PerkList line set up the same way, the
+// first gun in hand, or given the Pack-a-Punch machine's way if pap is true; the give command, nil if malformed
+static int lua_checkpoint_test_loadout(lua_State *s) {
+    static loadout_t loadout;
+    HksObject *pap = HKS_BASE(s) + 2;
+    bool pap_test = pap < HKS_TOP(s) && (pap->t & 0xF) == HKS_TBOOLEAN && pap->v.boolean;
+    if (!loadout_parse(hks_check_string(s, 1), NULL, hks_check_string(s, 2), &loadout)) {
+        hks_push_nil(s);
+        return 1;
+    }
+    loadout.held = loadout.gun_count > 0 ? 0 : -1;
+    hks_push_string(s, pap_test ? zm_inventory_set_pap_test(&loadout) : zm_inventory_set_restore(&loadout));
+    return 1;
+}
+
 // CheckpointNotice(text): shows text in the game, like BO3MacFix's other notices
 static int lua_checkpoint_notice(lua_State *s) {
     const char *text = hks_check_string(s, 1);
@@ -170,6 +230,14 @@ static int locked_checkpoint_resume(lua_State *s) {
     HksObject *answer = HKS_TOP(s) - 1;
     if (results == 1 && (answer->t & 0xF) == HKS_TNUMBER)
         atomic_store(&last_resume_state, (int)answer->v.number);
+    checkpoint_unlock();
+    return results;
+}
+
+// reads the checkpoint's loadout from checkpoint.ini
+static int locked_checkpoint_restore_loadout(lua_State *s) {
+    checkpoint_lock();
+    int results = lua_checkpoint_restore_loadout(s);
     checkpoint_unlock();
     return results;
 }
@@ -244,7 +312,8 @@ static int lua_load_menu(lua_State *s) {
     // more Lua in lua_install, while All-around Enhancement's scripts load, makes AAE quit the game at a map's load.
     // Then the test switches: save so many seconds into a match, give these weapons first, log what the match has
     // so many seconds in. Then AutoSave's writer and deleting the save, and its test switch: how many seconds of a
-    // match only set the round it starts at.
+    // match only set the round it starts at. Then the full loadout's functions, and its test switch: give these perks
+    // first.
     checkpoint_autosave_init(&checkpoint_paths, Autosave_Interval_Ms, autosave_report);
     if (hks_load_source(s, (const char *)checkpoint_lua, checkpoint_lua_len, "=BO3MacFix checkpoint")) {
         hks_push_cfunction(s, locked_checkpoint_save, "CheckpointSave");
@@ -262,7 +331,12 @@ static int lua_load_menu(lua_State *s) {
         hks_push_cfunction(s, lua_checkpoint_autosave, "CheckpointAutoSave");
         hks_push_cfunction(s, lua_checkpoint_delete, "CheckpointDelete");
         push_env(s, "BO3MACFIX_AUTOSAVE_START");
-        hks_pcall(s, 15, 0);
+        hks_push_cfunction(s, lua_checkpoint_loadout, "CheckpointLoadout");
+        hks_push_cfunction(s, locked_checkpoint_restore_loadout, "CheckpointRestoreLoadout");
+        hks_push_cfunction(s, lua_checkpoint_restore_result, "CheckpointRestoreResult");
+        hks_push_cfunction(s, lua_checkpoint_test_loadout, "CheckpointTestLoadout");
+        push_env(s, "BO3MACFIX_CHECKPOINT_PERKS");
+        hks_pcall(s, 20, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;

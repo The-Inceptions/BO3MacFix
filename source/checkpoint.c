@@ -8,17 +8,18 @@
 #include <strings.h>
 #include <unistd.h>
 #include "checkpoint.h"
+#include "zm_loadout.h"
 
 #define File_Size 65536
 #define Max_Entries 32
 #define Key_Size 32
-#define Value_Size 256
+#define Value_Size 1024 // a Guns line: a few guns with their attachments, options and ammo types
 
 // what checkpoint_save takes from the settings page; the rest of checkpoint.ini is ours
-static const char *const saved_keys[] = { "Map",  "Round", "Points",    "Perks", "Weapons",
-                                          "Equipment", "Held", "Character", "Stats" };
+static const char *const saved_keys[] = { "Map",       "Round", "Points",    "Perks", "Weapons", "Equipment",
+                                          "Held",      "Character", "Stats", "Guns",  "GunInHand", "PerkList" };
 // the ones that are comma-separated names: perks, and weapons that go into give and take commands
-static const char *const list_keys[] = { "Perks", "Weapons", "Equipment" };
+static const char *const list_keys[] = { "Perks", "Weapons", "Equipment", "PerkList" };
 
 // the AAE options a resume sets, with the key their values have in checkpoint.ini after Applied and Previous
 typedef struct {
@@ -373,6 +374,12 @@ bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long no
     for (size_t i = 0; i < sizeof(list_keys) / sizeof(list_keys[0]); i++)
         if (!valid_list(store_get(&given, list_keys[i])))
             return false;
+    // the full loadout (zm_loadout.h) has to read back as one
+    static loadout_t loadout;
+    const char *in_hand = store_get(&given, "GunInHand");
+    if ((in_hand != NULL && in_hand[0] != '\0' && !valid_name(in_hand, strlen(in_hand))) ||
+        !loadout_parse(store_get(&given, "Guns"), in_hand, store_get(&given, "PerkList"), &loadout))
+        return false;
     // a key this save doesn't have goes, so nothing from the last game stays with this one
     for (size_t i = 0; i < sizeof(saved_keys) / sizeof(saved_keys[0]); i++)
         if (!store_set(&store, saved_keys[i], store_get(&given, saved_keys[i])))
@@ -437,7 +444,9 @@ static void add_command(char *commands, size_t size, const char *dvar, const cha
 }
 
 // what each option is set to for the checkpoint, NULL where it's left alone: the round and points, Perkaholic for any
-// perk but Quick Revive (AAE gives every perk or none), and Quick Revive for that one
+// perk but Quick Revive (AAE gives every perk or none), and Quick Revive for that one. A checkpoint with the exact
+// perks (PerkList) gets them back from zm_perks::give_perk instead (zm_inventory.c), so the player's own perk options
+// stay as they are.
 static bool resume_values(store_t *store, char text[2][16], const char *values[Option_Count]) {
     long round, points;
     if (!parse_number(store_get(store, "Round"), &round) || !parse_number(store_get(store, "Points"), &points))
@@ -446,7 +455,7 @@ static bool resume_values(store_t *store, char text[2][16], const char *values[O
     points = points < 0 ? 0 : points > Checkpoint_Max_Points ? Checkpoint_Max_Points : points;
     snprintf(text[0], sizeof(text[0]), "%ld", round);
     snprintf(text[1], sizeof(text[1]), "%ld", points);
-    const char *perks = store_get(store, "Perks");
+    const char *perks = store_get(store, "PerkList") != NULL ? NULL : store_get(store, "Perks");
     bool quick_revive = false, others = false;
     for (const char *item = perks; item != NULL && *item != '\0';) {
         const char *rest;
@@ -644,4 +653,15 @@ int checkpoint_weapon_commands(const char *saved, const char *held, char *out, s
         }
     }
     return count;
+}
+
+bool checkpoint_loadout(const checkpoint_paths_t *paths, loadout_t *loadout) {
+    static store_t store;
+    loadout_clear(loadout);
+    if (!load_store(paths->checkpoint, &store))
+        return false;
+    const char *guns = store_get(&store, "Guns"), *perks = store_get(&store, "PerkList");
+    if (guns == NULL && perks == NULL)
+        return false;
+    return loadout_parse(guns, store_get(&store, "GunInHand"), perks, loadout);
 }

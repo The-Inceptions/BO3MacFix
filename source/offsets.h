@@ -182,6 +182,7 @@
 #define ADDR_g_entities_Ptr 0x1966be8 // holds g_entities' address (gentity_t, 0x4f8 bytes each; CheatsOk divides by it)
 #define ADDR_bg_weaponVariantDefs 0x14ce0a70 // WeaponVariantDef *[], by weapon index (BG_GetWeaponDef at 0x12362cd)
 #define ADDR_bg_lastWeaponIndex 0x14ce0a68 // int: the number of weapons less one (BG_GetNumWeapons at 0x12362a8)
+#define gentity_Size 0x4f8
 #define gentity_Client 0x250 // gclient_t *
 #define gentity_Health 0x2c8 // int, which CheatsOk wants above 0
 #define gclient_Weapon 0x2c0 // Weapon: the one in hand (take clears it when it takes that one)
@@ -189,6 +190,34 @@
 #define gclient_HeldWeapon_Size 0x30
 #define gclient_HeldWeapon_Count 15
 #define WeaponVariantDef_WeaponDef 0x18 // WeaponDef *; the variant's name is its first field
+#define WeaponVariantDef_ScriptName 0x8 // const char *: the name the server's weapon lookup has it by (ray_gun_upgraded for ray_gun_upgraded_zm), the second table BG_RegisterWeapon at 0x123650e fills
 #define WeaponDef_InventoryType 0x7c // int: 0 primary, 1 offhand, 3 alt-fire mode (which give refuses), 4 melee
+// a held weapon's weapon options (uint64_t, camo in the low byte) and attachment cosmetic variants (uint32_t), what the
+// GetWeaponOptions (0xdaf9e6) and GetWeaponAcvi (0xda40b6) builtins return
+#define gclient_HeldWeapon_Options 0x8
+#define gclient_HeldWeapon_Acvi 0x18
+#define gclient_WeaponSwitch 0x16b50 // uint64_t: cleared with the one in hand when take takes that one (Cmd_Take_f)
+// the full loadout (zm_inventory.c, zm_loadout.c): what the GiveWeapon, TakeWeapon, SwitchToWeapon and HasPerk builtins
+// call, and what the script VM's callbacks (Scr_PlayerConnect at 0x11901c3) use to run a script function on a player
+#define ADDR_G_GivePlayerWeapon 0x12d2216 // func - int (gentity_t *, gclient_t *, Weapon, uint64_t options, int 0, int acvi), GiveWeapon's - name is a guess
+#define ADDR_G_GiveStartAmmo 0xdb767d // func - void (gentity_t *, Weapon, int held_before), GiveWeapon's after giving, and GiveStartAmmo's - name is a guess
+#define ADDR_G_TakePlayerWeapon 0x12d21e5 // func - int (gentity_t *, gclient_t *, Weapon, bool), Cmd_Take_f's - name is a guess
+#define ADDR_G_SelectWeapon 0x12d2a8f // func - void (int clientNum, Weapon), tells the client to select it (0: none) - name is a guess
+#define ADDR_G_SwitchToWeapon 0xdb7a16 // func - void (gentity_t *, int immediate, Weapon), SwitchToWeapon's - name is a guess
+#define ADDR_BG_GetWeaponForName 0x1237bcf // func - Weapon (const char *), "name+attachment+..." the way the server's GetWeapon has it
+#define ADDR_BG_GetPerkIndexForName 0x14d7be9 // func - int (const char *), 0x69 for none
+#define ADDR_BG_HasPerk 0x14d7d44 // func - bool (gclient_t *, int perk index)
+#define ADDR_bg_attachmentNames 0x20fc4b0 // const char *[44]: the attachment ids in a Weapon's 6-bit fields, 0 "none"
+#define ADDR_SV_Cmd_ArgvBuffer 0xf75cfb // func - void (int arg, char *buffer, int size), the client command's arguments
+#define ADDR_Scr_GetFunctionHandle 0x1492c98 // func - handle *(handle *out, inst, const char *script, uint32_t namespace, uint32_t name, int *checksum, bool required): a 0x110-byte handle, "%s::%s" then the code position at +0x108, NULL there if not found - name is a guess
+#define ADDR_Scr_ExecEntThread 0x148d9e7 // func - unsigned int (gentity_t *, int params, handle passed by value), runs a server script function with the entity as self
+#define ADDR_Scr_FreeThread 0x11a18f9 // func - void (inst, unsigned int thread)
+#define ADDR_Scr_AddString 0x11a339d // func - void (inst, const char *)
+#define ADDR_Scr_AddWeapon 0x11a32fa // func - void (inst, Weapon, int clientNum), a weapon object (class 5) - name is a guess
+#define ADDR_scrClientNum 0x208f1c8 // int: the clientNum GetWeapon and the callbacks pass along - name is a guess
+#define ADDR_scrVarGlob 0x1599be00 // 0x100 bytes per script instance: uint32_t *hash buckets at +0, the variables (0x40 bytes each) at +0x80 (FindVariable at 0x12f46c2) - name is a guess
+#define ADDR_scrClassMap 0x20fc330 // a class table pointer per script instance, 0x20 bytes per class: the class's object at +4, per client at +0x18 (Scr_GetEntityId at 0x12f676b) - name is a guess
+#define ADDR_scrDefaultFunction 0x21011a8 // const char *: the do-nothing code Scr_GetFunctionHandle gives a server script that lacks the function - name is a guess
+#define ADDR_scrStringTable 0x150e6048 // char *: 0x1c bytes per string id, its text at +4 (SL_ConvertToString at 0x11b6940) - name is a guess
 // -- end zm inventory
 // -- END OFFSETS

@@ -6,26 +6,35 @@
 --   a resumed game (its weapons, and a summary on screen), puts the player's own AAE options back after it, and with
 --   AutoSave on saves a solo game at each new round (written on a background queue, checkpoint_autosave.c).
 -- What a resume restores:
--- - exactly: the round (AAE's Starting Round, 1 to 255) and the points (Starting Points);
--- - partly: perks, as AAE's Perkaholic (every perk) or Spawn With Quick Revive (that one alone); the primary weapons,
---   given back by name, Pack-a-Punched ones as their upgraded weapon but without camo, attachments or ammo type;
+-- - exactly: the round (AAE's Starting Round, 1 to 255) and the points (Starting Points); the primary weapons, each
+--   with its attachments, weapon options (camo) and alternate ammo type, and the perks (the full loadout, Guns and
+--   PerkList: zm_inventory.c reads them from the game and gives them back the way the Pack-a-Punch machine does);
+-- - from older saves, without the full loadout: the guns by name, Pack-a-Punched ones as their upgraded weapon but
+--   without camo, attachments or ammo type, and perks as AAE's Perkaholic (every perk) or Spawn With Quick Revive;
 -- - only shown: the scoreboard (kills, headshots, downs, revives), which nothing can set, and the character where the
 --   game has zmInventory.player_character_identity (not on Kino, whose HUD gets it from PlayerListZM's data).
 -- The arguments are checkpoint.c's functions (settings_menu.c), then test switches, nil normally: save so many seconds
--- into a match; give these weapons (comma-separated) first; log what the match has so many seconds in. Then AutoSave's
--- writer and deleting the save (checkpoint_autosave.c), and its test switch: how many seconds of a match only set the
--- round it starts at (10).
+-- into a match; give these weapons first (comma-separated names, or a Guns line); log what the match has so many
+-- seconds in. Then AutoSave's writer and deleting the save (checkpoint_autosave.c), and its test switch: how many
+-- seconds of a match only set the round it starts at (10). Then zm_inventory.c's full loadout: reading it, setting
+-- the checkpoint's up to be given back and what that did, setting a test one up; and its test switch: give these perks
+-- first (a PerkList line).
 local save_fn, read_fn, apply_fn, clear_fn, resume_fn, weapons_fn, weapon_commands_fn, allow_cheats_fn, notice_fn,
-    save_after, give_test, report_after, autosave_fn, delete_fn, autosave_start = ...
+    save_after, give_test, report_after, autosave_fn, delete_fn, autosave_start, loadout_fn, restore_fn,
+    restore_result_fn, test_loadout_fn, perks_test = ...
 local bo3macfix = BO3MacFix
 if bo3macfix == nil or read_fn == nil then return end
 bo3macfix.SaveCheckpoint, bo3macfix.ReadCheckpoint, bo3macfix.ApplyCheckpoint = save_fn, read_fn, apply_fn
 bo3macfix.ClearCheckpoint, bo3macfix.CheckpointResume, bo3macfix.CheckpointWeapons = clear_fn, resume_fn, weapons_fn
 bo3macfix.CheckpointWeaponCommands, bo3macfix.CheckpointAllowCheats = weapon_commands_fn, allow_cheats_fn
 bo3macfix.CheckpointNotice = notice_fn
+bo3macfix.CheckpointLoadout, bo3macfix.CheckpointRestoreLoadout = loadout_fn, restore_fn
+bo3macfix.CheckpointRestoreResult, bo3macfix.CheckpointTestLoadout = restore_result_fn, test_loadout_fn
 local log = bo3macfix.Log or function() end
 
 local POLL_MS = 500
+-- how long the loadout's give command is waited for: zm_inventory.c keeps it set up for 30 s
+local RESTORE_WAIT_POLLS = 62
 -- the options a resume sets (checkpoint.c), whose values in the game ClearCheckpoint compares
 local RESUME_DVARS = { "tfoption_starting_round", "tfoption_starting_points", "tfoption_perkaholic",
     "tfoption_spawn_with_quick_res" }
@@ -119,6 +128,44 @@ local function weapon_text(name)
     return base ~= nil and text .. " (Pack-a-Punched)" or text
 end
 
+-- the alternate ammo types' names in the game
+local AATS = { zm_aat_blast_furnace = "Blast Furnace", zm_aat_dead_wire = "Dead Wire", zm_aat_fire_works = "Fireworks",
+    zm_aat_thunder_wall = "Thunder Wall", zm_aat_turned = "Turned" }
+
+-- a Guns line's guns ("name+attachments:options:acvi:aat") as "ray gun (Pack-a-Punched, Turned)"
+local function guns_text(guns)
+    local texts = {}
+    for entry in string.gmatch(guns or "", "[^,]+") do
+        local name, rest = string.match(entry, "^([^+:]+)([^:]*):")
+        local aat = string.match(entry, ":([%w_]*)$")
+        if name ~= nil then
+            local text = weapon_text((string.gsub(name, "_zm$", "")))
+            local extras = {}
+            local _, attachments = string.gsub(rest, "%+", "")
+            if attachments > 0 then table.insert(extras, attachments .. (attachments == 1 and " attachment" or " attachments")) end
+            if aat ~= nil and aat ~= "" then
+                table.insert(extras, AATS[aat] or (string.gsub(string.gsub(aat, "^zm_aat_", ""), "_", " ")))
+            end
+            if #extras > 0 then
+                local upgraded = string.match(text, "^(.-) %(Pack%-a%-Punched%)$")
+                text = (upgraded or text) .. " (" .. (upgraded ~= nil and "Pack-a-Punched, " or "") ..
+                    table.concat(extras, ", ") .. ")"
+            end
+            table.insert(texts, text)
+        end
+    end
+    return texts
+end
+
+-- whether a checkpoint has the full loadout (Guns and PerkList), which comes back exactly
+local function has_loadout(checkpoint)
+    return (checkpoint.Guns ~= nil and checkpoint.Guns ~= "") or checkpoint.PerkList ~= nil
+end
+
+-- "resume" from when a resumed game's give command for its loadout runs until the game says what it did ("test" for
+-- the test switch's): the player holds the starting guns meanwhile
+local loadout_pending = nil
+
 local function perk_names(ids)
     local names, wanted = {}, {}
     for _, id in ipairs(split(ids)) do wanted[id] = true end
@@ -189,13 +236,21 @@ local function collect(controller)
     local character = identity ~= nil and not OTHER_CREW[map] and CHARACTERS[identity] or nil
     if character == nil and icon ~= nil and tostring(icon) ~= "" then character = tostring(icon) end
     local primaries, others, raw = weapons_now()
+    -- each gun with its attachments, options and ammo type, and the perks ("Guns=...\nGunInHand=...\nPerkList=...")
+    local loadout = call(bo3macfix.CheckpointLoadout)
+    if type(loadout) ~= "string" then loadout = nil end
     -- a resumed game whose saved guns aren't back yet holds the starting ones, or none that can be read: a save then
-    -- keeps the saved guns (quitting at once would otherwise swap them for the starting pistol)
-    if call(bo3macfix.CheckpointResume, 0) == 2 then
+    -- keeps the saved guns and perks (quitting at once would otherwise swap them for the starting pistol)
+    if call(bo3macfix.CheckpointResume, 0) == 2 or loadout_pending == "resume" then
         local checkpoint = read_checkpoint()
-        if checkpoint.Map == map and checkpoint.Weapons ~= nil and checkpoint.Weapons ~= "" then
+        if checkpoint.Map == map and ((checkpoint.Weapons ~= nil and checkpoint.Weapons ~= "") or has_loadout(checkpoint)) then
             primaries, others = split(checkpoint.Weapons), split(checkpoint.Equipment)
             raw = "the saved ones, not given back yet (holding " .. tostring(raw) .. ")"
+            if has_loadout(checkpoint) then
+                loadout = "Guns=" .. (checkpoint.Guns or "") .. "\nGunInHand=" .. (checkpoint.GunInHand or "") ..
+                    "\nPerkList=" .. (checkpoint.PerkList or "")
+                perks = split(checkpoint.Perks)
+            end
         end
     end
     local lines = { "Map=" .. clean(map), "Round=" .. tostring(math.floor(round)),
@@ -205,12 +260,13 @@ local function collect(controller)
         table.insert(lines, "Weapons=" .. table.concat(primaries, ","))
         table.insert(lines, "Equipment=" .. table.concat(others, ","))
     end
+    if loadout ~= nil then table.insert(lines, loadout) end
     local seen = "round " .. tostring(round) .. ", points " .. tostring(points) .. ", perks " ..
         table.concat(perks, ",") .. ", weapons " .. tostring(raw) .. ", held " .. tostring(held) .. " (" ..
         viewmodel .. ", AAT " .. tostring(model_value(root, "currentWeapon.aatIcon")) .. ", PaP level " ..
         tostring(model_value(root, "hudItems.paplv")) .. "), character " .. tostring(identity) .. "/" ..
         tostring(icon) .. ", scoreboard " .. table.concat(stats, ", ") .. " (" .. table.concat(headers, ",") ..
-        "), models: roundsPlayed " .. tostring(played)
+        "), models: roundsPlayed " .. tostring(played) .. ", loadout " .. string.gsub(tostring(loadout), "\n", "; ")
     for _, name in ipairs({ "playerScore", "playerScoreShown", "zombiePlayerIcon", "portraitIcon", "playerName", "clientNum" }) do
         seen = seen .. ", " .. name .. " " .. tostring(model_value(root, player .. "." .. name)) .. "/" ..
             tostring(model_value(global, player .. "." .. name))
@@ -272,8 +328,10 @@ function bo3macfix.CheckpointRows(controller, message)
         local parts = {}
         local perks = perk_names(checkpoint.Perks)
         if #perks > 0 then table.insert(parts, #perks .. " perks") end
-        local weapons = {}
-        for _, name in ipairs(split(checkpoint.Weapons)) do table.insert(weapons, weapon_text(name)) end
+        local weapons = guns_text(checkpoint.Guns)
+        if #weapons == 0 then
+            for _, name in ipairs(split(checkpoint.Weapons)) do table.insert(weapons, weapon_text(name)) end
+        end
         if #weapons > 0 then table.insert(parts, table.concat(weapons, ", ")) end
         if checkpoint.Character ~= nil and checkpoint.Character ~= "" then table.insert(parts, checkpoint.Character) end
         if checkpoint.Stats ~= nil and checkpoint.Stats ~= "" then table.insert(parts, checkpoint.Stats) end
@@ -287,8 +345,8 @@ function bo3macfix.CheckpointRows(controller, message)
         message("Saved " .. summary(read_checkpoint()) .. ".")
     end
     local resume = { kind = "action", category = "Saved game", label = "Resume saved game", live = true,
-        description = "Next game: the saved round and points, every perk (AAE's Perkaholic) if you had perks, and " ..
-            "your guns back (upgraded, without camo or ammo type). Character and scoreboard can't be restored." }
+        description = "Next game: the saved round and points, then your perks and guns back, with their camo, " ..
+            "attachments and ammo types. Character and scoreboard can't be restored." }
     resume.text = function()
         local checkpoint = read_checkpoint()
         local state = bo3macfix.CheckpointResume(0)
@@ -367,7 +425,9 @@ local function show_resume(checkpoint)
     local notice = bo3macfix.CheckpointNotice or function() end
     local perks = perk_names(checkpoint.Perks)
     local perk_text = ""
-    if #perks > 1 or (#perks == 1 and perks[1] ~= "Quick Revive") then
+    if has_loadout(checkpoint) then
+        perk_text = "" -- the perks come back with the guns (CheckpointRestoreLoadout)
+    elseif #perks > 1 or (#perks == 1 and perks[1] ~= "Quick Revive") then
         perk_text = ", every perk"
     elseif #perks == 1 then
         perk_text = ", Quick Revive"
@@ -392,8 +452,20 @@ local function give_weapons(controller, checkpoint)
     match.weapon_polls = match.weapon_polls + 1
     -- the starting weapons come one after another (AAE adds the RK5): wait until they've stayed for a few seconds
     if match.weapon_polls < 6 then return end
-    local commands = bo3macfix.CheckpointWeaponCommands(checkpoint.Weapons or "", table.concat(primaries, ","))
     bo3macfix.CheckpointResume(2)
+    -- the full loadout: zm_inventory.c gives it back on the server thread when the game runs this give command
+    if has_loadout(checkpoint) then
+        local command = call(bo3macfix.CheckpointRestoreLoadout)
+        if type(command) == "string" and command ~= "" then
+            log("checkpoint: restoring the saved loadout (" .. tostring(checkpoint.Guns) .. "; perks " ..
+                tostring(checkpoint.PerkList) .. ", held " .. table.concat(primaries, ",") .. ")")
+            run_commands(controller, command)
+            match.restoring_at, loadout_pending = match.polls, "resume"
+            return
+        end
+        log("checkpoint: couldn't set up the saved loadout, giving the guns back by name")
+    end
+    local commands = bo3macfix.CheckpointWeaponCommands(checkpoint.Weapons or "", table.concat(primaries, ","))
     if commands == nil or commands == "" then
         log("checkpoint: no weapons to give back (saved " .. tostring(checkpoint.Weapons) .. ", held " ..
             table.concat(primaries, ",") .. ")")
@@ -444,8 +516,9 @@ local function autosave_tick(controller, round, state)
     if auto.next ~= round then auto.next, auto.settled = round, 0 end
     auto.settled = auto.settled + 1
     -- not while a resumed game is getting its weapons back from the saved game
-    if auto.settled < AUTOSAVE_SETTLE_POLLS or state == 2 or
-        (match.given_at ~= nil and match.polls < match.given_at + AUTOSAVE_AFTER_GIVE_POLLS) then
+    if auto.settled < AUTOSAVE_SETTLE_POLLS or state == 2 or match.restoring_at ~= nil or
+        (match.given_at ~= nil and match.polls < match.given_at + AUTOSAVE_AFTER_GIVE_POLLS) or
+        (match.restored_at ~= nil and match.polls < match.restored_at + AUTOSAVE_AFTER_GIVE_POLLS) then
         return
     end
     auto.round, auto.next = round, nil
@@ -466,7 +539,7 @@ end
 
 local function poll(controller)
     if not in_match() then
-        match = nil
+        match, loadout_pending = nil, nil
         -- back in the menus after a resumed game: the player's own AAE options again (which ends the resume, so
         -- this happens once)
         if bo3macfix.CheckpointResume(0) >= 2 then clear_resume(controller) end
@@ -484,7 +557,7 @@ local function poll(controller)
     end
     if state == 2 and match.polls >= 6 then
         local checkpoint = read_checkpoint()
-        if checkpoint.Weapons == nil or checkpoint.Weapons == "" then
+        if (checkpoint.Weapons == nil or checkpoint.Weapons == "") and not has_loadout(checkpoint) then
             bo3macfix.CheckpointResume(2)
         elseif checkpoint.Map ~= current_map() then
             bo3macfix.CheckpointResume(2)
@@ -501,10 +574,57 @@ local function poll(controller)
         for _, name in ipairs(primaries or {}) do table.insert(names, weapon_text(name)) end
         notice("Guns back: " .. table.concat(names, ", "))
     end
+    -- the loadout's restore, which tells what it did once the game has run it. A give command the game holds back
+    -- longer than zm_inventory.c waits for it (the pause menu open) is sent again, twice at most.
+    if match.restoring_at ~= nil then
+        local result = call(bo3macfix.CheckpointRestoreResult)
+        local expired = type(result) == "string" and string.find(result, "^nothing set up") ~= nil
+        if (expired or match.polls > match.restoring_at + RESTORE_WAIT_POLLS) and loadout_pending == "resume" and
+            (match.restore_tries or 1) < 3 then
+            local command = call(bo3macfix.CheckpointRestoreLoadout)
+            if type(command) == "string" and command ~= "" then
+                match.restore_tries = (match.restore_tries or 1) + 1
+                log("checkpoint: the saved loadout's give command didn't run in time (paused?), sending it again")
+                run_commands(controller, command)
+                match.restoring_at, result = match.polls, nil
+            end
+        end
+        if type(result) == "string" then
+            match.restoring_at, match.restored_at, loadout_pending = nil, match.polls, nil
+            local _, _, raw = weapons_now()
+            log("checkpoint: loadout restored: " .. result .. "; weapons now " .. tostring(raw))
+            local checkpoint = read_checkpoint()
+            local notice = bo3macfix.CheckpointNotice or function() end
+            local guns = guns_text(checkpoint.Guns)
+            if #guns > 0 then notice("Guns back: " .. table.concat(guns, ", ")) end
+            local perks = split(checkpoint.PerkList)
+            if #perks > 0 then notice("Perks back: " .. #perks) end
+            local failed = string.match(result, "failed: (.*)$")
+            if failed ~= nil then notice("Not restored: " .. failed) end
+        elseif match.polls > match.restoring_at + RESTORE_WAIT_POLLS then
+            match.restoring_at, loadout_pending = nil, nil
+            log("checkpoint: the saved loadout wasn't restored: the game didn't run its give command")
+        end
+    end
     -- the HUD's round is one less than roundsPlayed
     autosave_tick(controller, played - 1, state)
     -- test switches
     local seconds = match.polls * POLL_MS / 1000
+    if (give_test ~= nil or perks_test ~= nil) and not match.gave_test and seconds >= 12 and
+        (string.find(give_test or ":", ":", 1, true) ~= nil) then
+        -- a Guns line and a PerkList line: given the way a resume gives the full loadout, or after "pap:" the way the
+        -- Pack-a-Punch machine gives a gun (the game's camo and build kit, then the ammo type)
+        match.gave_test = true
+        local pap_guns = string.match(give_test or "", "^pap:(.*)$")
+        local command = call(bo3macfix.CheckpointTestLoadout, pap_guns or give_test or "", perks_test or "",
+            pap_guns ~= nil)
+        log("checkpoint test: loadout " .. tostring(give_test) .. "; perks " .. tostring(perks_test) .. ": " ..
+            tostring(command))
+        if type(command) == "string" and command ~= "" then
+            run_commands(controller, command)
+            match.restoring_at, loadout_pending = match.polls, "test"
+        end
+    end
     if give_test ~= nil and not match.gave_test and seconds >= 12 then
         match.gave_test = true
         local commands = bo3macfix.CheckpointWeaponCommands(give_test, "")

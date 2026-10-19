@@ -4,7 +4,7 @@ TARGET = BO3MacFix.dylib
 TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
 	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint \
-	tests/test_zm_inventory tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan
+	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -44,8 +44,8 @@ SOURCES += source/prepatch.c
 # the build All-around Enhancement checks for, read from its fastfile (aae_build.c)
 SOURCES += source/aae_build.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
-# weapons back (zm_inventory.c)
-SOURCES += source/checkpoint.c source/zm_inventory.c
+# weapons back with their camo, attachments and ammo types, and its perks (zm_inventory.c, zm_loadout.c)
+SOURCES += source/checkpoint.c source/zm_inventory.c source/zm_loadout.c
 # saving it by itself at each new round, on a background queue, and deleting the save (checkpoint_autosave.c)
 SOURCES += source/checkpoint_autosave.c
 
@@ -137,27 +137,35 @@ tests/test_players_cfg: tests/test_players_cfg.c source/players_cfg.c source/pla
 
 # checkpoint.c (AAE's mutations lines, saving, applying and clearing a checkpoint) with made-up files, and the
 # sanitizers since it parses files
-tests/test_checkpoint: tests/test_checkpoint.c source/checkpoint.c source/checkpoint.h
+tests/test_checkpoint: tests/test_checkpoint.c source/checkpoint.c source/checkpoint.h source/zm_loadout.c \
+		source/zm_loadout.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_checkpoint.c \
-		source/checkpoint.c
+		source/checkpoint.c source/zm_loadout.c
+
+# zm_loadout.c (a loadout's names and checkpoint.ini text, reading the script VM's variables, restoring) against a
+# made-up memory image and made-up game calls, with the sanitizers since it's all offsets and parsing
+tests/test_zm_loadout: tests/test_zm_loadout.c source/zm_loadout.c source/zm_loadout.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_zm_loadout.c \
+		source/zm_loadout.c
 
 # zm_inventory.c's pass through the game's cheat check for BO3MacFix's give and take commands, against a made-up
 # g_entities (the test includes the source)
-tests/test_zm_inventory: tests/test_zm_inventory.c source/zm_inventory.c source/zm_inventory.h source/offsets.h
+tests/test_zm_inventory: tests/test_zm_inventory.c source/zm_inventory.c source/zm_inventory.h source/offsets.h \
+		source/zm_loadout.c source/zm_loadout.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -o $@ \
-		tests/test_zm_inventory.c
+		tests/test_zm_inventory.c source/zm_loadout.c
 
 # checkpoint_autosave.c (AutoSave's background writer, its rules, deleting the save, the lock) with made-up files, with
 # the address and undefined behaviour sanitizers, and again with the thread sanitizer since it's about two threads
 tests/test_checkpoint_autosave: tests/test_checkpoint_autosave.c source/checkpoint_autosave.c source/checkpoint_autosave.h \
-		source/checkpoint.c source/checkpoint.h
+		source/checkpoint.c source/checkpoint.h source/zm_loadout.c source/zm_loadout.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_checkpoint_autosave.c \
-		source/checkpoint_autosave.c source/checkpoint.c
+		source/checkpoint_autosave.c source/checkpoint.c source/zm_loadout.c
 
 tests/test_checkpoint_autosave_tsan: tests/test_checkpoint_autosave.c source/checkpoint_autosave.c \
-		source/checkpoint_autosave.h source/checkpoint.c source/checkpoint.h
+		source/checkpoint_autosave.h source/checkpoint.c source/checkpoint.h source/zm_loadout.c source/zm_loadout.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=thread -o $@ tests/test_checkpoint_autosave.c \
-		source/checkpoint_autosave.c source/checkpoint.c
+		source/checkpoint_autosave.c source/checkpoint.c source/zm_loadout.c
 
 # controllers.c (when the game is asked to look for controllers, the version SDL is given) against a fake game image and
 # fake HID devices, and gc_bridge.m's player slots as the game's XInput calls see them, with stand-in controllers
