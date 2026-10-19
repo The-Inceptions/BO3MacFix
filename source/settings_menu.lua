@@ -30,6 +30,9 @@ local function new_text(parent, x, y, width, height, r, g, b)
 end
 
 local function value_text(setting)
+    if setting.kind == "action" then
+        return setting.text()
+    end
     if setting.kind == "toggle" then
         return setting.value ~= 0 and "On" or "Off"
     end
@@ -39,6 +42,186 @@ local function value_text(setting)
         end
     end
     return tostring(setting.value)
+end
+
+-- ---- the zombies checkpoint (checkpoint.c): the round and points of a game, to start a later one from with All-around
+-- Enhancement's Starting Round and Starting Points options, and what else the UI shows about it, for reference
+local ROUND_OPTION, POINTS_OPTION = "tfoption_starting_round", "tfoption_starting_points"
+local PERKS = { { "juggernaut", "Juggernog" }, { "quick_revive", "Quick Revive" }, { "sleight_of_hand", "Speed Cola" },
+    { "doubletap", "Double Tap" }, { "dead_shot", "Deadshot" }, { "marathon", "Stamin-Up" },
+    { "additional_primary_weapon", "Mule Kick" }, { "widows_wine", "Widow's Wine" },
+    { "electric_cherry", "Electric Cherry" }, { "phdflopper", "PhD Flopper" }, { "tombstone", "Tombstone" },
+    { "whoswho", "Who's Who" }, { "banana_colada", "Banana Colada" }, { "dive_to_nuke", "Dive to Nuke" } }
+
+local function call(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local ok, result = pcall(fn, ...)
+    if ok then return result end
+    return nil
+end
+
+local function option(name)
+    local value = call(Engine.DvarString, nil, name)
+    return value ~= nil and tostring(value) or ""
+end
+
+local function in_match()
+    local map = call(Engine.GetCurrentMap)
+    return call(Engine.IsInGame) == true and type(map) == "string" and map ~= "" and map ~= "core_frontend"
+end
+
+local function model_value(parent, path)
+    local model = parent ~= nil and call(Engine.GetModel, parent, path) or nil
+    return model ~= nil and call(Engine.GetModelValue, model) or nil
+end
+
+local function run_commands(controller, commands)
+    for line in string.gmatch(commands, "[^\n]+") do
+        Engine.Exec(controller, line)
+    end
+end
+
+local function read_checkpoint()
+    local checkpoint = {}
+    for line in string.gmatch(BO3MacFix.ReadCheckpoint(), "[^\n]+") do
+        local key, value = string.match(line, "^(%a+)=(.*)$")
+        if key ~= nil then checkpoint[key] = value end
+    end
+    return checkpoint
+end
+
+-- 12340 as "12,340"
+local function number_text(value)
+    local text = tostring(value or "")
+    local sign, digits = string.match(text, "^(-?)(%d+)$")
+    if digits == nil then return text end
+    digits = string.reverse((string.gsub(string.reverse(digits), "(%d%d%d)", "%1,")))
+    return sign .. (string.gsub(digits, "^,", ""))
+end
+
+-- one line of text for checkpoint.ini
+local function clean(text)
+    return string.sub((string.gsub(tostring(text or ""), "%c", " ")), 1, 200)
+end
+
+local function localized(text)
+    local result = text ~= nil and text ~= "" and call(Engine.Localize, text) or nil
+    return type(result) == "string" and result ~= "" and result or text
+end
+
+-- this game's checkpoint as "Key=value" lines, nil without a round
+local function collect_checkpoint(controller)
+    local root, global = Engine.GetModelForController(controller), call(Engine.GetGlobalModel)
+    local client = call(Engine.GetClientNum, controller) or 0
+    local round = tonumber(model_value(root, "gameScore.roundsPlayed"))
+    local player = "PlayerList.client" .. tostring(client)
+    local points = tonumber(model_value(root, player .. ".playerScore") or model_value(global, player .. ".playerScore"))
+    -- the scoreboard: score, kills, downs, revives and headshots in zombies, named by its own headers
+    local stats = {}
+    for column = 0, 4 do
+        local header = call(Engine.GetScoreboardColumnHeader, controller, column)
+        local value = call(Engine.GetScoreboardColumnForClient, client, column)
+        if type(header) == "string" and header ~= "" and value ~= nil and tostring(value) ~= "" then
+            table.insert(stats, localized(header) .. " " .. tostring(value))
+            if points == nil and column == 0 then points = tonumber(value) end
+        end
+    end
+    if round == nil or round < 1 or points == nil then return nil end
+    local perks = {}
+    for _, perk in ipairs(PERKS) do
+        local value = tonumber(model_value(root, "hudItems.perks." .. perk[1]))
+        if value ~= nil and value > 0 then table.insert(perks, perk[2]) end
+    end
+    local weapon = model_value(root, "currentWeapon.weaponName")
+    local viewmodel = tostring(model_value(root, "currentWeapon.viewmodelWeaponName") or "")
+    weapon = localized(type(weapon) == "string" and weapon ~= "" and weapon or viewmodel)
+    if weapon ~= "" and string.find(string.lower(viewmodel), "upgraded", 1, true) then
+        weapon = weapon .. " (Pack-a-Punched)"
+    end
+    local character = model_value(root, player .. ".zombiePlayerIcon") or model_value(global, player .. ".zombiePlayerIcon")
+    return table.concat({ "Map=" .. clean(call(Engine.GetCurrentMap)), "Round=" .. tostring(math.floor(round)),
+        "Points=" .. tostring(math.floor(points)), "Perks=" .. clean(table.concat(perks, ", ")),
+        "Weapon=" .. clean(weapon), "Character=" .. clean(character), "Stats=" .. clean(table.concat(stats, ", ")) }, "\n")
+end
+
+-- the preset AAE's custom mutations file is named for (AAECustomMutations_Default.cfg)
+local function mutations_preset()
+    local postfix = call(CoD.GetGameRulePostFix)
+    if postfix == nil and type(_G) == "table" then postfix = call(rawget(_G, "GetGameRulePostFix")) end
+    if type(postfix) == "string" and string.match(postfix, "^[%w_ %-]+$") then return postfix end
+    return "_Default"
+end
+
+-- once a game has started with a resume set up, back in the menus the player's own starting round and points return
+local resume_checked = false
+local function check_resume()
+    if resume_checked or BO3MacFix.CheckpointResume == nil then return end
+    local state = BO3MacFix.CheckpointResume(0)
+    if in_match() then
+        resume_checked = true
+        if state == 1 then BO3MacFix.CheckpointResume(1) end
+    elseif state == 2 then
+        resume_checked = true
+        local commands = BO3MacFix.ClearCheckpoint(option(ROUND_OPTION), option(POINTS_OPTION))
+        if commands ~= nil then run_commands(0, commands) end
+    end
+end
+
+-- the page's two checkpoint rows; message(text) shows what they did
+local function checkpoint_rows(controller, message)
+    local function summary(checkpoint)
+        if checkpoint.Round == nil then return "None saved" end
+        local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and ", " .. checkpoint.Map or ""
+        return "Round " .. checkpoint.Round .. ", " .. number_text(checkpoint.Points) .. " points" .. map
+    end
+    local save = { kind = "action", category = "Checkpoint", label = "Save checkpoint", live = true,
+        text = function() return summary(read_checkpoint()) end }
+    save.description = function()
+        local checkpoint = read_checkpoint()
+        if checkpoint.Round == nil then
+            return "In a game: saves its round and points (and perks, weapon and scoreboard to look at) for later."
+        end
+        local parts = {}
+        for _, key in ipairs({ "Perks", "Weapon", "Stats" }) do
+            if checkpoint[key] ~= nil and checkpoint[key] ~= "" then table.insert(parts, checkpoint[key]) end
+        end
+        return #parts > 0 and table.concat(parts, "   ") or "Saved without perks, weapon or scoreboard."
+    end
+    save.run = function()
+        if not in_match() then return message("Open this page during a zombies game to save it.") end
+        local lines = collect_checkpoint(controller)
+        if lines == nil then return message("Couldn't read this game's round and points.") end
+        if not BO3MacFix.SaveCheckpoint(lines) then return message("Couldn't save BO3MacFix/checkpoint.ini.") end
+        message("Saved " .. summary(read_checkpoint()) .. ".")
+    end
+    local resume = { kind = "action", category = "Checkpoint", label = "Resume it in the next game", live = true,
+        description = "Starts the next game at the saved round with the saved points (AAE's Starting Round and " ..
+            "Starting Points). Weapons and perks start as usual." }
+    resume.text = function()
+        local checkpoint = read_checkpoint()
+        if BO3MacFix.CheckpointResume(0) ~= 0 and checkpoint.AppliedRound ~= nil then
+            return "Next game: round " .. checkpoint.AppliedRound .. ", " .. number_text(checkpoint.AppliedPoints)
+        end
+        return "Off"
+    end
+    resume.run = function()
+        if BO3MacFix.CheckpointResume(0) ~= 0 then
+            local commands = BO3MacFix.ClearCheckpoint(option(ROUND_OPTION), option(POINTS_OPTION))
+            if commands ~= nil then run_commands(controller, commands) end
+            return message("Resume off: games start with your own Starting Round and Starting Points.")
+        end
+        if in_match() then return message("Set the resume up from the main menu, before starting the game.") end
+        local checkpoint = read_checkpoint()
+        if checkpoint.Round == nil then return message("Save a checkpoint during a game first.") end
+        local commands = BO3MacFix.ApplyCheckpoint(mutations_preset(), option(ROUND_OPTION), option(POINTS_OPTION))
+        if commands == nil then return message("Couldn't set up the resume (see BO3MacFix/log.txt).") end
+        run_commands(controller, commands)
+        local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and " Start " .. checkpoint.Map .. " to pick it up." or ""
+        local applied = read_checkpoint()
+        message("The next game starts at round " .. tostring(applied.AppliedRound) .. " with " ..
+            number_text(applied.AppliedPoints) .. " points." .. map)
+    end
+    return { save, resume }
 end
 
 local function build_page(controller)
@@ -60,6 +243,13 @@ local function build_page(controller)
     new_text(self, 64, 64, 1150, 18, 0.7, 0.7, 0.7):setText("Settings are saved to BO3MacFix/settings.ini")
 
     local settings = BO3MacFix.GetSettings()
+    -- what a checkpoint row last did, shown until another row changes something
+    local checkpoint_message = nil
+    if BO3MacFix.ReadCheckpoint ~= nil then
+        for _, row in ipairs(checkpoint_rows(controller, function(text) checkpoint_message = text end)) do
+            table.insert(settings, row)
+        end
+    end
     local rows = {}
     local description = new_text(self, 64, 600, 1150, 20, 0.8, 0.8, 0.8)
     local notice = new_text(self, 64, 640, 1150, 20, 1, 0.45, 0.3)
@@ -91,8 +281,12 @@ local function build_page(controller)
             end
         end
         local setting = settings[focus]
-        description:setText(setting and setting.description or "")
-        if save_failed ~= nil then
+        local about = setting and setting.description or ""
+        if type(about) == "function" then about = about() end
+        description:setText(about)
+        if checkpoint_message ~= nil then
+            notice:setText(checkpoint_message)
+        elseif save_failed ~= nil then
             notice:setText("Couldn't save " .. save_failed .. " to BO3MacFix/settings.ini.")
         elseif BO3MacFix.RestartPending() then
             notice:setText("Restart required for your changes to apply.  Press Triangle or R to restart now.")
@@ -101,9 +295,22 @@ local function build_page(controller)
         end
     end
 
-    local function change(step)
+    -- pressed: Cross/Enter or a click, the only way to run a checkpoint row
+    local function change(step, pressed)
         local setting = settings[focus]
         if setting == nil then return end
+        if setting.kind == "action" then
+            if pressed then
+                local ok, err = pcall(setting.run)
+                if not ok then
+                    checkpoint_message = "That didn't work (see BO3MacFix/log.txt)."
+                    log("settings menu error: " .. tostring(err))
+                end
+            end
+            refresh()
+            return
+        end
+        checkpoint_message = nil
         local new_value = setting.value
         if setting.kind == "toggle" then
             new_value = setting.value ~= 0 and 0 or 1
@@ -156,7 +363,7 @@ local function build_page(controller)
     bind(Enum.LUIButton.LUI_KEY_DOWN, "DOWNARROW", function() focus = math.min(#settings, focus + 1) refresh() end)
     bind(Enum.LUIButton.LUI_KEY_LEFT, "LEFTARROW", function() change(-1) end)
     bind(Enum.LUIButton.LUI_KEY_RIGHT, "RIGHTARROW", function() change(1) end)
-    bind(Enum.LUIButton.LUI_KEY_XBA_PSCROSS, "ENTER", function() change(1) end)
+    bind(Enum.LUIButton.LUI_KEY_XBA_PSCROSS, "ENTER", function() change(1, true) end)
     bind(Enum.LUIButton.LUI_KEY_XBY_PSTRIANGLE, "R", function()
         if BO3MacFix.RestartPending() then
             log("settings menu: restarting the game")
@@ -272,6 +479,7 @@ end
 local opened_once = false
 function BO3MacFix.MenuCreated(name, menu)
     ensure_lobby_entry()
+    check_resume()
     if name == "StartMenu_Main" then
         -- the start menu's constructor sets it up after this returns, so add the button once it has
         after(menu, 1, function() add_start_menu_button(menu) end)
