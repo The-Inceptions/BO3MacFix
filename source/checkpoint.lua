@@ -250,6 +250,10 @@ local function collect(controller)
                 loadout = "Guns=" .. (checkpoint.Guns or "") .. "\nGunInHand=" .. (checkpoint.GunInHand or "") ..
                     "\nPerkList=" .. (checkpoint.PerkList or "")
                 perks = split(checkpoint.Perks)
+            else
+                -- an older save without them stays one: the loadout read now is the starting guns', and a Guns line
+                -- would be given back instead of the saved Weapons next time
+                loadout = nil
             end
         end
     end

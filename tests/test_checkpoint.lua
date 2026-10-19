@@ -247,9 +247,14 @@ weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
 polls(1)
 check(state == 2, "a resumed game, its guns not back yet")
 local before = #saves
+-- the game's own loadout is the starting pistol's then; this older save (no Guns, no PerkList) must not take it
+loadout = "Guns=pistol_m1911_zm:0:0:\nGunInHand=pistol_m1911_zm\nPerkList="
 BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+loadout = nil
 check(#saves == before + 1 and saves[#saves].Weapons == "ray_gun_upgraded,pistol_burst" and
     saves[#saves].Equipment == "frag_grenade,knife", "quitting keeps the saved guns: " .. tostring(saves[#saves].Weapons))
+check(saves[#saves].Guns == nil and saves[#saves].PerkList == nil and store.Guns == nil and store.PerkList == nil,
+    "an older save stays one, without the starting pistol's Guns line: " .. tostring(saves[#saves].Guns))
 -- likewise when no weapons can be read (a save without them would drop the saved ones)
 weapons = nil
 save_row.run()
