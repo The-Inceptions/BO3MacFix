@@ -38,6 +38,7 @@
 #include "notices.h"
 #include "offsets.h"
 #include "players_cfg.h"
+#include "checkpoint.h"
 #include "prepatch.h"
 #include "qol.h"
 #include "rawmouse.h"
@@ -967,6 +968,13 @@ __attribute__((constructor)) static void dylib_main() {
     }
     // write the log out line by line, so nothing is lost if the game crashes or is killed
     setvbuf(stdout, NULL, _IOLBF, 0);
+
+    // a checkpoint resume set up last time (checkpoint.c) and not undone: the game quit before getting back to the
+    // menus. Put the player's own starting round and points back in AAE's mutations file before AAE loads it.
+    char checkpoint_commands[512];
+    if (checkpoint_clear(&(checkpoint_paths_t){ Checkpoint_File, Checkpoint_Players_Folder }, NULL, NULL,
+                         checkpoint_commands, sizeof(checkpoint_commands)))
+        printf("BO3MacFix: checkpoint: undid the resume set up last time\n");
 
     // get the base address of the binary
     game_base_address = get_base_address();

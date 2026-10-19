@@ -2,6 +2,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+#include "checkpoint.h"
 #include "havok.h"
 #include "notices.h"
 #include "settings.h"
@@ -15,9 +17,83 @@ static int lua_log(lua_State *s) {
     return 0;
 }
 
+// the zombies checkpoint (checkpoint.c), BO3MacFix.SaveCheckpoint and the rest below
+static const checkpoint_paths_t checkpoint_paths = { Checkpoint_File, Checkpoint_Players_Folder };
+
+// SaveCheckpoint("Key=value" lines): whether it was saved
+static int lua_checkpoint_save(lua_State *s) {
+    bool saved = checkpoint_save(&checkpoint_paths, hks_check_string(s, 1), (long)time(NULL));
+    printf("BO3MacFix: checkpoint: %s\n", saved ? "saved" : "couldn't save it");
+    hks_push_boolean(s, saved);
+    return 1;
+}
+
+// ReadCheckpoint(): the checkpoint as "Key=value" lines, empty if there's none
+static int lua_checkpoint_read(lua_State *s) {
+    static char text[8192];
+    checkpoint_read(&checkpoint_paths, text, sizeof(text));
+    hks_push_string(s, text);
+    return 1;
+}
+
+// ApplyCheckpoint(preset, previous round, previous points): the console commands to run, nil if it couldn't
+static int lua_checkpoint_apply(lua_State *s) {
+    const char *preset = hks_check_string(s, 1), *round = hks_check_string(s, 2), *points = hks_check_string(s, 3);
+    char commands[512];
+    bool applied = checkpoint_apply(&checkpoint_paths, preset, round, points, commands, sizeof(commands));
+    printf("BO3MacFix: checkpoint: %s\n", applied ? "the next game resumes it" : "couldn't set up the resume");
+    if (applied)
+        hks_push_string(s, commands);
+    else
+        hks_push_nil(s);
+    return 1;
+}
+
+// ClearCheckpoint(current round, current points): the console commands to run, nil if no resume was set up
+static int lua_checkpoint_clear(lua_State *s) {
+    const char *round = hks_check_string(s, 1), *points = hks_check_string(s, 2);
+    char commands[512];
+    bool cleared = checkpoint_clear(&checkpoint_paths, round, points, commands, sizeof(commands));
+    if (cleared) {
+        printf("BO3MacFix: checkpoint: resume undone, the starting round and points are the player's own again\n");
+        hks_push_string(s, commands);
+    } else {
+        hks_push_nil(s);
+    }
+    return 1;
+}
+
+// CheckpointResume(mark): 0 no resume set up, 1 set up, 2 a game has started with it; with mark, notes that one has
+static int lua_checkpoint_resume(lua_State *s) {
+    float mark = 0;
+    if (hks_number_arg(s, 1, &mark) && mark != 0 && checkpoint_mark_in_use(&checkpoint_paths))
+        printf("BO3MacFix: checkpoint: a game started with the resume\n");
+    hks_push_number(s, (float)checkpoint_resume_state(&checkpoint_paths));
+    return 1;
+}
+
+static const char checkpoint_lua[] =
+    "local save, read, apply, clear, resume = ...\n"
+    "BO3MacFix.SaveCheckpoint, BO3MacFix.ReadCheckpoint, BO3MacFix.ApplyCheckpoint = save, read, apply\n"
+    "BO3MacFix.ClearCheckpoint, BO3MacFix.CheckpointResume = clear, resume\n";
+
+static void checkpoint_lua_install(lua_State *s) {
+    ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
+    if (hks_load_source(s, checkpoint_lua, sizeof(checkpoint_lua) - 1, "=BO3MacFix checkpoint")) {
+        hks_push_cfunction(s, lua_checkpoint_save, "CheckpointSave");
+        hks_push_cfunction(s, lua_checkpoint_read, "CheckpointRead");
+        hks_push_cfunction(s, lua_checkpoint_apply, "CheckpointApply");
+        hks_push_cfunction(s, lua_checkpoint_clear, "CheckpointClear");
+        hks_push_cfunction(s, lua_checkpoint_resume, "CheckpointResume");
+        hks_pcall(s, 5, 0);
+    }
+    HKS_TOP(s) = HKS_BASE(s) + top;
+}
+
 static int lua_install(lua_State *s) {
     settings_lua_install(s);
     notices_lua_install(s);
+    checkpoint_lua_install(s);
     return 0;
 }
 

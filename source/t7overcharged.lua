@@ -149,6 +149,35 @@ local function setup()
     UIErrorHash = provide(UIErrorHash or {}, {})
     HotReload = provide(HotReload or {}, {})
 
+    -- All-around Enhancement's GSC gets its saved careers, bank balance and weapon locker from Lua as menu responses
+    -- ("ELMGDataGet..."), and its chat commands (/save, /dep, /bal) as "ChatNotify..." ones. Log that they were sent,
+    -- without what's in them, so a bank that doesn't load shows whether the data got that far.
+    if Engine and type(Engine.SendMenuResponse) == "function" and Engine.BO3MacFixSendMenuResponse == nil then
+        local send = Engine.SendMenuResponse
+        Engine.BO3MacFixSendMenuResponse = send
+        Engine.SendMenuResponse = function(controller, menu, response, ...)
+            if type(response) == "string" then
+                local kind = string.match(response, "^ELMGData%a*") or string.match(response, "^ChatNotify")
+                if kind ~= nil then
+                    log("AAE sends " .. kind .. " (" .. #response .. " characters) to " .. tostring(menu))
+                end
+            end
+            return send(controller, menu, response, ...)
+        end
+    end
+    -- and the GSC's side: the "ELMGData" script notifies its Lua handler checks for with IsParamModelEqualToString
+    local is_param_equal = rawget(_G, "IsParamModelEqualToString")
+    if type(is_param_equal) == "function" and rawget(_G, "BO3MacFixIsParamModelEqualToString") == nil then
+        rawset(_G, "BO3MacFixIsParamModelEqualToString", is_param_equal)
+        rawset(_G, "IsParamModelEqualToString", function(model, name, ...)
+            local equal = is_param_equal(model, name, ...)
+            if equal and name == "ELMGData" then
+                log("AAE's GSC sent ELMGData")
+            end
+            return equal
+        end)
+    end
+
     -- functions mods call from the Windows game's newer UI scripts that the Mac build never got
     if Engine then
         local function returnsEmptyTable()

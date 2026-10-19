@@ -3,7 +3,7 @@
 TARGET = BO3MacFix.dylib
 TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
-	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks
+	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -40,6 +40,8 @@ SOURCES += source/prepatch.c
 
 # the build All-around Enhancement checks for, read from its fastfile (aae_build.c)
 SOURCES += source/aae_build.c
+# a zombies checkpoint the settings page saves and resumes through AAE's starting round and points (checkpoint.c)
+SOURCES += source/checkpoint.c
 
 # settings.ini's options for an in-game menu, the settings.ini writer and restarting (settings.c), with the
 # settings.ini reading and writing (settings_ini.c)
@@ -122,6 +124,12 @@ tests/test_frame_limit: tests/test_frame_limit.c source/frame_limit.c source/fra
 # which players folder a .cfg comes from (players_cfg.c), against made-up folders
 tests/test_players_cfg: tests/test_players_cfg.c source/players_cfg.c source/players_cfg.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_players_cfg.c source/players_cfg.c
+
+# checkpoint.c (AAE's mutations lines, saving, applying and clearing a checkpoint) with made-up files, and the
+# sanitizers since it parses files
+tests/test_checkpoint: tests/test_checkpoint.c source/checkpoint.c source/checkpoint.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_checkpoint.c \
+		source/checkpoint.c
 
 # controllers.c (when the game is asked to look for controllers, the version SDL is given) against a fake game image and
 # fake HID devices, and gc_bridge.m's player slots as the game's XInput calls see them, with stand-in controllers
