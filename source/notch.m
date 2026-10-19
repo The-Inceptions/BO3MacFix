@@ -10,8 +10,9 @@
 // instead (notch_layout.c), and metalfx.m scales that rect when it upscales.
 //
 // The main thread keeps the game window's screen's safeAreaInsets.top (macOS 12 and later). When that or the option
-// changes, the engine thread does the letterbox and client rect again (engine_display.c's R_CheckVidRestart hook), so
-// moving between the built-in and an external display turns it on and off. Off, or on a screen without a housing, both
+// changes, or the Metal view turns up after the letterbox was done without it, the engine thread does the letterbox and
+// client rect again (engine_display.c's R_CheckVidRestart hook), so moving between the built-in and an external display
+// turns it on and off. Off, or on a screen without a housing, both
 // hooks leave Aspyr's numbers exactly as they are.
 #import <AppKit/AppKit.h>
 #include <dispatch/dispatch.h>
@@ -61,6 +62,10 @@ static atomic_uint forced_size;     // width << 16 | height of the drawable we f
 // UpdateClientRect takes it before it calls the Metal client rect
 static char *placed_window;         // the window whose letterbox is ours
 static NotchLayout placed;          // what we put there
+// The window whose last letterbox had everything but its Metal view. ASL makes the view with the swap chain
+// (0x1000f2867, from 0x1000e89ab) and then does only the client rect (0x1000e89ef), not the letterbox, so the
+// letterbox Window_SetMode did before that stays Aspyr's. The client rect hook has both done again once the view is there.
+static char *view_wanted_by;
 
 static int window_int(const char *window, int offset) {
     return *(const int *)(window + offset);
@@ -96,9 +101,11 @@ static void UpdateLetterbox_hook(char *window) {
     void *sdl = *(void **)(window + Window_SDL);
     int inset = atomic_load(&screen_inset), w = 0, h = 0;
     NotchLayout layout;
+    static const char no_view[] = "no Metal view yet";
     const char *why = !atomic_load(&option) ? "AvoidNotch is off" : inset <= 0 ? "no camera housing on this screen"
                     : sdl == NULL || (*(const uint8_t *)(window + Window_Flags) & 1) == 0 ? "not fullscreen"
-                    : Metal_GetView(sdl) == NULL ? "no Metal view yet" : NULL;
+                    : Metal_GetView(sdl) == NULL ? no_view : NULL;
+    view_wanted_by = why == no_view ? window : NULL;
     if (why == NULL) {
         SDL_GetWindowSize_(sdl, &w, &h);
         if (!notch_layout(window_int(window, Window_LogicalW), window_int(window, Window_LogicalH), w, h, inset, &layout))
@@ -136,6 +143,12 @@ static bool placed_rect(const char *window, void *sdl, int *drawable_w, int *dra
 // Aspyr's 0x1000ee6c6, with the frame where our letterbox has the picture instead of centred
 static void MetalClientRect_hook(char *window) {
     void *sdl = window != NULL ? *(void **)(window + Window_SDL) : NULL;
+    // the view the letterbox waited for: this frame is Aspyr's, the engine thread does ours next frame
+    if (sdl != NULL && window == view_wanted_by && Metal_GetView(sdl) != NULL) {
+        view_wanted_by = NULL;
+        atomic_store(&refresh_pending, true);
+        printf("notch: the Metal view is there now, the letterbox is done again\n");
+    }
     void *view = sdl != NULL && still_placed(window) ? Metal_GetView(sdl) : NULL;
     int drawable_w = 0, drawable_h = 0;
     NotchRect blit;

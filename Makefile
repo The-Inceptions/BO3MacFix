@@ -3,7 +3,7 @@
 TARGET = BO3MacFix.dylib
 TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
-	tests/test_players_cfg tests/test_aae_build tests/test_notch
+	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -96,12 +96,18 @@ tests/test_sdl_displays: tests/test_sdl_displays.c source/sdl_displays.c source/
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -mmacosx-version-min=$(OSXVER) -framework CoreFoundation \
 		-framework CoreGraphics -framework CoreVideo -o $@ tests/test_sdl_displays.c
 
-# prepatch.c's builder and runtime against a made-up executable with the game's layout (the test includes the source
-# itself), with the address and undefined behaviour sanitizers since it's all byte offsets
 # AvoidNotch's geometry (notch_layout.c) against Aspyr's mouse mapping, plain C
 tests/test_notch: tests/test_notch.c source/notch_layout.c source/notch_layout.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_notch.c source/notch_layout.c
 
+# notch.m's letterbox and Metal client rect hooks against a made-up ASL window and stand-ins for Aspyr's functions
+tests/test_notch_hooks: tests/test_notch_hooks.m source/notch.m source/notch.h source/notch_layout.c source/notch_layout.h \
+		source/offsets.h
+	$(CLANG) -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -mmacosx-version-min=$(OSXVER) \
+		-framework AppKit -o $@ tests/test_notch_hooks.m source/notch_layout.c
+
+# prepatch.c's builder and runtime against a made-up executable with the game's layout (the test includes the source
+# itself), with the address and undefined behaviour sanitizers since it's all byte offsets
 tests/test_prepatch: tests/test_prepatch.c source/prepatch.c source/prepatch.h source/offsets.h source/dobby.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_prepatch.c
 
