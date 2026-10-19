@@ -247,9 +247,14 @@ weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
 polls(1)
 check(state == 2, "a resumed game, its guns not back yet")
 local before = #saves
+-- the game's own loadout is the starting pistol's then; this older save (no Guns, no PerkList) must not take it
+loadout = "Guns=pistol_m1911_zm:0:0:\nGunInHand=pistol_m1911_zm\nPerkList="
 BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+loadout = nil
 check(#saves == before + 1 and saves[#saves].Weapons == "ray_gun_upgraded,pistol_burst" and
     saves[#saves].Equipment == "frag_grenade,knife", "quitting keeps the saved guns: " .. tostring(saves[#saves].Weapons))
+check(saves[#saves].Guns == nil and saves[#saves].PerkList == nil and store.Guns == nil and store.PerkList == nil,
+    "an older save stays one, without the starting pistol's Guns line: " .. tostring(saves[#saves].Guns))
 -- likewise when no weapons can be read (a save without them would drop the saved ones)
 weapons = nil
 save_row.run()
@@ -371,6 +376,25 @@ polls(12)
 restore_result = "took 1, gave 1 guns (0 held already), 0 ammo types, 2 perks (0 had already), 1 failed: no weapon x_zm"
 polls(1)
 check(notices[#notices] == "Not restored: no weapon x_zm", "what failed: " .. tostring(notices[#notices]))
+-- a restore that didn't run (the player wasn't alive) says so, not "Guns back", and saves keep the saved loadout
+leave_match()
+polls(1)
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0"
+notices = {}
+polls(12)
+restore_result = "not for the local player, or it isn't alive"
+polls(1)
+check(notices[#notices] == "Saved loadout not restored: not for the local player, or it isn't alive" and
+    not string.find(table.concat(notices, "\n"), "Guns back", 1, true), "not restored: " .. tostring(notices[#notices]))
+local live = loadout
+loadout = "Guns=pistol_standard_zm:0:0:\nGunInHand=pistol_standard_zm\nPerkList="
+before = #saves
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+loadout = live
+check(#saves == before + 1 and saves[#saves].Guns == LOADOUT_GUNS, "a save after keeps the saved guns: " ..
+    tostring(saves[#saves].Guns))
 -- a game that never runs the command (paused): sent again twice, then logged
 leave_match()
 polls(1)
@@ -397,6 +421,20 @@ check(restore_plans == 2, "sent again: " .. restore_plans)
 restore_result = "took 1, gave 1 guns (0 held already), 0 ammo types, 0 perks (0 had already), 0 failed"
 polls(1)
 check(string.find(notices[#notices - 1] or notices[#notices] or "", "Guns back", 1, true) ~= nil, "then restored")
+-- an answer that comes in on the poll the wait runs out is taken, not sent again over
+leave_match()
+polls(1)
+resume_row.run()
+enter_match("zm_theater")
+restore_plans, notices = 0, {}
+for _ = 1, 30 do if restore_plans == 0 then polls(1) end end
+check(restore_plans == 1, "the loadout's command sent once")
+polls(62)
+check(restore_plans == 1, "still waiting: " .. restore_plans)
+restore_result = "took 1, gave 1 guns (0 held already), 0 ammo types, 0 perks (0 had already), 0 failed"
+polls(1)
+check(restore_plans == 1 and string.find(table.concat(notices, "\n"), "Guns back", 1, true) ~= nil,
+    "the late answer taken: " .. restore_plans)
 
 -- quitting a resumed game before the loadout is back keeps the saved one
 leave_match()

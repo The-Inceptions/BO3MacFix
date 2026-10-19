@@ -337,8 +337,8 @@ static void test_loadout(void) {
     snprintf(perks_had[0], sizeof(perks_had[0]), "specialty_quickrevive");
     perk_count = 1;
 
-    // nothing set up: nothing happens
-    CHECK(strcmp(restore_now(player_entity), "nothing set up (or set up too long ago)") == 0 && calls[0] == '\0');
+    // nothing set up: nothing happens, and nothing to tell
+    CHECK(strcmp(restore_now(player_entity), "(no result)") == 0 && calls[0] == '\0');
     // the saved game without the pistol, the ray gun in hand, Jugg and Quick Revive
     // (the AR by the name the server has it by; the lookup tries its other form too)
     CHECK(loadout_parse("ar_standard_upgraded+reflex+extclip:822a:17:zm_aat_dead_wire,"
@@ -371,7 +371,16 @@ static void test_loadout(void) {
     CHECK(*held_slot(0) == ar || *held_slot(0) == raygun);
     CHECK(in_hand() == raygun);
     // once only
-    CHECK(strstr(restore_now(player_entity), "nothing set up") != NULL);
+    CHECK(strcmp(restore_now(player_entity), "(no result)") == 0 && calls[0] == '\0');
+    // the command sent again (the first held back while paused) running after the first: what Lua reads is still the
+    // restore's result, not "nothing set up", which would have it set the restore up and restore once more
+    zm_inventory_set_restore(&loadout);
+    run_restore(player_entity);
+    calls[0] = '\0';
+    run_restore(player_entity);
+    CHECK(calls[0] == '\0');
+    CHECK(zm_inventory_restore_result(text, sizeof(text)) && strncmp(text, "took ", 5) == 0);
+    CHECK(!zm_inventory_restore_result(text, sizeof(text)));
 
     // the game without aat_shared's acquire (no AATs here) or without the perk: told, the rest still given
     memset(client + gclient_HeldWeapons, 0, gclient_HeldWeapon_Count * gclient_HeldWeapon_Size);
