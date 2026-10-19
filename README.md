@@ -30,6 +30,7 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `YieldSleep0` | 0 | Makes `Sleep(0)` yield like on Windows. |
 | `FastSetjmp` | 1 | Makes the script VMs' `setjmp`/`longjmp` skip saving the signal mask, a syscall each time. |
 | `FastScriptErrors` | 1 | Stops each script error from trying to open the script source files (`scriptsrc.zip`, only the mod tools make them) again for every line of its call stack. All-around Enhancement's scripts hit thousands of errors a second, so this frees up much of the main thread. |
+| `QuietScriptErrors` | 1 | Shows each repeated script error (the same message) in `console_mp.log` 3 times with its call stack, then only counts it: once a minute a line says how many more there were. Mod scripts that hit an error every frame otherwise write that log at up to megabytes a second. 0 prints every error, as before. |
 | `FramesInFlight` | 2 | How many frames the CPU may queue ahead of the GPU, 1 to 3 (`MaxFrameLatency` in config.ini does nothing on Mac). |
 | `FramePacingFPS` | 0 | Keeps each frame on screen for at least 1/N of a second, 30 to 240, for even pacing below the refresh rate. |
 | `MetalFXUpscale` | 0 | Upscales with MetalFX when the game's resolution is lower than the screen's, in either fullscreen mode. 2 is for scaled monitor modes (like "looks like 2560x1440" on a 4K monitor): it upscales to the panel's own pixels rather than the bigger scaled size macOS shrinks back down. Needs macOS 13. |

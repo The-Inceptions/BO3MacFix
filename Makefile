@@ -23,6 +23,8 @@ LDFLAGS = -shared -Wl,-undefined -Wl,dynamic_lookup -Llib -ldobby -lz
 FRAMEWORKS = -framework CoreFoundation -framework IOKit -framework CoreGraphics -framework ImageIO
 
 SOURCES = source/bo3macfix.c source/bo3macnative.m source/stream_stall_recovery.c source/utilities.c source/steam.c source/exports.c source/havok.c source/t7overcharged.c source/cpu_tuning.c
+# repeated script errors in console_mp.log (script_errors.c)
+SOURCES += source/script_errors.c
 SOURCES += source/controllers.c source/gpu_tweaks.c
 # which players folder a .cfg comes from, for mods that save them from Lua (players_cfg.c)
 SOURCES += source/players_cfg.c

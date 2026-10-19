@@ -152,8 +152,8 @@ install_hook_name(Scr_LoadSourceText, void, uint8_t *script) {
     }
 }
 
-// BO3MACFIX_SCRIPTERRORPOS=1 (a debugging aid): call stack lines without line information (every mod script's) end in the
-// code offset in that script, e.g. "file 'scripts/zm/aae_core.csc @0x76fc'", which its exports and imports place
+// BO3MACFIX_SCRIPTERRORPOS=1 (a debugging aid): call stack lines without line information (every mod script's) end
+// in the code offset in that script, e.g. "file 'scripts/zm/aae_core.csc @0x76fc'", which its exports and imports place
 typedef uint8_t **(*Scr_FindScriptForCodePos_t)(int inst, const char *code_pos);
 install_hook_name(Scr_GetCodePosInfo, void, int inst, const char *code_pos, const char **file, int *line,
                   const char **text) {
@@ -163,7 +163,8 @@ install_hook_name(Scr_GetCodePosInfo, void, int inst, const char *code_pos, cons
     uint8_t **script = ((Scr_FindScriptForCodePos_t)(base_address + ADDR_Scr_FindScriptForCodePos))(inst, code_pos);
     if (script != NULL) {
         static __thread char with_offset[512];
-        snprintf(with_offset, sizeof(with_offset), "%s @0x%lx", *file, (unsigned long)(code_pos - (const char *)*script));
+        unsigned long offset = (unsigned long)(code_pos - (const char *)*script);
+        snprintf(with_offset, sizeof(with_offset), "%s @0x%lx", *file, offset);
         *file = with_offset;
     }
 }

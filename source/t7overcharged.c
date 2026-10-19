@@ -272,7 +272,7 @@ static void log_unknown_native(uint32_t hash) {
         if (hashed_names[i].hash == hash) {
             if (!hashed_names[i].logged) {
                 hashed_names[i].logged = true;
-                printf("T7Overcharged: no script function \"%s\" here, scripts calling it get 0\n", hashed_names[i].name);
+                printf("T7Overcharged: no script function \"%s\" here, scripts get 0\n", hashed_names[i].name);
             }
             return;
         }

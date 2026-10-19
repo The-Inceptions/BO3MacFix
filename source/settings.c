@@ -66,6 +66,7 @@ static const setting_t settings[] = {
     { "RenderIdleFix", "Idle render thread sleeps", "Lets the render thread sleep while it waits for the next frame instead of spinning.", "Performance", Toggle_Live(1, Live_Prepatch) },
     { "FastSetjmp", "Fast script calls", "Makes the script engines skip a slow system call they make constantly.", "Performance", Toggle(1) },
     { "FastScriptErrors", "Fast script errors", "Stops script errors from looking for missing script source files every time. Mods with many errors run faster.", "Performance", Toggle(1) },
+    { "QuietScriptErrors", "Quiet script errors", "Shows each repeated script error in console_mp.log 3 times, then only counts it.", "Performance", Toggle(1) },
     { "YieldSleep0", "Yielding Sleep(0)", "Makes Sleep(0) yield like on Windows: a little more FPS for more CPU.", "Performance", Toggle(0) },
     { "FramesInFlight", "Frames in flight", "How many frames the CPU may queue ahead of the GPU: fewer means less input lag.", "Graphics", false, 3, { 1, 2, 3 }, { "1 (least lag)", "2 (normal)", "3 (smoothest)" }, 2, false },
     { "FramePacingFPS", "Frame pacing", "Keeps each frame on screen for a minimum time, for even pacing below the refresh rate.", "Graphics", false, 6, { 0, 30, 45, 60, 90, 120 }, { "Off", "30", "45", "60", "90", "120" }, 0, Live_Present },
