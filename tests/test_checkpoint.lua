@@ -230,6 +230,15 @@ check(#saves == count + 1, "other menus don't")
 models["controller0.gameScore.roundsPlayed"] = 5
 BO3MacFix.CheckpointMenuCreated("EndGamePopup", {})
 check(#saves == count + 1 and store.Round == "15", "a round 15 save stays")
+-- one round behind it too: roundsPlayed 15 is the HUD's round 14
+models["controller0.gameScore.roundsPlayed"] = 15
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == count + 1 and store.Round == "15", "a round 15 save stays when quitting at round 14: " ..
+    tostring(store.Round))
+-- the same round replaces it
+models["controller0.gameScore.roundsPlayed"] = 16
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == count + 2 and store.Round == "15", "quitting at the same round saves")
 -- the test switches: give, then save and report so many seconds in
 leave_match()
 polls(1)

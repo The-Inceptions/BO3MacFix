@@ -433,7 +433,9 @@ function bo3macfix.CheckpointMenuCreated(name, menu)
     -- quitting a match saves it, unless that would replace a game saved at a higher round that this one didn't resume
     if QUIT_POPUPS[name] and in_match() and string.sub(current_map(), 1, 3) == "zm_" then
         local checkpoint = read_checkpoint()
-        local round = tonumber(model_value(Engine.GetModelForController(0), "gameScore.roundsPlayed"))
+        -- the HUD's round, as a save keeps it: one less than gameScore.roundsPlayed (see collect)
+        local played = tonumber(model_value(Engine.GetModelForController(0), "gameScore.roundsPlayed"))
+        local round = played ~= nil and played - 1 or nil
         local kept = tonumber(checkpoint.Round)
         if kept ~= nil and round ~= nil and kept > round and bo3macfix.CheckpointResume(0) < 2 then
             log("checkpoint: quitting, kept the game saved at round " .. tostring(kept))
