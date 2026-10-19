@@ -164,6 +164,40 @@ void script_errors_new_map(void) {
     os_unfair_lock_unlock(&errors_lock);
 }
 
+// GSC's == and != throw "pair '...' and '...' has unmatching types" for a string against a number here. All-around
+// Enhancement depends on them not throwing, as they apparently don't on Windows: zmsavedata.gsc's check of its
+// "disables the bank" options passes getdvarint() the string "tfoption_start_points" != 500, so on the Mac banks.gsc's
+// init dies on it and the bank, the weapon locker and the careers never get their saved data ("New Save System NOT
+// loaded!"). Answer those the way the === and !== wrappers answer any mismatch: free both values, then false (which
+// != turns into true).
+#define Var_String 2
+#define Var_Float 6
+#define Var_Int 7
+
+typedef struct {
+    union {
+        int int_value;
+        uint64_t raw;
+    } u;
+    int type;
+} script_value_t;
+
+static void (*Scr_FreeValuePair)(int inst, script_value_t *a, script_value_t *b);
+
+static bool is_number(int type) {
+    return type == Var_Int || type == Var_Float;
+}
+
+install_hook_name(Scr_EvalEquality, void, int inst, script_value_t *a, script_value_t *b) {
+    if ((a->type == Var_String && is_number(b->type)) || (is_number(a->type) && b->type == Var_String)) {
+        Scr_FreeValuePair(inst, a, b);
+        a->type = Var_Int;
+        a->u.int_value = 0;
+        return;
+    }
+    orig_Scr_EvalEquality(inst, a, b);
+}
+
 static int env_override(const char *name, int value) {
     const char *env = getenv(name);
     return env != NULL ? atoi(env) : value;
@@ -171,6 +205,8 @@ static int env_override(const char *name, int value) {
 
 void script_errors_init(uint64_t game_base_address, int quiet) {
     base_address = game_base_address;
+    Scr_FreeValuePair = (void *)(base_address + ADDR_Scr_FreeValuePair);
+    install_hook_Scr_EvalEquality((void *)(base_address + ADDR_Scr_EvalEquality));
     if (env_override("BO3MACFIX_QUIETSCRIPTERRORS", quiet) == 0)
         return;
     install_hook_Scr_ErrorInternal((void *)(base_address + ADDR_Scr_ErrorInternal));
