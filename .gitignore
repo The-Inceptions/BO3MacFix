@@ -30,4 +30,5 @@ tests/test_aae_build
 tests/test_notch
 tests/test_notch_hooks
 tests/test_zm_inventory
+tests/test_zm_loadout
 tests/test_checkpoint

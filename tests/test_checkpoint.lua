@@ -1,7 +1,8 @@
 -- Runs source/checkpoint.lua against a made-up Engine, LUI and C side, with any Lua 5.x: lua tests/test_checkpoint.lua
 -- Checks what a save reads from the HUD's models, the scoreboard and the weapons, the settings rows, a resumed match
 -- (marked in use, a summary shown, the saved weapons given once the starting ones have stayed), putting the player's
--- options back in the menus, and saving when quitting.
+-- options back in the menus, and saving when quitting; then the same with the full loadout (zm_inventory.c's guns
+-- with attachments, options and ammo types, and perks), restored through its give command.
 local failures = 0
 local function check(condition, what)
     if not condition then
@@ -36,7 +37,9 @@ LUI = { roots = { UIRootFull = root }, UITimer = { newElementTimer = function(ms
 -- ---- a made-up checkpoint.c and zm_inventory.c
 local store, state, weapons, notices, saves, plans, allowed, cleared_with = {}, 0, nil, {}, {}, {}, nil, nil
 local clear_fails = false -- checkpoint.ini or AAE's mutations file can't be read or written
-local SAVED = { "Map", "Round", "Points", "Perks", "Weapons", "Equipment", "Held", "Character", "Stats" }
+local SAVED = { "Map", "Round", "Points", "Perks", "Weapons", "Equipment", "Held", "Character", "Stats", "Guns",
+    "GunInHand", "PerkList" }
+local loadout, restore_plans, restore_result, test_loadouts = nil, 0, nil, {}
 BO3MacFix = {
     Log = function(text) table.insert(logs, text) end,
     ReadCheckpoint = function()
@@ -73,6 +76,21 @@ BO3MacFix = {
     end,
     CheckpointAllowCheats = function(count) allowed = count end,
     CheckpointNotice = function(text) table.insert(notices, text) end,
+    CheckpointLoadout = function() return loadout end,
+    CheckpointRestoreLoadout = function()
+        if store.Guns == nil and store.PerkList == nil then return nil end
+        restore_plans = restore_plans + 1
+        return "give bo3macfix_restore"
+    end,
+    CheckpointRestoreResult = function()
+        local result = restore_result
+        restore_result = nil
+        return result
+    end,
+    CheckpointTestLoadout = function(guns, perks)
+        table.insert(test_loadouts, { guns = guns, perks = perks })
+        return "give bo3macfix_restore"
+    end,
 }
 
 -- settings_menu.c passes checkpoint.lua the C functions, then the test switches
@@ -80,14 +98,16 @@ local fake = BO3MacFix
 BO3MacFix = { Log = fake.Log }
 local function c_side()
     return fake.SaveCheckpoint, fake.ReadCheckpoint, fake.ApplyCheckpoint, fake.ClearCheckpoint, fake.CheckpointResume,
-        fake.CheckpointWeapons, fake.CheckpointWeaponCommands, fake.CheckpointAllowCheats, fake.CheckpointNotice
+        fake.CheckpointWeapons, fake.CheckpointWeaponCommands, fake.CheckpointAllowCheats, fake.CheckpointNotice,
+        fake.CheckpointLoadout, fake.CheckpointRestoreLoadout, fake.CheckpointRestoreResult, fake.CheckpointTestLoadout
 end
 local chunk = assert(loadfile("source/checkpoint.lua"))
-local function load(save_after, give_test, report_after)
+local function load(save_after, give_test, report_after, perks_test)
     local f = { c_side() }
-    chunk(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], save_after, give_test, report_after)
+    chunk(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], save_after, give_test,
+        report_after, perks_test)
 end
-load(nil, nil, nil)
+load(nil, nil, nil, nil)
 check(BO3MacFix.ReadCheckpoint == fake.ReadCheckpoint, "the C functions are set up")
 check(BO3MacFix.CheckpointRows ~= nil and BO3MacFix.CheckpointMenuCreated ~= nil, "the entry points are there")
 check(tick ~= nil, "a timer is started")
@@ -292,6 +312,102 @@ check(execs[1] == "take pistol_m1911" or execs[1] == "give ray_gun_upgraded", "t
 local logged = table.concat(logs, "\n")
 check(string.find(logged, "checkpoint test: saved true", 1, true) ~= nil, "the test save runs")
 check(string.find(logged, "checkpoint test: this match has round 12", 1, true) ~= nil, "the test report runs")
+
+-- ---- the full loadout: each gun with its attachments, options and ammo type, and the perks
+leave_match()
+polls(1)
+BO3MacFix.CheckpointMenuCreated = nil
+load(nil, nil, nil, nil)
+local LOADOUT_GUNS = "ar_standard_upgraded_zm+reflex+extclip:822a:0:zm_aat_dead_wire,ray_gun_upgraded_zm:2a:0:"
+loadout = "Guns=" .. LOADOUT_GUNS .. "\nGunInHand=ray_gun_upgraded_zm\nPerkList=specialty_armorvest,specialty_doubletap2"
+rows = BO3MacFix.CheckpointRows(0, function(text) message = text end)
+save_row, resume_row = rows[1], rows[2]
+enter_match("zm_theater")
+save_row.run()
+saved = saves[#saves]
+check(saved.Guns == LOADOUT_GUNS and saved.GunInHand == "ray_gun_upgraded_zm" and
+    saved.PerkList == "specialty_armorvest,specialty_doubletap2", "the loadout is saved: " .. tostring(saved.Guns))
+check(saved.Weapons == "ray_gun_upgraded,pistol_burst", "with the names too")
+local description = save_row.description()
+check(string.find(description, "ar standard (Pack-a-Punched, 2 attachments, Dead Wire)", 1, true) ~= nil and
+    string.find(description, "ray gun (Pack-a-Punched)", 1, true) ~= nil, "the guns described: " .. description)
+check(string.find(resume_row.description, "camo", 1, true) ~= nil, "the resume row says camo comes back")
+
+-- resumed: the summary doesn't promise every perk, and the loadout comes back through its give command
+leave_match()
+polls(1)
+resume_row.run()
+check(state == 1, "set up with the loadout")
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, plans, notices, restore_plans = {}, {}, {}, 0
+polls(1)
+check(state == 2 and notices[1] == "Resumed round 12 with 23,450 points", "the summary: " .. tostring(notices[1]))
+polls(11)
+check(restore_plans == 1 and #plans == 0, "the loadout set up, not the names' commands: " .. restore_plans)
+check(execs[#execs] == "give bo3macfix_restore", "its give command run: " .. tostring(execs[#execs]))
+check(state == 3, "weapons given")
+local said = #notices
+polls(2)
+check(#notices == said, "nothing said before the game answers")
+restore_result = "took 1, gave 2 guns (0 held already), 1 ammo types, 2 perks (0 had already), 0 failed"
+weapons = "ar_standard_upgraded_zm+reflex+extclip:0,ray_gun_upgraded_zm:0,frag_grenade_zm:1,knife_zm:4"
+polls(1)
+check(string.find(notices[#notices - 1] or "", "Guns back: ar standard (Pack-a-Punched, 2 attachments, Dead Wire), " ..
+    "ray gun (Pack-a-Punched)", 1, true) ~= nil, "the guns back: " .. tostring(notices[#notices - 1]))
+check(notices[#notices] == "Perks back: 2", "the perks back: " .. tostring(notices[#notices]))
+logged = table.concat(logs, "\n")
+check(string.find(logged, "loadout restored: took 1, gave 2 guns", 1, true) ~= nil, "logged")
+polls(10)
+check(restore_plans == 1, "only once")
+-- something that couldn't be restored is said
+leave_match()
+polls(1)
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0"
+notices = {}
+polls(12)
+restore_result = "took 1, gave 1 guns (0 held already), 0 ammo types, 2 perks (0 had already), 1 failed: no weapon x_zm"
+polls(1)
+check(notices[#notices] == "Not restored: no weapon x_zm", "what failed: " .. tostring(notices[#notices]))
+-- a game that never runs the command: logged after a while
+leave_match()
+polls(1)
+resume_row.run()
+enter_match("zm_theater")
+logs = {}
+polls(40)
+logged = table.concat(logs, "\n")
+check(string.find(logged, "wasn't restored", 1, true) ~= nil, "no answer is logged")
+
+-- quitting a resumed game before the loadout is back keeps the saved one
+leave_match()
+polls(1)
+resume_row.run()
+enter_match("zm_theater")
+loadout = "Guns=pistol_standard_zm:0:0:\nGunInHand=pistol_standard_zm\nPerkList="
+models["controller0.hudItems.perks.juggernaut"] = 0
+models["controller0.hudItems.perks.doubletap2"] = 0
+polls(1)
+check(state == 2, "resumed, not restored")
+before = #saves
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == before + 1 and saves[#saves].Guns == LOADOUT_GUNS and
+    saves[#saves].PerkList == "specialty_armorvest,specialty_doubletap2" and
+    saves[#saves].Perks == "juggernaut,quick_revive,doubletap2", "the saved loadout kept: " .. tostring(saves[#saves].Guns))
+leave_match()
+polls(1)
+
+-- the test switches with a Guns line and perks: set up the same way
+BO3MacFix.CheckpointMenuCreated = nil
+load(nil, "ray_gun_upgraded_zm:2a:0:zm_aat_turned", nil, "specialty_armorvest")
+enter_match("zm_theater")
+execs, logs, test_loadouts = {}, {}, {}
+polls(30)
+check(#test_loadouts == 1 and test_loadouts[1].guns == "ray_gun_upgraded_zm:2a:0:zm_aat_turned" and
+    test_loadouts[1].perks == "specialty_armorvest", "the test loadout set up")
+check(execs[1] == "give bo3macfix_restore", "and given: " .. tostring(execs[1]))
 
 if failures == 0 then
     print("test_checkpoint.lua: all passed")

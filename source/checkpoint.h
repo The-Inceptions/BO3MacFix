@@ -4,10 +4,13 @@
 // The settings page saves the round, points, perks and weapons, with what else the UI shows (map, character,
 // scoreboard) to look at, in BO3MacFix/checkpoint.ini. "Resume" then sets those options for the next game, and gives
 // the saved weapons back once it's under way (zm_inventory.c); after that game the player's own options go back.
-// Plain C, so tests/test_checkpoint.c tests it with made-up folders.
+// Checkpoints with the full loadout (zm_loadout.h) get each gun back with its camo, attachments and ammo type, and the
+// exact perks, so AAE's perk options are left alone for them. Plain C, so tests/test_checkpoint.c tests it with
+// made-up folders.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include "zm_loadout.h"
 
 #define Checkpoint_File "../../../BO3MacFix/checkpoint.ini"
 #define Checkpoint_Players_Folder "../../../players/"
@@ -39,8 +42,9 @@ typedef struct {
 // saves a game from "Key=value" lines, with the time it's saved at, replacing the last one. Round and Points are
 // needed. Perks (the HUD's perk names, like juggernaut), Weapons (the primary weapons' names, like ray_gun_upgraded)
 // and Equipment (the other weapons) are comma-separated names. Map, Held (the weapon in hand, as the HUD names it),
-// Character and Stats are text to show. A resume that's set up stays set up. False if a line is malformed, Round or
-// Points is missing or not a number, a list has something other than names in it, or the file can't be written.
+// Character and Stats are text to show. The full loadout is Guns, GunInHand and PerkList (zm_loadout.h's text). A
+// resume that's set up stays set up. False if a line is malformed, Round or Points is missing or not a number, a list
+// has something other than names in it, the loadout doesn't read back, or the file can't be written.
 bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long now);
 
 // the checkpoint as "Key=value" lines into out (empty if there's none)
@@ -76,6 +80,9 @@ bool checkpoint_mark_weapons_given(const checkpoint_paths_t *paths);
 // game are still the checkpoint's. current: "dvar=value" lines with those values, NULL when there's no game to ask yet.
 // The checkpoint itself stays. False if no resume was set up or a file can't be written.
 bool checkpoint_clear(const checkpoint_paths_t *paths, const char *current, char *commands, size_t commands_size);
+
+// the checkpoint's full loadout (Guns, GunInHand, PerkList) into loadout; false if it has none or it's malformed
+bool checkpoint_loadout(const checkpoint_paths_t *paths, loadout_t *loadout);
 
 // the console commands that turn the weapons a player holds into the saved ones, one per line into out: "take <name>"
 // for each held weapon that isn't saved, then "give <name>" for each saved one that isn't held. saved and held are

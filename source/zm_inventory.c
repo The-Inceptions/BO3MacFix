@@ -1,6 +1,7 @@
 // See zm_inventory.h.
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <os/lock.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -8,6 +9,7 @@
 #include "dobby.h"
 #include "offsets.h"
 #include "zm_inventory.h"
+#include "zm_loadout.h"
 
 #define Weapon_Index_Mask 0x1ff // a Weapon's low 9 bits are its index in the weapon tables, 0 for none
 #define Allow_Ms 10000
@@ -116,11 +118,314 @@ static bool let_through(void *ent, uint64_t return_address) {
     return left > 0;
 }
 
+// ---- the full loadout (zm_loadout.c): recorded from the player state and the server script VM's variables, and
+// restored on the server thread, from the give command, through the game's own functions
+
+#define Script_Server 0
+#define Perk_None 0x69     // what BG_GetPerkIndexForName gives for a name that isn't a perk
+#define Attachment_Count 44
+#define Restore_Ms 30000   // how long a restore set up from Lua waits for its give command
+#define Restore_Command "bo3macfix_restore"
+
+// the game's handle for a script function: its "script::function" name, then where its code starts
+typedef struct {
+    char name[0x108];
+    const void *code_pos;
+} script_handle_t;
+_Static_assert(sizeof(script_handle_t) == 0x110, "the game's script function handle is 0x110 bytes");
+
+static int (*G_GivePlayerWeapon)(void *ent, void *client, uint64_t weapon, uint64_t options, int unused, int acvi);
+static void (*G_GiveStartAmmo)(void *ent, uint64_t weapon, int held_before);
+static int (*G_TakePlayerWeapon)(void *ent, void *client, uint64_t weapon, bool flag);
+static void (*G_SelectWeapon)(int client_num, uint64_t weapon);
+static void (*G_SwitchToWeapon)(void *ent, int immediate, uint64_t weapon);
+static uint64_t (*BG_GetWeaponForName)(const char *name);
+static int (*BG_GetPerkIndexForName)(const char *name);
+static bool (*BG_HasPerk)(void *client, int index);
+static void (*SV_Cmd_ArgvBuffer)(int arg, char *buffer, int size);
+static script_handle_t *(*Scr_GetFunctionHandle)(script_handle_t *out, int inst, const char *script, uint32_t ns,
+                                                 uint32_t name, int *checksum, bool required);
+static unsigned int (*Scr_ExecEntThread)(void *ent, int params, script_handle_t handle);
+static void (*Scr_FreeThread)(int inst, unsigned int thread);
+static void (*Scr_AddString)(int inst, const char *text);
+static void (*Scr_AddWeapon)(int inst, uint64_t weapon, int client_num);
+static void (*Scr_AddInt)(int inst, int value);
+
+// the server script VM, read through safe_read
+static loadout_vm_t server_vm(void) {
+    return (loadout_vm_t){ safe_read, base + ADDR_scrVarGlob + Script_Server * 0x100,
+                           base + ADDR_scrClassMap + Script_Server * sizeof(uint64_t), base + ADDR_scrStringTable };
+}
+
+// the game's attachment names, by the ids a Weapon's attachment fields hold; NULL where one can't be read
+static void attachment_names(char text[Attachment_Count][32], const char *names[Attachment_Count]) {
+    uint64_t table[Attachment_Count];
+    bool have = safe_read(base + ADDR_bg_attachmentNames, table, sizeof(table));
+    for (int i = 0; i < Attachment_Count; i++) {
+        names[i] = NULL;
+        size_t len = 0;
+        for (; have && len + 1 < sizeof(text[i]); len++) {
+            if (!safe_read(table[i] + len, &text[i][len], 1))
+                break;
+            if (text[i][len] == '\0') {
+                names[i] = text[i];
+                break;
+            }
+        }
+    }
+}
+
+// the held weapon entry i
+static bool held_weapon(uint64_t client, int i, uint64_t *weapon, uint64_t *options, uint32_t *acvi) {
+    uint64_t entry = client + gclient_HeldWeapons + (uint64_t)i * gclient_HeldWeapon_Size;
+    return safe_read(entry, weapon, sizeof(*weapon)) &&
+           (options == NULL || safe_read(entry + gclient_HeldWeapon_Options, options, sizeof(*options))) &&
+           (acvi == NULL || safe_read(entry + gclient_HeldWeapon_Acvi, acvi, sizeof(*acvi)));
+}
+
+// whether the player holds weapon
+static bool holds(uint64_t client, uint64_t weapon) {
+    for (int i = 0; i < gclient_HeldWeapon_Count; i++) {
+        uint64_t held = 0;
+        if (held_weapon(client, i, &held, NULL, NULL) && held == weapon)
+            return true;
+    }
+    return false;
+}
+
+bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
+    loadout_clear(out);
+    if (note_size > 0)
+        note[0] = '\0';
+    uint64_t first = entities(), client = 0, current = 0;
+    if (first == 0 || !safe_read(first + gentity_Client, &client, sizeof(client)) || client == 0 ||
+        !safe_read(client + gclient_Weapon, &current, sizeof(current)))
+        return false;
+    char text[Attachment_Count][32];
+    const char *names[Attachment_Count];
+    attachment_names(text, names);
+    // the ammo types and perks are the zombies scripts' own (self.aat, self.perks_active)
+    loadout_vm_t vm = server_vm();
+    uint32_t player = loadout_vm_entity(&vm, 0);
+    loadout_aat_t aats[16];
+    int aat_count = player != 0 ? loadout_vm_read_aats(&vm, player, aats, 16) : -1;
+    for (int i = 0; i < gclient_HeldWeapon_Count && out->gun_count < Loadout_Max_Guns; i++) {
+        uint64_t weapon = 0, options = 0;
+        uint32_t acvi = 0;
+        char variant[72];
+        int type = -1;
+        if (!held_weapon(client, i, &weapon, &options, &acvi) || (weapon & Weapon_Index_Mask) == 0 ||
+            !weapon_info(weapon, variant, sizeof(variant), &type) || type != 0)
+            continue;
+        loadout_gun_t *gun = &out->guns[out->gun_count];
+        if (!loadout_weapon_name(variant, weapon, names, Attachment_Count, gun->name, sizeof(gun->name)))
+            continue;
+        gun->options = options;
+        gun->acvi = acvi;
+        for (int a = 0; a < aat_count; a++)
+            if (aats[a].weapon == weapon)
+                snprintf(gun->aat, sizeof(gun->aat), "%s", aats[a].aat);
+        if (weapon == current)
+            out->held = out->gun_count;
+        out->gun_count++;
+    }
+    uint32_t perks = player != 0 ? loadout_vm_array_field(&vm, player, "perks_active") : 0;
+    int perk_count = perks != 0 ? loadout_vm_read_strings(&vm, perks, out->perks, Loadout_Max_Perks) : -1;
+    out->perk_count = perk_count > 0 ? perk_count : 0;
+    if (note_size > 0)
+        snprintf(note, note_size, "%s%s", player == 0 ? "no script object for the player; " : "",
+                 aat_count < 0 ? "self.aat unreadable; " : "");
+    if (note_size > 0 && player != 0 && perks == 0)
+        snprintf(note + strlen(note), note_size - strlen(note), "no self.perks_active; ");
+    return true;
+}
+
+// ---- restoring, on the server thread
+
+typedef struct {
+    uint8_t *ent, *client;
+    int entnum;
+} restore_context_t;
+
+static uint64_t op_weapon_for_name(void *context, const char *name) {
+    uint64_t weapon = BG_GetWeaponForName(name);
+    return (weapon & Weapon_Index_Mask) != 0 ? weapon : 0;
+}
+
+static int op_primaries(void *context, uint64_t *out, int max) {
+    restore_context_t *c = context;
+    int count = 0;
+    for (int i = 0; i < gclient_HeldWeapon_Count && count < max; i++) {
+        uint64_t weapon = 0;
+        char name[72];
+        int type = -1;
+        if (held_weapon((uint64_t)c->client, i, &weapon, NULL, NULL) && (weapon & Weapon_Index_Mask) != 0 &&
+            weapon_info(weapon, name, sizeof(name), &type) && type == 0)
+            out[count++] = weapon;
+    }
+    return count;
+}
+
+// what the take command does (Cmd_Take_f)
+static bool op_take(void *context, uint64_t weapon) {
+    restore_context_t *c = context;
+    uint64_t *in_hand = (uint64_t *)(c->client + gclient_Weapon);
+    if (*in_hand == weapon) {
+        *in_hand = 0;
+        *(uint64_t *)(c->client + gclient_WeaponSwitch) = 0;
+        G_SelectWeapon(c->entnum, 0);
+    }
+    G_TakePlayerWeapon(c->ent, c->client, weapon, false);
+    return !holds((uint64_t)c->client, weapon);
+}
+
+// what the GiveWeapon builtin does, then GiveStartAmmo (which the Pack-a-Punch machine calls after it)
+static bool op_give(void *context, uint64_t weapon, uint64_t options, uint32_t acvi) {
+    restore_context_t *c = context;
+    if (G_GivePlayerWeapon(c->ent, c->client, weapon, options, 0, (int)acvi) == 0)
+        return false;
+    G_GiveStartAmmo(c->ent, weapon, 0);
+    return holds((uint64_t)c->client, weapon);
+}
+
+// a server script function, false if the scripts loaded don't have it (the game hands out a do-nothing one then)
+static bool script_function(script_handle_t *handle, const char *script, const char *ns, const char *name) {
+    memset(handle, 0, sizeof(*handle));
+    Scr_GetFunctionHandle(handle, Script_Server, script, loadout_script_hash(ns), loadout_script_hash(name), NULL,
+                          false);
+    const void *missing = NULL;
+    safe_read(base + ADDR_scrDefaultFunction, &missing, sizeof(missing));
+    return handle->code_pos != NULL && handle->code_pos != missing;
+}
+
+// aat::acquire(weapon, aat) on the player, as the Pack-a-Punch machine calls it; true if self.aat has it then
+static bool op_acquire_aat(void *context, uint64_t weapon, const char *aat) {
+    restore_context_t *c = context;
+    script_handle_t handle;
+    if (!script_function(&handle, "scripts/shared/aat_shared", "aat", "acquire"))
+        return false;
+    int client_num = 0;
+    safe_read(base + ADDR_scrClientNum, &client_num, sizeof(client_num));
+    // the last parameter first
+    Scr_AddString(Script_Server, aat);
+    Scr_AddWeapon(Script_Server, weapon, client_num);
+    Scr_FreeThread(Script_Server, Scr_ExecEntThread(c->ent, 2, handle));
+    loadout_vm_t vm = server_vm();
+    loadout_aat_t aats[16];
+    int count = loadout_vm_read_aats(&vm, loadout_vm_entity(&vm, c->entnum), aats, 16);
+    for (int i = 0; i < count; i++)
+        if (aats[i].weapon == weapon && strcmp(aats[i].aat, aat) == 0)
+            return true;
+    return false;
+}
+
+static bool op_has_perk(void *context, const char *perk) {
+    restore_context_t *c = context;
+    int index = BG_GetPerkIndexForName(perk);
+    return index != Perk_None && BG_HasPerk(c->client, index);
+}
+
+// zm_perks::give_perk(perk, false) on the player, as the Perkaholic gum gives each perk; true if it has the perk then
+static bool op_give_perk(void *context, const char *perk) {
+    restore_context_t *c = context;
+    script_handle_t handle;
+    if (BG_GetPerkIndexForName(perk) == Perk_None ||
+        !script_function(&handle, "scripts/zm/_zm_perks", "zm_perks", "give_perk"))
+        return false;
+    Scr_AddInt(Script_Server, 0);
+    Scr_AddString(Script_Server, perk);
+    Scr_FreeThread(Script_Server, Scr_ExecEntThread(c->ent, 2, handle));
+    return op_has_perk(context, perk);
+}
+
+static void op_switch_to(void *context, uint64_t weapon) {
+    restore_context_t *c = context;
+    G_SwitchToWeapon(c->ent, 0, weapon);
+}
+
+static os_unfair_lock restore_lock = OS_UNFAIR_LOCK_INIT;
+static loadout_t restore_plan;
+static long long restore_until; // when the plan set up stops waiting for its command, 0 for none
+static char restore_result[512];
+static bool restore_finished;
+
+const char *zm_inventory_set_restore(const loadout_t *plan) {
+    os_unfair_lock_lock(&restore_lock);
+    restore_plan = *plan;
+    restore_until = now_ms() + Restore_Ms;
+    restore_finished = false;
+    restore_result[0] = '\0';
+    os_unfair_lock_unlock(&restore_lock);
+    return "give " Restore_Command;
+}
+
+bool zm_inventory_restore_result(char *out, size_t out_size) {
+    os_unfair_lock_lock(&restore_lock);
+    bool finished = restore_finished;
+    if (finished && out_size > 0)
+        snprintf(out, out_size, "%s", restore_result);
+    restore_finished = false;
+    os_unfair_lock_unlock(&restore_lock);
+    return finished;
+}
+
+static void finish_restore(const char *text) {
+    printf("BO3MacFix: zm inventory: restoring the saved loadout: %s\n", text);
+    os_unfair_lock_lock(&restore_lock);
+    snprintf(restore_result, sizeof(restore_result), "%s", text);
+    restore_finished = true;
+    os_unfair_lock_unlock(&restore_lock);
+}
+
+// whether the client command CheatsOk was asked for, returning to return_address, is "give bo3macfix_restore"
+static bool restore_command(uint64_t return_address) {
+    if (return_address != base + ADDR_CheatsOk_From_Give || SV_Cmd_ArgvBuffer == NULL)
+        return false;
+    char arg[64];
+    arg[0] = '\0';
+    SV_Cmd_ArgvBuffer(1, arg, sizeof(arg));
+    return strcmp(arg, Restore_Command) == 0;
+}
+
+// the restore set up last, for the local player, while it's alive; in the give command, on the server thread, where
+// the game itself runs script callbacks
+static void run_restore(void *ent) {
+    os_unfair_lock_lock(&restore_lock);
+    bool pending = restore_until != 0 && now_ms() < restore_until;
+    static loadout_t plan;
+    plan = restore_plan;
+    restore_until = 0;
+    os_unfair_lock_unlock(&restore_lock);
+    uint64_t first = entities(), client = 0;
+    int health = 0;
+    if (!pending)
+        return finish_restore("nothing set up (or set up too long ago)");
+    // the local player, the first entity in a game hosted here, as for the give and take commands let through
+    if (ent == NULL || first == 0 || (uint64_t)ent != first ||
+        !safe_read((uint64_t)ent + gentity_Client, &client, sizeof(client)) || client == 0 ||
+        !safe_read((uint64_t)ent + gentity_Health, &health, sizeof(health)) || health <= 0)
+        return finish_restore("not for the local player, or it isn't alive");
+    restore_context_t context = { ent, (uint8_t *)client, 0 };
+    loadout_ops_t ops = { &context,     op_weapon_for_name, op_primaries, op_take,      op_give,
+                          op_acquire_aat, op_has_perk,      op_give_perk, op_switch_to };
+    loadout_result_t result;
+    loadout_restore(&plan, &ops, &result);
+    char text[512];
+    loadout_result_text(&result, text, sizeof(text));
+    finish_restore(text);
+}
+
 // CheatsOk(ent): whether ent may use cheat commands (sv_cheats is on and it's alive). BO3MacFix's own give and take
-// commands for the local player get through while zm_inventory_allow_cheats says so; everything else is the game's.
+// commands for the local player get through while zm_inventory_allow_cheats says so; "give bo3macfix_restore"
+// restores the loadout zm_inventory_set_restore set up, and then tells give it's done; everything else is the game's.
 // The hook is reached by a jump (the pre-patched copy's stub or Dobby's), so the return address is the game's caller.
 install_hook_name(CheatsOk, int, void *ent) {
-    if (let_through(ent, (uint64_t)__builtin_return_address(0))) {
+    uint64_t from = (uint64_t)__builtin_return_address(0);
+    if (restore_command(from)) {
+        run_restore(ent);
+        return 0;
+    }
+    if (let_through(ent, from)) {
         printf("BO3MacFix: zm inventory: let BO3MacFix's command past the cheat check\n");
         return 1;
     }
@@ -129,6 +434,21 @@ install_hook_name(CheatsOk, int, void *ent) {
 
 void zm_inventory_init(uint64_t game_base) {
     base = game_base;
+    G_GivePlayerWeapon = (void *)(base + ADDR_G_GivePlayerWeapon);
+    G_GiveStartAmmo = (void *)(base + ADDR_G_GiveStartAmmo);
+    G_TakePlayerWeapon = (void *)(base + ADDR_G_TakePlayerWeapon);
+    G_SelectWeapon = (void *)(base + ADDR_G_SelectWeapon);
+    G_SwitchToWeapon = (void *)(base + ADDR_G_SwitchToWeapon);
+    BG_GetWeaponForName = (void *)(base + ADDR_BG_GetWeaponForName);
+    BG_GetPerkIndexForName = (void *)(base + ADDR_BG_GetPerkIndexForName);
+    BG_HasPerk = (void *)(base + ADDR_BG_HasPerk);
+    SV_Cmd_ArgvBuffer = (void *)(base + ADDR_SV_Cmd_ArgvBuffer);
+    Scr_GetFunctionHandle = (void *)(base + ADDR_Scr_GetFunctionHandle);
+    Scr_ExecEntThread = (void *)(base + ADDR_Scr_ExecEntThread);
+    Scr_FreeThread = (void *)(base + ADDR_Scr_FreeThread);
+    Scr_AddString = (void *)(base + ADDR_Scr_AddString);
+    Scr_AddWeapon = (void *)(base + ADDR_Scr_AddWeapon);
+    Scr_AddInt = (void *)(base + ADDR_Scr_AddInt);
 }
 
 // at start-up, before the game's threads run: the pre-patched copy has a slot for it, so that only stores a pointer.

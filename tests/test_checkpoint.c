@@ -266,6 +266,65 @@ static void test_perks(void) {
     CHECK(strcmp(read_text(mutations), "modvar tfoption_perkaholic 0\nmodvar tfoption_starting_round 7\n") == 0);
 }
 
+// the full loadout: saved when it reads back, given to zm_inventory.c from the file, and AAE's perk options left alone
+static void test_loadout(void) {
+    char commands[512], text[4096];
+    loadout_t loadout;
+    write_text(mutations, "modvar tfoption_perkaholic 0\nmodvar tfoption_starting_round 7\n");
+    unlink(checkpoint_path);
+    CHECK(!checkpoint_loadout(&paths, &loadout)); // no checkpoint
+    const char *guns = "ar_standard_upgraded_zm+reflex+extclip:822a:17:zm_aat_dead_wire,ray_gun_upgraded_zm:2a:0:";
+    char lines[1024];
+    snprintf(lines, sizeof(lines), "Round=12\nPoints=4000\nPerks=juggernaut,doubletap2\nGuns=%s\n"
+             "GunInHand=ray_gun_upgraded_zm\nPerkList=specialty_armorvest,specialty_doubletap2\n", guns);
+    CHECK(checkpoint_save(&paths, lines, 1));
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "GunInHand=ray_gun_upgraded_zm\n") != NULL);
+    CHECK(strstr(text, "PerkList=specialty_armorvest,specialty_doubletap2\n") != NULL);
+    CHECK(checkpoint_loadout(&paths, &loadout));
+    CHECK(loadout.gun_count == 2 && loadout.held == 1 && loadout.perk_count == 2);
+    CHECK(strcmp(loadout.guns[0].name, "ar_standard_upgraded_zm+reflex+extclip") == 0 &&
+          loadout.guns[0].options == 0x822a && loadout.guns[0].acvi == 17 &&
+          strcmp(loadout.guns[0].aat, "zm_aat_dead_wire") == 0);
+
+    // the exact perks come back from give_perk, so Perkaholic and Quick Revive stay the player's
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strcmp(commands, "modvar tfoption_starting_round 12\nmodvar tfoption_starting_points 4000\n") == 0);
+    CHECK(strstr(read_text(mutations), "tfoption_perkaholic 0") != NULL);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+    // perks only (no guns read): still a loadout, and still no Perkaholic
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nPerks=juggernaut\nPerkList=specialty_armorvest\n", 2));
+    CHECK(checkpoint_loadout(&paths, &loadout) && loadout.gun_count == 0 && loadout.perk_count == 1);
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strstr(commands, "perkaholic") == NULL);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+    // an older save without them: no loadout, and Perkaholic for its perks as before
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nPerks=juggernaut\n", 3));
+    CHECK(!checkpoint_loadout(&paths, &loadout));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strstr(commands, "modvar tfoption_perkaholic 1\n") != NULL);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+
+    // a loadout that doesn't read back isn't saved
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_zm:zz:0:\n", 4));
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_zm;quit:0:0:\n", 4));
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nPerkList=specialty armorvest\n", 4));
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGunInHand=ray gun\n", 4));
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "Saved=3\n") != NULL); // the last good save stays
+    // the longest a Guns line gets: four guns with eight attachments each fit in a value
+    char long_guns[1024] = "";
+    for (int i = 0; i < 4; i++)
+        snprintf(long_guns + strlen(long_guns), sizeof(long_guns) - strlen(long_guns),
+                 "%sar_standard_upgraded_zm+acog+damage+dualclip+extbarrel+extclip+fastreload+fmj+gmod0:"
+                 "ffffffffffffffff:4294967295:zm_aat_thunder_wall", i > 0 ? "," : "");
+    snprintf(lines, sizeof(lines), "Round=12\nPoints=4000\nGuns=%s\n", long_guns);
+    CHECK(strlen(long_guns) < 1000);
+    CHECK(checkpoint_save(&paths, lines, 5));
+    CHECK(checkpoint_loadout(&paths, &loadout) && loadout.gun_count == 4);
+    unlink(checkpoint_path);
+}
+
 // the commands for saved and held, "(error)" if malformed
 static const char *weapon_commands(const char *saved, const char *held, int *count) {
     static char out[1024];
@@ -318,6 +377,7 @@ int main(void) {
     test_apply_and_clear();
     test_perks();
     test_weapon_commands();
+    test_loadout();
 
     unlink(checkpoint_path);
     unlink(mutations);

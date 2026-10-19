@@ -106,6 +106,64 @@ static int lua_checkpoint_allow_cheats(lua_State *s) {
     return 0;
 }
 
+// CheckpointLoadout(): the local player's full loadout as "Guns=...\nGunInHand=...\nPerkList=..." lines (zm_loadout.h),
+// nil without a game hosted here
+static int lua_checkpoint_loadout(lua_State *s) {
+    static loadout_t loadout;
+    static char guns[1024], perks[1024], lines[2304];
+    char note[256];
+    if (!zm_inventory_read_loadout(&loadout, note, sizeof(note))) {
+        hks_push_nil(s);
+        return 1;
+    }
+    if (note[0] != '\0')
+        printf("BO3MacFix: checkpoint: loadout: %s\n", note);
+    if (!loadout_format_guns(&loadout, guns, sizeof(guns)) || !loadout_format_perks(&loadout, perks, sizeof(perks))) {
+        printf("BO3MacFix: checkpoint: the loadout doesn't fit in checkpoint.ini\n");
+        hks_push_nil(s);
+        return 1;
+    }
+    snprintf(lines, sizeof(lines), "Guns=%s\nGunInHand=%s\nPerkList=%s", guns,
+             loadout.held >= 0 ? loadout.guns[loadout.held].name : "", perks);
+    hks_push_string(s, lines);
+    return 1;
+}
+
+// CheckpointRestoreLoadout(): sets the checkpoint's full loadout up for zm_inventory.c to give back, and returns the
+// give command that does it; nil if the checkpoint has none
+static int lua_checkpoint_restore_loadout(lua_State *s) {
+    static loadout_t loadout;
+    if (!checkpoint_loadout(&checkpoint_paths, &loadout)) {
+        hks_push_nil(s);
+        return 1;
+    }
+    hks_push_string(s, zm_inventory_set_restore(&loadout));
+    return 1;
+}
+
+// CheckpointRestoreResult(): once the loadout's give command has run, what it did (loadout_result_text); nil before
+static int lua_checkpoint_restore_result(lua_State *s) {
+    char text[512];
+    if (zm_inventory_restore_result(text, sizeof(text)))
+        hks_push_string(s, text);
+    else
+        hks_push_nil(s);
+    return 1;
+}
+
+// CheckpointTestLoadout(guns, perks): for the test switches, a Guns and a PerkList line set up the same way, the first
+// gun in hand; the give command, nil if they're malformed
+static int lua_checkpoint_test_loadout(lua_State *s) {
+    static loadout_t loadout;
+    if (!loadout_parse(hks_check_string(s, 1), NULL, hks_check_string(s, 2), &loadout)) {
+        hks_push_nil(s);
+        return 1;
+    }
+    loadout.held = loadout.gun_count > 0 ? 0 : -1;
+    hks_push_string(s, zm_inventory_set_restore(&loadout));
+    return 1;
+}
+
 // CheckpointNotice(text): shows text in the game, like BO3MacFix's other notices
 static int lua_checkpoint_notice(lua_State *s) {
     const char *text = hks_check_string(s, 1);
@@ -141,7 +199,7 @@ static int lua_load_menu(lua_State *s) {
     // then checkpoint.lua, given its C functions here rather than when the state is set up: compiling and running any
     // more Lua in lua_install, while All-around Enhancement's scripts load, makes AAE quit the game at a map's load.
     // Then the test switches: save so many seconds into a match, give these weapons first, log what the match has
-    // so many seconds in.
+    // so many seconds in, give these perks first.
     if (hks_load_source(s, (const char *)checkpoint_lua, checkpoint_lua_len, "=BO3MacFix checkpoint")) {
         hks_push_cfunction(s, lua_checkpoint_save, "CheckpointSave");
         hks_push_cfunction(s, lua_checkpoint_read, "CheckpointRead");
@@ -152,10 +210,15 @@ static int lua_load_menu(lua_State *s) {
         hks_push_cfunction(s, lua_checkpoint_weapon_commands, "CheckpointWeaponCommands");
         hks_push_cfunction(s, lua_checkpoint_allow_cheats, "CheckpointAllowCheats");
         hks_push_cfunction(s, lua_checkpoint_notice, "CheckpointNotice");
+        hks_push_cfunction(s, lua_checkpoint_loadout, "CheckpointLoadout");
+        hks_push_cfunction(s, lua_checkpoint_restore_loadout, "CheckpointRestoreLoadout");
+        hks_push_cfunction(s, lua_checkpoint_restore_result, "CheckpointRestoreResult");
+        hks_push_cfunction(s, lua_checkpoint_test_loadout, "CheckpointTestLoadout");
         push_env(s, "BO3MACFIX_CHECKPOINT_SAVE");
         push_env(s, "BO3MACFIX_CHECKPOINT_GIVE");
         push_env(s, "BO3MACFIX_CHECKPOINT_REPORT");
-        hks_pcall(s, 12, 0);
+        push_env(s, "BO3MACFIX_CHECKPOINT_PERKS");
+        hks_pcall(s, 17, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;
