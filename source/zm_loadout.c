@@ -425,6 +425,16 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         if (wanted[i] == 0)
             note_failure(result, "no weapon", saved->guns[i].name);
     }
+    // the perks first: with Mule Kick (specialty_additionalprimaryweapon) a third gun has room, and the game's weapon
+    // limit would take one given before it
+    for (int i = 0; i < saved->perk_count; i++) {
+        if (ops->has_perk(context, saved->perks[i]))
+            result->perks_had++;
+        else if (ops->give_perk(context, saved->perks[i]))
+            result->perks++;
+        else
+            note_failure(result, "no perk", saved->perks[i]);
+    }
     // nothing to give (a save without guns, or none this game has): the guns the game started with stay
     int resolved = 0;
     for (int i = 0; i < saved->gun_count; i++)
@@ -462,13 +472,46 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         else
             note_failure(result, "no ammo type", gun->aat);
     }
-    for (int i = 0; i < saved->perk_count; i++) {
-        if (ops->has_perk(context, saved->perks[i]))
-            result->perks_had++;
-        else if (ops->give_perk(context, saved->perks[i]))
-            result->perks++;
+    // AAE's repack levels, once the guns are back
+    for (int i = 0; i < saved->gun_count; i++) {
+        const loadout_gun_t *gun = &saved->guns[i];
+        if (wanted[i] == 0 || gun->pap_level <= 0 || contains(wanted, i, wanted[i]))
+            continue;
+        if (ops->set_pap_level != NULL && ops->set_pap_level(context, wanted[i], gun->name, gun->pap_level))
+            result->pap_levels++;
         else
-            note_failure(result, "no perk", saved->perks[i]);
+            note_failure(result, "no repack level for", gun->name);
+    }
+    // the grenades, mines, shield, hero weapon: given the scripts' way when not held, then their counts
+    for (int i = 0; i < saved->item_count; i++) {
+        const loadout_item_t *item = &saved->items[i];
+        uint64_t weapon = ops->weapon_for_name(context, item->name);
+        if (weapon == 0) {
+            note_failure(result, "no item", item->name);
+            continue;
+        }
+        if (ops->holds != NULL && ops->holds(context, weapon))
+            result->items_had++;
+        else if (ops->give_item != NULL && ops->give_item(context, weapon))
+            result->items++;
+        else {
+            note_failure(result, "couldn't give", item->name);
+            continue;
+        }
+        if (item->have_ammo && (ops->set_ammo == NULL || !ops->set_ammo(context, weapon, item->clip, item->stock)))
+            note_failure(result, "no ammo for", item->name);
+        else if (item->have_ammo)
+            result->ammo++;
+    }
+    // the guns' clip and stock, which came back as their start ammo
+    for (int i = 0; i < saved->gun_count; i++) {
+        const loadout_gun_t *gun = &saved->guns[i];
+        if (wanted[i] == 0 || !gun->have_ammo || contains(wanted, i, wanted[i]))
+            continue;
+        if (ops->set_ammo != NULL && ops->set_ammo(context, wanted[i], gun->clip, gun->stock))
+            result->ammo++;
+        else
+            note_failure(result, "no ammo for", gun->name);
     }
     // the gun that was in hand, or the first one if none was (holding a grenade, say), so the hands aren't left empty
     // after the starting pistol went
@@ -481,7 +524,334 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
 }
 
 void loadout_result_text(const loadout_result_t *result, char *out, size_t out_size) {
-    snprintf(out, out_size, "took %d, gave %d guns (%d held already), %d ammo types, %d perks (%d had already), %d "
+    char more[160] = "";
+    if (result->pap_levels > 0 || result->items > 0 || result->items_had > 0 || result->ammo > 0)
+        snprintf(more, sizeof(more), "%d repack levels, %d items (%d held already), ammo for %d, ", result->pap_levels,
+                 result->items, result->items_had, result->ammo);
+    snprintf(out, out_size, "took %d, gave %d guns (%d held already), %d ammo types, %d perks (%d had already), %s%d "
              "failed%s%s", result->taken, result->given, result->kept, result->aats, result->perks, result->perks_had,
-             result->failed, result->failed > 0 ? ": " : "", result->failures);
+             more, result->failed, result->failed > 0 ? ": " : "", result->failures);
+}
+
+// ---- AAE's Repack-a-Punch levels
+
+#define Var_Int 7
+#define Name_String 3
+#define Pap_Key_Size (Loadout_Name_Size + 32) // a guid and a root weapon name
+
+// the length of a gun name's root weapon name (before its attachments)
+static size_t root_len(const char *name) {
+    const char *plus = strchr(name, '+');
+    return plus != NULL ? (size_t)(plus - name) : strlen(name);
+}
+
+bool loadout_format_pap_levels(const loadout_t *loadout, char *out, size_t out_size) {
+    if (out_size == 0)
+        return false;
+    out[0] = '\0';
+    size_t used = 0;
+    for (int i = 0; i < loadout->gun_count; i++) {
+        const loadout_gun_t *gun = &loadout->guns[i];
+        if (gun->pap_level <= 0)
+            continue;
+        if (gun->pap_level > Loadout_Max_Pap_Level || !loadout_valid_name(gun->name) ||
+            !append(out, out_size, &used, "%s%s:%d", used > 0 ? "," : "", gun->name, gun->pap_level)) {
+            out[0] = '\0';
+            return false;
+        }
+    }
+    return true;
+}
+
+bool loadout_parse_pap_levels(const char *value, loadout_t *loadout) {
+    int levels[Loadout_Max_Guns];
+    for (int i = 0; i < loadout->gun_count; i++)
+        levels[i] = loadout->guns[i].pap_level;
+    for (const char *start = value; start != NULL && *start != '\0';) {
+        const char *end = strchr(start, ',');
+        if (end == NULL)
+            end = start + strlen(start);
+        const char *colon = memchr(start, ':', (size_t)(end - start));
+        // name:level, the level one digit
+        if (colon == NULL || colon == start || end - colon != 2 || colon[1] < '1' ||
+            colon[1] > '0' + Loadout_Max_Pap_Level || !valid_name_len(start, (size_t)(colon - start), true))
+            return false;
+        for (int i = 0; i < loadout->gun_count; i++)
+            if (strlen(loadout->guns[i].name) == (size_t)(colon - start) &&
+                memcmp(loadout->guns[i].name, start, (size_t)(colon - start)) == 0)
+                levels[i] = colon[1] - '0';
+        start = *end == ',' ? end + 1 : end;
+        if (*end == ',' && *start == '\0')
+            return false;
+    }
+    for (int i = 0; i < loadout->gun_count; i++)
+        loadout->guns[i].pap_level = levels[i];
+    return true;
+}
+
+uint32_t loadout_vm_level(const loadout_vm_t *vm) {
+    uint32_t id = 0;
+    vm_var_t object;
+    if (vm->level_id == 0 || !vm_read(vm, vm->level_id, &id, sizeof(id)) || !vm_var(vm, id, &object))
+        return 0;
+    return id;
+}
+
+// the text of string id: printable characters, at least one, shorter than out_size
+static bool vm_text(const loadout_vm_t *vm, uint32_t id, char *out, size_t out_size) {
+    uint64_t table = 0;
+    if (id == 0 || out_size == 0 || !vm_read(vm, vm->strings, &table, sizeof(table)) || table == 0)
+        return false;
+    uint64_t text = table + (uint64_t)id * String_Size + String_Text;
+    for (size_t len = 0; len < out_size; len++) {
+        char c;
+        if (!vm_read(vm, text + len, &c, 1))
+            return false;
+        out[len] = c;
+        if (c == '\0')
+            return len > 0;
+        if (c <= ' ' || c > '~')
+            return false;
+    }
+    return false;
+}
+
+bool loadout_vm_guid(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size) {
+    vm_var_t var;
+    uint32_t id = loadout_vm_find(vm, entity, loadout_script_hash("guid"));
+    if (out_size == 0 || id == 0 || !vm_var(vm, id, &var))
+        return false;
+    if (var.type == Var_Int) {
+        int len = snprintf(out, out_size, "%d", (int32_t)(uint32_t)var.value);
+        return len > 0 && (size_t)len < out_size;
+    }
+    return var.type == Var_String && vm_text(vm, (uint32_t)var.value, out, out_size);
+}
+
+// whether text can be a guid as GSC writes it into a string: letters, digits and '-', no '_' (which a weapon name
+// has, so a key's guid part never runs into the name)
+static bool guid_text(const char *text, size_t len) {
+    if (len == 0)
+        return false;
+    for (size_t i = 0; i < len; i++)
+        if (!isalnum((unsigned char)text[i]) && text[i] != '-')
+            return false;
+    return true;
+}
+
+int loadout_vm_read_pap_levels(const loadout_vm_t *vm, const char *guid, loadout_t *loadout) {
+    uint32_t array = loadout_vm_array_field(vm, loadout_vm_level(vm), "pap_lvup");
+    vm_var_t object;
+    if (array == 0 || !vm_var(vm, array, &object))
+        return -1;
+    int levels[Loadout_Max_Guns] = { 0 };
+    char prefix[Pap_Key_Size] = "";
+    bool mixed = false;
+    uint32_t id = (uint32_t)object.value;
+    for (int steps = 0; id != 0 && steps < Max_Children; steps++) {
+        vm_var_t child;
+        char key[Pap_Key_Size];
+        if (!vm_var(vm, id, &child) || child.parent != array)
+            break;
+        id = child.next;
+        int level = (int32_t)(uint32_t)child.value;
+        if ((child.name_type & 7) != Name_String || child.type != Var_Int || level < 1 ||
+            level > Loadout_Max_Pap_Level || !vm_text(vm, (uint32_t)child.key, key, sizeof(key)))
+            continue;
+        size_t key_len = strlen(key);
+        for (int i = 0; i < loadout->gun_count; i++) {
+            const char *name = loadout->guns[i].name;
+            size_t len = root_len(name);
+            if (key_len <= len || memcmp(key + key_len - len, name, len) != 0)
+                continue;
+            size_t prefix_len = key_len - len;
+            if (guid != NULL) {
+                if (strlen(guid) == prefix_len && memcmp(key, guid, prefix_len) == 0)
+                    levels[i] = level;
+            } else if (guid_text(key, prefix_len)) {
+                // without the guid, every gun's key has to have the same one (another player's would differ)
+                if (prefix[0] == '\0')
+                    snprintf(prefix, sizeof(prefix), "%.*s", (int)prefix_len, key);
+                else if (strlen(prefix) != prefix_len || memcmp(prefix, key, prefix_len) != 0)
+                    mixed = true;
+                levels[i] = level;
+            }
+        }
+    }
+    int count = 0;
+    for (int i = 0; i < loadout->gun_count; i++) {
+        loadout->guns[i].pap_level = mixed ? 0 : levels[i];
+        count += loadout->guns[i].pap_level > 0;
+    }
+    return count;
+}
+
+// ---- items and ammo
+
+bool loadout_item_worth_saving(const char *name) {
+    // what the game holds for a moment: perk bottles, gums, the build and revive hands, fists, power-ups' weapons
+    static const char *const passing[] = { "bottle", "bgb", "knuckle", "zombie_builder", "zombie_fists", "syrette",
+                                           "minigun", "zombie_beast", "death_throe", "defaultweapon", "powerup" };
+    if (!loadout_valid_name(name))
+        return false;
+    for (size_t i = 0; i < sizeof(passing) / sizeof(passing[0]); i++)
+        if (strstr(name, passing[i]) != NULL)
+            return false;
+    return true;
+}
+
+bool loadout_primary_is_item(const char *name) {
+    return strstr(name, "shield") != NULL || strncmp(name, "hero_", 5) == 0 || strncmp(name, "glaive_", 7) == 0;
+}
+
+static bool format_ammo(const char *name, bool have_ammo, int clip, int stock, char *out, size_t out_size, size_t *used) {
+    if (!have_ammo)
+        return append(out, out_size, used, "%s%s::", *used > 0 ? "," : "", name);
+    return clip >= 0 && stock >= 0 && append(out, out_size, used, "%s%s:%d:%d", *used > 0 ? "," : "", name, clip, stock);
+}
+
+bool loadout_format_items(const loadout_t *loadout, char *out, size_t out_size) {
+    if (out_size == 0)
+        return false;
+    out[0] = '\0';
+    size_t used = 0;
+    for (int i = 0; i < loadout->item_count; i++) {
+        const loadout_item_t *item = &loadout->items[i];
+        if (!loadout_valid_name(item->name) ||
+            !format_ammo(item->name, item->have_ammo, item->clip, item->stock, out, out_size, &used)) {
+            out[0] = '\0';
+            return false;
+        }
+    }
+    return true;
+}
+
+bool loadout_format_gun_ammo(const loadout_t *loadout, char *out, size_t out_size) {
+    if (out_size == 0)
+        return false;
+    out[0] = '\0';
+    size_t used = 0;
+    for (int i = 0; i < loadout->gun_count; i++) {
+        const loadout_gun_t *gun = &loadout->guns[i];
+        if (gun->have_ammo &&
+            (!loadout_valid_name(gun->name) || !format_ammo(gun->name, true, gun->clip, gun->stock, out, out_size, &used))) {
+            out[0] = '\0';
+            return false;
+        }
+    }
+    return true;
+}
+
+// a count: digits, at most 6 of them, or nothing (unknown) when blank_ok
+static bool parse_count(const char *start, const char *end, bool *have, int *value) {
+    if (start == end) {
+        *have = false;
+        *value = 0;
+        return true;
+    }
+    if (end - start > 6)
+        return false;
+    int v = 0;
+    for (const char *p = start; p < end; p++) {
+        if (!isdigit((unsigned char)*p))
+            return false;
+        v = v * 10 + (*p - '0');
+    }
+    *have = true;
+    *value = v;
+    return true;
+}
+
+// one "name:clip:stock" entry (both counts given, or both blank)
+static bool parse_ammo_entry(const char *start, const char *end, char *name, size_t name_size, bool *have, int *clip,
+                             int *stock) {
+    const char *c1 = memchr(start, ':', (size_t)(end - start));
+    const char *c2 = c1 != NULL ? memchr(c1 + 1, ':', (size_t)(end - c1 - 1)) : NULL;
+    bool have_clip, have_stock;
+    if (c1 == NULL || c2 == NULL || c1 == start || (size_t)(c1 - start) >= name_size ||
+        !valid_name_len(start, (size_t)(c1 - start), true) || !parse_count(c1 + 1, c2, &have_clip, clip) ||
+        !parse_count(c2 + 1, end, &have_stock, stock) || have_clip != have_stock)
+        return false;
+    memcpy(name, start, (size_t)(c1 - start));
+    name[c1 - start] = '\0';
+    *have = have_clip;
+    return true;
+}
+
+bool loadout_parse_items(const char *value, loadout_t *loadout) {
+    loadout_item_t items[Loadout_Max_Items];
+    int count = 0;
+    for (const char *start = value; start != NULL && *start != '\0';) {
+        const char *end = strchr(start, ',');
+        if (end == NULL)
+            end = start + strlen(start);
+        if (count == Loadout_Max_Items)
+            return false;
+        loadout_item_t *item = &items[count++];
+        if (!parse_ammo_entry(start, end, item->name, sizeof(item->name), &item->have_ammo, &item->clip, &item->stock))
+            return false;
+        start = *end == ',' ? end + 1 : end;
+        if (*end == ',' && *start == '\0')
+            return false;
+    }
+    memcpy(loadout->items, items, sizeof(items[0]) * (size_t)count);
+    loadout->item_count = count;
+    return true;
+}
+
+bool loadout_parse_gun_ammo(const char *value, loadout_t *loadout) {
+    loadout_gun_t guns[Loadout_Max_Guns];
+    memcpy(guns, loadout->guns, sizeof(guns));
+    for (const char *start = value; start != NULL && *start != '\0';) {
+        const char *end = strchr(start, ',');
+        if (end == NULL)
+            end = start + strlen(start);
+        char name[Loadout_Name_Size];
+        bool have;
+        int clip, stock;
+        if (!parse_ammo_entry(start, end, name, sizeof(name), &have, &clip, &stock) || !have)
+            return false;
+        for (int i = 0; i < loadout->gun_count; i++)
+            if (strcmp(guns[i].name, name) == 0) {
+                guns[i].have_ammo = true;
+                guns[i].clip = clip;
+                guns[i].stock = stock;
+            }
+        start = *end == ',' ? end + 1 : end;
+        if (*end == ',' && *start == '\0')
+            return false;
+    }
+    memcpy(loadout->guns, guns, sizeof(guns));
+    return true;
+}
+
+void loadout_vm_describe_pap(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size) {
+    if (out_size == 0)
+        return;
+    out[0] = '\0';
+    size_t used = 0;
+    vm_var_t var;
+    uint32_t id = loadout_vm_find(vm, entity, loadout_script_hash("guid"));
+    if (id != 0 && vm_var(vm, id, &var))
+        append(out, out_size, &used, "guid type %u value %" PRIx64 "; ", var.type, var.value);
+    else
+        append(out, out_size, &used, "no guid variable; ");
+    uint32_t level = loadout_vm_level(vm);
+    uint32_t array = loadout_vm_array_field(vm, level, "pap_lvup");
+    append(out, out_size, &used, "level %u pap_lvup %u:", level, array);
+    vm_var_t object;
+    if (array == 0 || !vm_var(vm, array, &object))
+        return;
+    id = (uint32_t)object.value;
+    for (int steps = 0; id != 0 && steps < 8; steps++) {
+        vm_var_t child;
+        char key[Pap_Key_Size];
+        if (!vm_var(vm, id, &child) || child.parent != array)
+            break;
+        if (!vm_text(vm, (uint32_t)child.key, key, sizeof(key)))
+            snprintf(key, sizeof(key), "(key %" PRIx64 ")", child.key);
+        append(out, out_size, &used, " %s nt %u = type %u value %" PRIx64 ";", key, child.name_type & 7u, child.type,
+               child.value);
+        id = child.next;
+    }
 }

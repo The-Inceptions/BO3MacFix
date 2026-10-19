@@ -23,7 +23,19 @@ typedef struct {
     uint64_t options;             // the weapon options: camo in the low byte (CalcWeaponOptions)
     uint32_t acvi;                // the attachments' cosmetic variants
     char aat[Loadout_Short_Size]; // like "zm_aat_blast_furnace", "" for none
+    int pap_level;                // AAE's Repack-a-Punch level (1 to 5), 0 for none
+    bool have_ammo;               // clip and stock read
+    int clip, stock;
 } loadout_gun_t;
+
+#define Loadout_Max_Items 8
+
+// a held weapon that isn't a gun: a lethal or tactical grenade, a mine, the shield, a hero weapon, the melee weapon
+typedef struct {
+    char name[Loadout_Name_Size]; // like "frag_grenade", "cymbal_monkey", "zod_riotshield"
+    bool have_ammo;
+    int clip, stock;              // a grenade's or a mine's count is its clip
+} loadout_item_t;
 
 typedef struct {
     loadout_gun_t guns[Loadout_Max_Guns];
@@ -31,6 +43,8 @@ typedef struct {
     int held; // the gun in hand, -1 for none
     char perks[Loadout_Max_Perks][Loadout_Short_Size]; // like "specialty_armorvest"
     int perk_count;
+    loadout_item_t items[Loadout_Max_Items];
+    int item_count;
 } loadout_t;
 
 void loadout_clear(loadout_t *loadout);
@@ -74,6 +88,7 @@ typedef struct {
     uint64_t var_glob;   // the script instance's variable globals (0x100 bytes: hash buckets, then the variables)
     uint64_t class_map;  // where the instance's class table pointer is
     uint64_t strings;    // where the string table pointer is
+    uint64_t level_id;   // where the level object's id is (a uint32_t), 0 if unknown
 } loadout_vm_t;
 
 // the script object of entity entnum (a player), 0 if it has none
@@ -106,11 +121,17 @@ typedef struct {
     bool (*has_perk)(void *context, const char *perk);
     bool (*give_perk)(void *context, const char *perk);                   // zm_perks::give_perk(perk, false)
     void (*switch_to)(void *context, uint64_t weapon);
+    // these may be NULL: then what needs them is told as not restored
+    bool (*set_pap_level)(void *context, uint64_t weapon, const char *name, int level); // AAE's own repack function
+    bool (*holds)(void *context, uint64_t weapon);
+    bool (*give_item)(void *context, uint64_t weapon); // zm_weapons::weapon_give, the scripts' own give
+    bool (*set_ammo)(void *context, uint64_t weapon, int clip, int stock);
 } loadout_ops_t;
 
 typedef struct {
     int taken, given, kept, aats, perks, perks_had, failed;
     char failures[256]; // what couldn't be restored, comma-separated
+    int pap_levels, items, items_had, ammo;
 } loadout_result_t;
 
 // turns the player's loadout into saved: takes the held primaries that aren't saved, gives each saved gun that isn't
@@ -120,3 +141,42 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
 
 // one line for the log: what a restore did
 void loadout_result_text(const loadout_result_t *result, char *out, size_t out_size);
+
+// ---- AAE's Repack-a-Punch (option tfoption_dpap): tfoption.gsc keeps each gun's level in a level array,
+// level.pap_lvup[self.guid + rootweapon.name] = 1 to 5 (1 at the first Pack-a-Punch, +1 at each repack after it)
+
+#define Loadout_Max_Pap_Level 5
+
+// checkpoint.ini's "PapLevels = name:level,...", the guns' names as Guns has them, only the guns that have one
+bool loadout_format_pap_levels(const loadout_t *loadout, char *out, size_t out_size);
+// sets loadout's guns' levels from a PapLevels value (NULL or empty for none); a name loadout doesn't have is left
+// out. False, leaving the levels as they were, if it's malformed.
+bool loadout_parse_pap_levels(const char *value, loadout_t *loadout);
+
+// the level object, 0 if it can't be read
+uint32_t loadout_vm_level(const loadout_vm_t *vm);
+// entity's guid field as GSC writes it when it adds it to a string (an int in decimal, or a string); false if none
+bool loadout_vm_guid(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size);
+// each gun's level from level.pap_lvup: the key is guid and the gun's root name (its name before any "+"). With guid
+// NULL (unknown), a key that is a number and the root name, if every such key has the same number. The number of guns
+// given a level, -1 if level.pap_lvup can't be read (it's undefined until a gun is Pack-a-Punched with the option on).
+int loadout_vm_read_pap_levels(const loadout_vm_t *vm, const char *guid, loadout_t *loadout);
+
+// ---- items (grenades, mines, the shield, hero weapons) and ammo: checkpoint.ini's "Items = name:clip:stock,..."
+// and "GunAmmo = name:clip:stock,..." (the guns' names as in Guns)
+
+// whether a held weapon that isn't a gun is worth saving: not one the game hands out for a moment (a perk bottle, a
+// gum, the build hands, fists, a power-up's)
+bool loadout_item_worth_saving(const char *name);
+// whether a weapon the game counts as a primary is still an item: a shield or a hero weapon, which the scripts give
+// their own way (the shield's model and health, the hero weapon's slot)
+bool loadout_primary_is_item(const char *name);
+bool loadout_format_items(const loadout_t *loadout, char *out, size_t out_size);
+// loadout's items from an Items value (NULL or empty for none); false, leaving them as they were, if it's malformed
+bool loadout_parse_items(const char *value, loadout_t *loadout);
+bool loadout_format_gun_ammo(const loadout_t *loadout, char *out, size_t out_size);
+// sets loadout's guns' ammo from a GunAmmo value; a name loadout doesn't have is left out. False if it's malformed.
+bool loadout_parse_gun_ammo(const char *value, loadout_t *loadout);
+// for the test switch BO3MACFIX_CHECKPOINT_PAP_DEBUG: entity's guid variable and level.pap_lvup's first entries as
+// the VM has them
+void loadout_vm_describe_pap(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size);

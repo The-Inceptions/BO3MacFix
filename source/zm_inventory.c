@@ -4,6 +4,7 @@
 #include <os/lock.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "dobby.h"
@@ -138,6 +139,9 @@ static bool let_through(void *ent, uint64_t return_address) {
 // restored on the server thread, from the give command, through the game's own functions
 
 #define Script_Server 0
+#define Aae_PapLevelUp 0xe843ceb2 // tfoption.gsc's repack function, known only by its name's hash
+#define WeaponInventory_AltMode 3 // WeaponDef's inventory type: a gun's alternate mode (its ammo is the gun's)
+#define WeaponInventory_DualWieldLeft 5 // and a dual-wield gun's left hand
 #define Perk_None 0x69     // what BG_GetPerkIndexForName gives for a name that isn't a perk
 #define Attachment_Count 44
 #define Restore_Ms 30000   // how long a restore set up from Lua waits for its give command
@@ -166,11 +170,19 @@ static void (*Scr_FreeThread)(int inst, unsigned int thread);
 static void (*Scr_AddString)(int inst, const char *text);
 static void (*Scr_AddWeapon)(int inst, uint64_t weapon, int client_num);
 static void (*Scr_AddInt)(int inst, int value);
+static int (*BG_GetAmmoInClip)(void *ps, uint64_t weapon);
+static int (*BG_GetAmmoStock)(void *ps, uint64_t weapon);
+static void (*BG_SetAmmoInClip)(void *ps, uint64_t weapon, int amount);
+static void (*BG_SetAmmoStock)(void *ps, uint64_t weapon, int amount);
+static int (*BG_GetClipSize)(uint64_t weapon);
+static int (*BG_WeaponIsClipOnly)(uint64_t weapon);
+static int (*BG_GetMaxAmmo)(void *ps, uint64_t weapon, uint64_t arg);
 
 // the server script VM, read through safe_read
 static loadout_vm_t server_vm(void) {
     return (loadout_vm_t){ safe_read, base + ADDR_scrVarGlob + Script_Server * 0x100,
-                           base + ADDR_scrClassMap + Script_Server * sizeof(uint64_t), base + ADDR_scrStringTable };
+                           base + ADDR_scrClassMap + Script_Server * sizeof(uint64_t), base + ADDR_scrStringTable,
+                           base + ADDR_scrVarPub + Script_Server * 0x78 + scrVarPub_LevelId };
 }
 
 // the game's attachment names, by the ids a Weapon's attachment fields hold; NULL where one can't be read
@@ -209,6 +221,36 @@ static bool holds(uint64_t client, uint64_t weapon) {
     return false;
 }
 
+// a held weapon's clip and stock, as GetWeaponAmmoClip and GetWeaponAmmoStock read them (read-only game functions,
+// called once the weapon and the player state have read back)
+static bool read_ammo(uint64_t client, uint64_t weapon, int *clip, int *stock) {
+    if (BG_GetAmmoInClip == NULL || BG_GetAmmoStock == NULL || BG_WeaponIsClipOnly == NULL || !holds(client, weapon))
+        return false;
+    *clip = BG_GetAmmoInClip((void *)client, weapon);
+    *stock = BG_WeaponIsClipOnly(weapon) ? 0 : BG_GetAmmoStock((void *)client, weapon);
+    return *clip >= 0 && *stock >= 0;
+}
+
+// a held weapon that isn't a gun (a grenade, a mine, the shield, a hero weapon, the melee weapon), by the name the
+// server looks it up by, with its count; not the ones a gun has (its alternate mode, its left hand)
+static void read_item(uint64_t client, uint64_t weapon, const char *variant, int type, const char *const *names,
+                      loadout_t *out) {
+    char name[72];
+    if (type == WeaponInventory_AltMode || type == WeaponInventory_DualWieldLeft || out->item_count >= Loadout_Max_Items)
+        return;
+    if (!weapon_script_name(weapon, name, sizeof(name)))
+        snprintf(name, sizeof(name), "%s", variant);
+    loadout_item_t *item = &out->items[out->item_count];
+    if (!loadout_weapon_name(name, weapon, names, Attachment_Count, item->name, sizeof(item->name)) ||
+        !loadout_item_worth_saving(item->name) || (type == 0 && !loadout_primary_is_item(item->name)))
+        return;
+    for (int i = 0; i < out->item_count; i++)
+        if (strcmp(out->items[i].name, item->name) == 0)
+            return;
+    item->have_ammo = read_ammo(client, weapon, &item->clip, &item->stock);
+    out->item_count++;
+}
+
 bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
     loadout_clear(out);
     if (note_size > 0)
@@ -231,8 +273,12 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
         char variant[72];
         int type = -1;
         if (!held_weapon(client, i, &weapon, &options, &acvi) || (weapon & Weapon_Index_Mask) == 0 ||
-            !weapon_info(weapon, variant, sizeof(variant), &type) || type != 0)
+            !weapon_info(weapon, variant, sizeof(variant), &type))
             continue;
+        if (type != 0 || loadout_primary_is_item(variant)) {
+            read_item(client, weapon, variant, type, names, out);
+            continue;
+        }
         // by the name the server looks it up by, else the variant's own
         char script_name[72];
         if (weapon_script_name(weapon, script_name, sizeof(script_name)))
@@ -242,6 +288,7 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
             continue;
         gun->options = options;
         gun->acvi = acvi;
+        gun->have_ammo = read_ammo(client, weapon, &gun->clip, &gun->stock);
         for (int a = 0; a < aat_count; a++)
             if (aats[a].weapon == weapon)
                 snprintf(gun->aat, sizeof(gun->aat), "%s", aats[a].aat);
@@ -249,6 +296,10 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
             out->held = out->gun_count;
         out->gun_count++;
     }
+    // AAE's Repack-a-Punch levels (level.pap_lvup, keyed by self.guid and the root weapon's name)
+    char guid[32];
+    bool have_guid = player != 0 && loadout_vm_guid(&vm, player, guid, sizeof(guid));
+    int pap_count = loadout_vm_read_pap_levels(&vm, have_guid ? guid : NULL, out);
     uint32_t perks = player != 0 ? loadout_vm_array_field(&vm, player, "perks_active") : 0;
     int perk_count = perks != 0 ? loadout_vm_read_strings(&vm, perks, out->perks, Loadout_Max_Perks) : -1;
     out->perk_count = perk_count > 0 ? perk_count : 0;
@@ -257,6 +308,14 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
                  aat_count < 0 ? "self.aat unreadable; " : "");
     if (note_size > 0 && player != 0 && perks == 0)
         snprintf(note + strlen(note), note_size - strlen(note), "no self.perks_active; ");
+    if (note_size > 0 && pap_count > 0 && !have_guid)
+        snprintf(note + strlen(note), note_size - strlen(note), "repack levels matched without self.guid; ");
+    if (getenv("BO3MACFIX_CHECKPOINT_PAP_DEBUG") != NULL && player != 0) {
+        char text[512];
+        loadout_vm_describe_pap(&vm, player, text, sizeof(text));
+        printf("BO3MacFix: zm inventory: repack levels: %d read (guid %s); %s\n", pap_count, have_guid ? guid : "none",
+               text);
+    }
     return true;
 }
 
@@ -283,8 +342,9 @@ static int op_primaries(void *context, uint64_t *out, int max) {
         uint64_t weapon = 0;
         char name[72];
         int type = -1;
+        // a shield or hero weapon is an item (Items), not a gun to take
         if (held_weapon((uint64_t)c->client, i, &weapon, NULL, NULL) && (weapon & Weapon_Index_Mask) != 0 &&
-            weapon_info(weapon, name, sizeof(name), &type) && type == 0)
+            weapon_info(weapon, name, sizeof(name), &type) && type == 0 && !loadout_primary_is_item(name))
             out[count++] = weapon;
     }
     return count;
@@ -310,6 +370,15 @@ static bool op_give(void *context, uint64_t weapon, uint64_t options, uint32_t a
         return false;
     G_GiveStartAmmo(c->ent, weapon, 0);
     return holds((uint64_t)c->client, weapon);
+}
+
+// a server script function by its namespace's and name's hashes, false if the scripts loaded don't have it
+static bool script_function_hashed(script_handle_t *handle, const char *script, uint32_t ns, uint32_t name) {
+    memset(handle, 0, sizeof(*handle));
+    Scr_GetFunctionHandle(handle, Script_Server, script, ns, name, NULL, false);
+    const void *missing = NULL;
+    safe_read(base + ADDR_scrDefaultFunction, &missing, sizeof(missing));
+    return handle->code_pos != NULL && handle->code_pos != missing;
 }
 
 // a server script function, false if the scripts loaded don't have it (the game hands out a do-nothing one then)
@@ -360,6 +429,83 @@ static bool op_give_perk(void *context, const char *perk) {
     Scr_AddString(Script_Server, perk);
     Scr_FreeThread(Script_Server, Scr_ExecEntThread(c->ent, 2, handle));
     return op_has_perk(context, perk);
+}
+
+// the repack level a gun has now (level.pap_lvup), 0 for none
+static int pap_level_now(int entnum, const char *name) {
+    loadout_vm_t vm = server_vm();
+    loadout_t one;
+    loadout_clear(&one);
+    snprintf(one.guns[0].name, sizeof(one.guns[0].name), "%s", name);
+    one.gun_count = 1;
+    char guid[32];
+    uint32_t player = loadout_vm_entity(&vm, entnum);
+    bool have_guid = player != 0 && loadout_vm_guid(&vm, player, guid, sizeof(guid));
+    return loadout_vm_read_pap_levels(&vm, have_guid ? guid : NULL, &one) > 0 ? one.guns[0].pap_level : 0;
+}
+
+// AAE's repack level through its own function, tfoption.gsc's ?e843ceb2(weapon) on the player (the one its
+// Pack-a-Punch thread calls): it sets an undefined level to 1 and adds 1 to one under 5. Called until the level reads
+// back as saved, and no more once a call doesn't raise it.
+static bool op_set_pap_level(void *context, uint64_t weapon, const char *name, int level) {
+    restore_context_t *c = context;
+    script_handle_t handle;
+    if (!script_function_hashed(&handle, "scripts/zm/tfoption", loadout_script_hash("tfoption"), Aae_PapLevelUp))
+        return false;
+    int client_num = 0;
+    safe_read(base + ADDR_scrClientNum, &client_num, sizeof(client_num));
+    int now = pap_level_now(c->entnum, name);
+    for (int calls = 0; now < level && calls < Loadout_Max_Pap_Level; calls++) {
+        Scr_AddWeapon(Script_Server, weapon, client_num);
+        Scr_FreeThread(Script_Server, Scr_ExecEntThread(c->ent, 1, handle));
+        int after = pap_level_now(c->entnum, name);
+        if (after <= now)
+            return false;
+        now = after;
+    }
+    return now == level;
+}
+
+static bool op_holds(void *context, uint64_t weapon) {
+    restore_context_t *c = context;
+    return holds((uint64_t)c->client, weapon);
+}
+
+// zm_weapons::weapon_give(weapon, is_upgrade 0, magic_box 0, nosound 1, b_switch_weapon 0): the zombies scripts' own
+// give, which puts a grenade, mine, hero or melee weapon in its slot (zm_utility's set_player_*, the old one taken)
+// and gives equipment like the shield through zm_equipment::give
+static bool op_give_item(void *context, uint64_t weapon) {
+    restore_context_t *c = context;
+    script_handle_t handle;
+    if (!script_function(&handle, "scripts/zm/_zm_weapons", "zm_weapons", "weapon_give"))
+        return false;
+    int client_num = 0;
+    safe_read(base + ADDR_scrClientNum, &client_num, sizeof(client_num));
+    // the last parameter first
+    Scr_AddInt(Script_Server, 0);
+    Scr_AddInt(Script_Server, 1);
+    Scr_AddInt(Script_Server, 0);
+    Scr_AddInt(Script_Server, 0);
+    Scr_AddWeapon(Script_Server, weapon, client_num);
+    Scr_FreeThread(Script_Server, Scr_ExecEntThread(c->ent, 5, handle));
+    return holds((uint64_t)c->client, weapon);
+}
+
+// what SetWeaponAmmoClip and SetWeaponAmmoStock do: clamped to the clip size and the most stock (a clip-only
+// weapon, a grenade say, has only the clip)
+static bool op_set_ammo(void *context, uint64_t weapon, int clip, int stock) {
+    restore_context_t *c = context;
+    if (!holds((uint64_t)c->client, weapon))
+        return false;
+    int size = BG_GetClipSize(weapon);
+    BG_SetAmmoInClip(c->client, weapon, clip < 0 ? 0 : clip > size ? size : clip);
+    if (!BG_WeaponIsClipOnly(weapon)) {
+        uint64_t arg = 0;
+        safe_read(base + ADDR_bg_maxAmmoArg, &arg, sizeof(arg));
+        int most = BG_GetMaxAmmo(c->client, weapon, arg);
+        BG_SetAmmoStock(c->client, weapon, stock < 0 ? 0 : stock > most ? most : stock);
+    }
+    return true;
 }
 
 static void op_switch_to(void *context, uint64_t weapon) {
@@ -497,7 +643,8 @@ static void run_restore(void *ent) {
         return finish_restore(text);
     }
     loadout_ops_t ops = { &context,     op_weapon_for_name, op_primaries, op_take,      op_give,
-                          op_acquire_aat, op_has_perk,      op_give_perk, op_switch_to };
+                          op_acquire_aat, op_has_perk,      op_give_perk, op_switch_to, op_set_pap_level,
+                          op_holds,       op_give_item,     op_set_ammo };
     loadout_result_t result;
     loadout_restore(&plan, &ops, &result);
     loadout_result_text(&result, text, sizeof(text));
@@ -538,6 +685,13 @@ void zm_inventory_init(uint64_t game_base) {
     Scr_AddString = (void *)(base + ADDR_Scr_AddString);
     Scr_AddWeapon = (void *)(base + ADDR_Scr_AddWeapon);
     Scr_AddInt = (void *)(base + ADDR_Scr_AddInt);
+    BG_GetAmmoInClip = (void *)(base + ADDR_BG_GetAmmoInClip);
+    BG_GetAmmoStock = (void *)(base + ADDR_BG_GetAmmoStock);
+    BG_SetAmmoInClip = (void *)(base + ADDR_BG_SetAmmoInClip);
+    BG_SetAmmoStock = (void *)(base + ADDR_BG_SetAmmoStock);
+    BG_GetClipSize = (void *)(base + ADDR_BG_GetClipSize);
+    BG_WeaponIsClipOnly = (void *)(base + ADDR_BG_WeaponIsClipOnly);
+    BG_GetMaxAmmo = (void *)(base + ADDR_BG_GetMaxAmmo);
 }
 
 // at start-up, before the game's threads run: the pre-patched copy has a slot for it, so that only stores a pointer.
