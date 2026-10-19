@@ -34,6 +34,7 @@
 #include "gpu_tweaks.h"
 #include "havok.h"
 #include "utilities.h"
+#include "notch.h"
 #include "notices.h"
 #include "offsets.h"
 #include "players_cfg.h"
@@ -1134,6 +1135,8 @@ __attribute__((constructor)) static void dylib_main() {
     display_follow_init(read_int_setting_or_env("DisplayFollow", 1));
     sdl_displays_init();
     engine_display_init();
+    // the picture below the built-in display's camera housing in fullscreen (AvoidNotch, off by default), see notch.m
+    notch_init(read_int_setting_or_env("AvoidNotch", 0));
 
     // Darwin notifications the display tests drive the game with (BO3MACFIX_TESTHOOKS=1), see display_testhooks.m
     const char *test_hooks_env = getenv("BO3MACFIX_TESTHOOKS");

@@ -37,6 +37,7 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `DisplayMemory` | 1 | Remembers the resolution and refresh rate the game used on each display (in `BO3MacFix/displays.ini`), for when it's back on that display. A monitor is still recognised when it's plugged into another port or adapter. |
 | `MatchRefreshRate` | 1 | Uses each display's own refresh rate. A `MaxFPS` that matched the old display's refresh rate follows it too. |
 | `ConfineCursor` | 0 | Stops stray clicks landing on another display in fullscreen menus: the pointer stops at the edge of the game's display, and keeps going if you push on past it. |
+| `AvoidNotch` | 0 | In fullscreen on a MacBook's built-in screen, keeps the whole picture below the camera notch: the strip beside the notch goes black, and the picture gets a little smaller to fit, with thin black bars at the sides. The mouse follows it. It turns itself off on displays without a notch and on again when the game comes back. |
 | `ControllerMappings` | 1 | Lets DualShock 4, DualSense and DualSense Edge controllers work over USB. |
 | `ControllerBridge` | 0 | Reads DualShock 4 and DualSense controllers through macOS instead: Bluetooth and USB, rumble and lightbar. Turn Steam Input off for the game. Needs macOS 11.3. |
 | `ButtonPrompts` | 0 | 0 shows PlayStation buttons with a PlayStation controller, 1 always Xbox, 2 always PlayStation. |

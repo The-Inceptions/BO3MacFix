@@ -3,7 +3,7 @@
 TARGET = BO3MacFix.dylib
 TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
-	tests/test_players_cfg tests/test_aae_build
+	tests/test_players_cfg tests/test_aae_build tests/test_notch
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -57,6 +57,9 @@ FRAMEWORKS += -framework Metal -framework QuartzCore -framework AppKit -weak_fra
 # tests' hooks (display_testhooks.m)
 SOURCES += source/display_follow.m source/display_policy.c source/sdl_displays.c source/sdl_displays_cocoa.m
 SOURCES += source/engine_display.c source/display_testhooks.m
+# keeping the picture below the built-in display's camera housing in fullscreen (notch.m, AvoidNotch), with its
+# geometry in notch_layout.c
+SOURCES += source/notch.m source/notch_layout.c
 # on-screen notices in the game (notices.m with the queue in notice_queue.c, drawn by notices.lua) and pausing when the
 # controller disconnects
 SOURCES += source/notices.m source/notice_queue.c
@@ -95,6 +98,10 @@ tests/test_sdl_displays: tests/test_sdl_displays.c source/sdl_displays.c source/
 
 # prepatch.c's builder and runtime against a made-up executable with the game's layout (the test includes the source
 # itself), with the address and undefined behaviour sanitizers since it's all byte offsets
+# AvoidNotch's geometry (notch_layout.c) against Aspyr's mouse mapping, plain C
+tests/test_notch: tests/test_notch.c source/notch_layout.c source/notch_layout.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_notch.c source/notch_layout.c
+
 tests/test_prepatch: tests/test_prepatch.c source/prepatch.c source/prepatch.h source/offsets.h source/dobby.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_prepatch.c
 

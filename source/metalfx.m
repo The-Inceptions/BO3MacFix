@@ -28,6 +28,8 @@
 
 #include "display_follow.h"
 #include "metalfx.h"
+#include "notch.h"
+#include "notch_layout.h"
 
 // MetalFX needs macOS 13 and is weak-linked, metalfx_init checks it's there before anything here uses it
 #pragma clang diagnostic ignored "-Wunguarded-availability-new"
@@ -369,7 +371,17 @@ static void copy_to_drawable(id<MTLBlitCommandEncoder> encoder, SEL sel, id<MTLT
     // The drawable is bigger than that now, so the frame and the bars are scaled up with it.
     NSUInteger out_width = drawable_width, out_height = drawable_height;
     MTLOrigin origin = MTLOriginMake(0, 0, 0);
-    if (destination_origin.x != 0 || destination_origin.y != 0) {
+    int forced_width, forced_height;
+    NotchRect placed;
+    if ((destination_origin.x != 0 || destination_origin.y != 0) && notch_forced_drawable(&forced_width, &forced_height) &&
+        notch_scale_rect(forced_width, forced_height, (int)drawable_width, (int)drawable_height,
+                         (NotchRect){ (int)destination_origin.x, (int)destination_origin.y, (int)size.width,
+                                      (int)size.height }, &placed)) {
+        // AvoidNotch puts the frame below the camera housing, not in the middle: scale by the drawable it forced
+        out_width = (NSUInteger)placed.w;
+        out_height = (NSUInteger)placed.h;
+        origin = MTLOriginMake((NSUInteger)placed.x, (NSUInteger)placed.y, 0);
+    } else if (destination_origin.x != 0 || destination_origin.y != 0) {
         double scale_x = (double)drawable_width / (size.width + 2 * destination_origin.x);
         double scale_y = (double)drawable_height / (size.height + 2 * destination_origin.y);
         out_width = (NSUInteger)lround(size.width * scale_x);
