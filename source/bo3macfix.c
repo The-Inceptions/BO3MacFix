@@ -49,6 +49,7 @@
 #include "steam.h"
 #include "stream_stall_recovery.h"
 #include "t7overcharged.h"
+#include "script_errors.h"
 #include "controllers.h"
 #include "gc_bridge.h"
 
@@ -434,6 +435,8 @@ install_hook_name(CL_SetCGameTime, void, int localClientNum) {
 #define C2M_Path Macfix_Path "/cod2map/cod2map64.exe"
 install_hook_name(HKAI_InitMapData, void, const char *mapname, char restart) {
     printf("HKAI_InitMapData for %s\n", mapname);
+    // each map shows each repeated script error 3 times again
+    script_errors_new_map();
 
     char physicsPath[0x200];
     char physicsAltPath[0x200];
@@ -1017,6 +1020,8 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_CSteamAPIContext_Init((void *)(game_base_address + ADDR_CSteamAPIContext_Init));
     install_hook_dwInstantDispatchMessage((void *)(game_base_address + ADDR_dwInstantMessageDispatch));
     install_hook_hks_load_dll((void *)(game_base_address + ADDR_hks_load_dll));
+    // T7Overcharged's script functions, which All-around Enhancement's client scripts call every frame
+    t7o_install_script_functions();
     install_hook_hksf_fopen_internal((void *)(game_base_address + ADDR_hksf_fopen_internal));
     install_hook_CL_FirstSnapshot((void *)(game_base_address + ADDR_CL_FirstSnapshot));
     install_hook_DB_GetStreamFraction((void *)(game_base_address + ADDR_DB_GetStreamFraction));
@@ -1103,6 +1108,8 @@ __attribute__((constructor)) static void dylib_main() {
     cpu_tuning_init(game_base_address, read_int_setting("ThreadQoS", 1), read_int_setting("JobIdleFix", 1),
                     read_int_setting("YieldSleep0", 0), read_int_setting("FastSetjmp", 1),
                     read_int_setting("RenderIdleFix", 1), read_int_setting("FastScriptErrors", 1));
+    // repeated script errors are shown 3 times, then counted, see script_errors.c
+    script_errors_init(game_base_address, read_int_setting("QuietScriptErrors", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);

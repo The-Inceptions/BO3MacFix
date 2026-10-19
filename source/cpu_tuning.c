@@ -152,6 +152,23 @@ install_hook_name(Scr_LoadSourceText, void, uint8_t *script) {
     }
 }
 
+// BO3MACFIX_SCRIPTERRORPOS=1 (a debugging aid): call stack lines without line information (every mod script's) end
+// in the code offset in that script, e.g. "file 'scripts/zm/aae_core.csc @0x76fc'", which its exports and imports place
+typedef uint8_t **(*Scr_FindScriptForCodePos_t)(int inst, const char *code_pos);
+install_hook_name(Scr_GetCodePosInfo, void, int inst, const char *code_pos, const char **file, int *line,
+                  const char **text) {
+    orig_Scr_GetCodePosInfo(inst, code_pos, file, line, text);
+    if (line == NULL || *line >= 0 || file == NULL || *file == NULL)
+        return;
+    uint8_t **script = ((Scr_FindScriptForCodePos_t)(base_address + ADDR_Scr_FindScriptForCodePos))(inst, code_pos);
+    if (script != NULL) {
+        static __thread char with_offset[512];
+        unsigned long offset = (unsigned long)(code_pos - (const char *)*script);
+        snprintf(with_offset, sizeof(with_offset), "%s @0x%lx", *file, offset);
+        *file = with_offset;
+    }
+}
+
 static int env_override(const char *name, int value) {
     const char *env = getenv(name);
     return env != NULL ? atoi(env) : value;
@@ -176,6 +193,10 @@ void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fi
     if (env_override("BO3MACFIX_FASTSCRIPTERRORS", fast_script_errors) != 0) {
         install_hook_Scr_LoadSourceText((void *)(base_address + ADDR_Scr_LoadSourceText));
         printf("script errors don't look for missing script sources\n");
+    }
+    if (env_override("BO3MACFIX_SCRIPTERRORPOS", 0) != 0) {
+        install_hook_Scr_GetCodePosInfo((void *)(base_address + ADDR_Scr_GetCodePosInfo));
+        printf("script error call stacks show code offsets\n");
     }
 }
 

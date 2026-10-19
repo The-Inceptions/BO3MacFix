@@ -66,6 +66,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_DB_GetStreamFraction, Push_R15 },
     { ADDR_dwInstantMessageDispatch, Push_R15 },
     { ADDR_GPad_GetGamepadType, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xC7 } }, // ...; movsxd rax, edi
+    { ADDR_GScr_IsProfileBuild, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xF6 } }, // ...; xor esi, esi
     { ADDR_HKAI_InitMapData, Push_R15 },
     { ADDR_hks_load_dll, Push_R15 },
     { ADDR_hksf_fopen_internal, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xC0 } }, // ...; xor eax, eax
@@ -78,7 +79,9 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Lua_GetBuildStringField, Push_R14 },
     { ADDR_R_CheckVidRestart, Push_R15 },
     { ADDR_R_SetWndParms, Push_R15 },
+    { ADDR_Scr_ErrorInternal, Push_R15 },
     { ADDR_Scr_LoadSourceText, Push_R15 },
+    { ADDR_Scr_RuntimeErrorInternal, Push_R15 },
     { ADDR_SDL_SetWindowTitle, Push_R14 },
     { ADDR_someLoggingFunction, Push_R15 },
     { ADDR_Sys_CheckSumPacketCopy, 10, 0, { 0x66, 0xB8, 0xFF, 0xFF, 0x81, 0xFA, 0xE8, 0x04, 0x00, 0x00 } }, // mov ax, 0xFFFF; cmp edx, 0x4E8

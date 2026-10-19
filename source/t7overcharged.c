@@ -1,11 +1,14 @@
 // macOS replacement for T7Overcharged (https://github.com/JariKCoding/T7Overcharged),
 // a Windows DLL that workshop mods such as All-around Enhancement load through Lua.
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>
 #include <sys/stat.h>
+#include "dobby.h"
 #include "havok.h"
 #include "offsets.h"
 #include "t7overcharged.h"
@@ -179,4 +182,155 @@ void t7o_push_init(lua_State *s, const char *dll_path) {
     if (last_slash != NULL)
         *last_slash = '\0';
     hks_push_cfunction(s, t7o_init, "init");
+}
+
+#pragma mark - script functions
+
+// T7Overcharged also gives GSC and CSC new natives, through the isprofilebuild builtin: a script calls it through a
+// function pointer, so the linker doesn't check the parameters, with the native's hash first. All-around
+// Enhancement's scripts wrap them like this:
+//     function hash(name) { return [[ &isprofilebuild ]](0x22ea46c7, name); }
+//     function getvieworigin(localclientnum) { return [[ &isprofilebuild ]](hash("getvieworigin"), localclientnum); }
+// The game's isprofilebuild ignores its parameters and returns 0, so on the Mac AAE's client scripts got 0 for the view
+// origin and indexed it every frame (its HUD movement and the view code its smoke trails and zombie health bars use):
+// about 2,000 script errors a second in a match, each one a call stack in console_mp.log. We answer hash and the
+// natives below; any other call still gets 0, and is logged once.
+#define Hash_Native 0x22ea46c7u
+
+typedef struct {
+    uint64_t value;
+    uint32_t type;
+    uint32_t pad;
+} VariableValue;
+_Static_assert(sizeof(VariableValue) == 16, "VariableValue must match the game's layout");
+
+enum { Var_String = 2, Var_Hash = 5, Var_Int = 7 };
+enum { Script_Server = 0, Script_Client = 1 };
+#define VmPub_Size 0xa048
+#define VmPub_Top 0x20
+#define VmPub_OutParamCount 0x38
+#define Cg_Size 0x342a80
+#define Cg_ViewOrigin 0x131dc8
+#define Cg_ViewAngles 0x2d8930
+
+static int (*Scr_GetInt)(int inst, unsigned int index);
+static const char *(*Scr_GetString)(int inst, unsigned int index);
+static void (*Scr_AddInt)(int inst, int value);
+static void (*Scr_AddVector)(int inst, const float *value);
+
+// the type of a parameter, or -1 if there isn't one
+static int param_type(int inst, unsigned int index) {
+    const uint8_t *vm = (const uint8_t *)(game_base_address + ADDR_scrVmPub) + (size_t)inst * VmPub_Size;
+    if (index >= *(const uint32_t *)(vm + VmPub_OutParamCount))
+        return -1;
+    const VariableValue *top = *(VariableValue *const *)(vm + VmPub_Top);
+    return (int)(top - index)->type;
+}
+
+static bool param_is_int(int inst, unsigned int index) {
+    int type = param_type(inst, index);
+    return type == Var_Int || type == Var_Hash;
+}
+
+// the game's canonical hash (the one it names script functions by), so a native's hash is the same as its name's
+static uint32_t script_hash(const char *name) {
+    uint32_t hash = 0x4B9ACE2F;
+    for (; *name != '\0'; name++)
+        hash = ((uint32_t)tolower((unsigned char)*name) ^ hash) * 0x1000193;
+    return hash * 0x1000193;
+}
+
+// the natives, by hash, and whether each was logged yet
+typedef enum { Native_GetViewOrigin, Native_GetViewAngles, Native_Count } native_t;
+static const char *const native_names[Native_Count] = { "getvieworigin", "getviewang" };
+static uint32_t native_hashes[Native_Count];
+static bool native_logged[Native_Count];
+
+// names scripts asked hash() for, so a native we don't have can be logged by name
+#define Hashed_Names 32
+static struct {
+    uint32_t hash;
+    bool logged;
+    char name[48];
+} hashed_names[Hashed_Names];
+static unsigned int hashed_name_count;
+
+static void remember_hashed_name(uint32_t hash, const char *name) {
+    for (unsigned int i = 0; i < hashed_name_count; i++) {
+        if (hashed_names[i].hash == hash)
+            return;
+    }
+    if (hashed_name_count < Hashed_Names) {
+        hashed_names[hashed_name_count].hash = hash;
+        strncpy(hashed_names[hashed_name_count].name, name, sizeof(hashed_names[0].name) - 1);
+        hashed_name_count++;
+    }
+}
+
+static void log_unknown_native(uint32_t hash) {
+    for (unsigned int i = 0; i < hashed_name_count; i++) {
+        if (hashed_names[i].hash == hash) {
+            if (!hashed_names[i].logged) {
+                hashed_names[i].logged = true;
+                printf("T7Overcharged: no script function \"%s\" here, scripts get 0\n", hashed_names[i].name);
+            }
+            return;
+        }
+    }
+}
+
+// the local client's cg_t, or NULL
+static const uint8_t *local_client_cg(int inst) {
+    if (inst != Script_Client || !param_is_int(inst, 1))
+        return NULL;
+    int local_client = Scr_GetInt(inst, 1);
+    const uint8_t *cg = *(const uint8_t *const *)(game_base_address + ADDR_cgArray);
+    if (cg == NULL || local_client < 0 || local_client >= *(const int *)(game_base_address + ADDR_LOCAL_CLIENT_COUNT))
+        return NULL;
+    return cg + (size_t)local_client * Cg_Size;
+}
+
+// answers a native, returns false to leave it to the game
+static bool call_native(int inst, uint32_t hash) {
+    if (hash == Hash_Native) {
+        if (param_type(inst, 1) != Var_String)
+            return false;
+        const char *name = Scr_GetString(inst, 1);
+        uint32_t name_hash = script_hash(name);
+        remember_hashed_name(name_hash, name);
+        Scr_AddInt(inst, (int)name_hash);
+        return true;
+    }
+    for (int native = 0; native < Native_Count; native++) {
+        if (hash != native_hashes[native])
+            continue;
+        const uint8_t *cg = local_client_cg(inst);
+        if (cg == NULL)
+            return false;
+        if (!native_logged[native]) {
+            native_logged[native] = true;
+            printf("T7Overcharged: scripts use %s\n", native_names[native]);
+        }
+        Scr_AddVector(inst, (const float *)(cg + (native == Native_GetViewOrigin ? Cg_ViewOrigin : Cg_ViewAngles)));
+        return true;
+    }
+    log_unknown_native(hash);
+    return false;
+}
+
+install_hook_name(GScr_IsProfileBuild, void, int inst) {
+    if ((inst == Script_Server || inst == Script_Client) && param_is_int(inst, 0) &&
+        call_native(inst, (uint32_t)Scr_GetInt(inst, 0)))
+        return;
+    orig_GScr_IsProfileBuild(inst);
+}
+
+void t7o_install_script_functions(void) {
+    Scr_GetInt = (void *)(game_base_address + ADDR_Scr_GetInt);
+    Scr_GetString = (void *)(game_base_address + ADDR_Scr_GetString);
+    Scr_AddInt = (void *)(game_base_address + ADDR_Scr_AddInt);
+    Scr_AddVector = (void *)(game_base_address + ADDR_Scr_AddVector);
+    for (int native = 0; native < Native_Count; native++)
+        native_hashes[native] = script_hash(native_names[native]);
+    install_hook_GScr_IsProfileBuild((void *)(game_base_address + ADDR_GScr_IsProfileBuild));
 }
