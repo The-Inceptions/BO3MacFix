@@ -50,6 +50,11 @@ bool loadout_valid_name(const char *name);
 bool loadout_weapon_name(const char *variant, uint64_t weapon, const char *const *attachment_names, int attachment_count,
                          char *out, size_t out_size);
 
+// the same weapon name in the game's other form: without "_zm" after its variant if it has one, else with it, its
+// attachments kept ("ray_gun_upgraded_zm+fmj" and "ray_gun_upgraded+fmj"). The server looks weapons up by the name a
+// WeaponVariantDef has second, which for zombies' weapons is the one without "_zm". False if it doesn't fit.
+bool loadout_other_name(const char *name, char *out, size_t out_size);
+
 // ---- checkpoint.ini: "Guns = name:options:acvi:aat,..." (options in hex), "GunInHand = name", "PerkList = a,b"
 
 // the guns as checkpoint.ini's Guns value; false if it doesn't fit

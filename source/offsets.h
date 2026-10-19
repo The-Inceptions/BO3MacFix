@@ -189,6 +189,7 @@
 #define gclient_HeldWeapon_Size 0x30
 #define gclient_HeldWeapon_Count 15
 #define WeaponVariantDef_WeaponDef 0x18 // WeaponDef *; the variant's name is its first field
+#define WeaponVariantDef_ScriptName 0x8 // const char *: the name the server's weapon lookup has it by (ray_gun_upgraded for ray_gun_upgraded_zm), the second table BG_RegisterWeapon at 0x123650e fills
 #define WeaponDef_InventoryType 0x7c // int: 0 primary, 1 offhand, 3 alt-fire mode (which give refuses), 4 melee
 // a held weapon's weapon options (uint64_t, camo in the low byte) and attachment cosmetic variants (uint32_t), what the
 // GetWeaponOptions (0xdaf9e6) and GetWeaponAcvi (0xda40b6) builtins return

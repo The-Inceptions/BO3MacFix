@@ -371,15 +371,32 @@ polls(12)
 restore_result = "took 1, gave 1 guns (0 held already), 0 ammo types, 2 perks (0 had already), 1 failed: no weapon x_zm"
 polls(1)
 check(notices[#notices] == "Not restored: no weapon x_zm", "what failed: " .. tostring(notices[#notices]))
--- a game that never runs the command: logged after a while
+-- a game that never runs the command (paused): sent again twice, then logged
 leave_match()
 polls(1)
 resume_row.run()
 enter_match("zm_theater")
-logs = {}
-polls(40)
+logs, restore_plans, execs = {}, 0, {}
+polls(80)
+check(restore_plans == 2 and execs[#execs] == "give bo3macfix_restore", "sent again once it's late: " .. restore_plans)
+polls(140)
 logged = table.concat(logs, "\n")
+check(restore_plans == 3, "three times in all: " .. restore_plans)
 check(string.find(logged, "wasn't restored", 1, true) ~= nil, "no answer is logged")
+-- one that ran too late for the plan (the game says nothing was set up) is sent again at once
+leave_match()
+polls(1)
+resume_row.run()
+enter_match("zm_theater")
+restore_plans, notices = 0, {}
+polls(13)
+check(restore_plans == 1, "the loadout's command sent")
+restore_result = "nothing set up (or set up too long ago)"
+polls(1)
+check(restore_plans == 2, "sent again: " .. restore_plans)
+restore_result = "took 1, gave 1 guns (0 held already), 0 ammo types, 0 perks (0 had already), 0 failed"
+polls(1)
+check(string.find(notices[#notices - 1] or notices[#notices] or "", "Guns back", 1, true) ~= nil, "then restored")
 
 -- quitting a resumed game before the loadout is back keeps the saved one
 leave_match()

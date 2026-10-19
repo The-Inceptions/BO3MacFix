@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../source/zm_loadout.h"
+#include "fake_vm.h"
 
 static int failures = 0;
 #define CHECK(condition)                                                                                               \
@@ -59,6 +60,16 @@ static void test_names(void) {
     CHECK(!loadout_weapon_name("ar_standard+reflex", 0x7, attachments, count, out, sizeof(out)));
     char small[12];
     CHECK(!loadout_weapon_name("ar_standard_upgraded_zm", 0x7, attachments, count, small, sizeof(small)));
+
+    // the other form of a name, attachments kept
+    CHECK(loadout_other_name("ray_gun_upgraded_zm", out, sizeof(out)) && strcmp(out, "ray_gun_upgraded") == 0);
+    CHECK(loadout_other_name("ray_gun_upgraded", out, sizeof(out)) && strcmp(out, "ray_gun_upgraded_zm") == 0);
+    CHECK(loadout_other_name("ar_standard_upgraded_zm+reflex+extclip", out, sizeof(out)) &&
+          strcmp(out, "ar_standard_upgraded+reflex+extclip") == 0);
+    CHECK(loadout_other_name("ar_standard+reflex", out, sizeof(out)) && strcmp(out, "ar_standard_zm+reflex") == 0);
+    CHECK(loadout_other_name("zm", out, sizeof(out)) && strcmp(out, "zm_zm") == 0);
+    CHECK(!loadout_other_name("ray gun", out, sizeof(out)));
+    CHECK(!loadout_other_name("ray_gun_upgraded", small, sizeof(small)));
 }
 
 // ---- checkpoint.ini
@@ -125,19 +136,11 @@ static void test_text(void) {
     CHECK(!loadout_parse(guns, "ray gun", perks, &back));
 }
 
-// ---- a made-up script VM, laid out as the game's
+// ---- a made-up script VM, laid out as the game's (fake_vm.h), at a made-up address
 
 #define Fake_Base 0x7f1200000000ULL
-#define Glob 0x0
-#define ClassMap 0x100
-#define Strings 0x108
-#define Classes 0x200
-#define Buckets 0x1000
-#define Vars (Buckets + 65536 * 4)
-#define Var_Count 512
-#define String_Table (Vars + Var_Count * 0x40)
-static uint8_t memory[String_Table + 0x4000];
-static uint32_t next_var = 1, next_string = 1;
+static uint8_t memory[FakeVm_Size];
+static fake_vm_t vm;
 
 static bool fake_read(uint64_t address, void *out, size_t size) {
     if (address < Fake_Base || address - Fake_Base + size > sizeof(memory))
@@ -146,142 +149,73 @@ static bool fake_read(uint64_t address, void *out, size_t size) {
     return true;
 }
 
-static void put(uint64_t offset, const void *value, size_t size) {
-    memcpy(memory + offset, value, size);
-}
-static void put64(uint64_t offset, uint64_t value) { put(offset, &value, 8); }
-static void put32(uint64_t offset, uint32_t value) { put(offset, &value, 4); }
-static void put16(uint64_t offset, uint16_t value) { put(offset, &value, 2); }
-static uint32_t get32(uint64_t offset) {
-    uint32_t value;
-    memcpy(&value, memory + offset, 4);
-    return value;
-}
-static uint64_t var_at(uint32_t id) { return Vars + (uint64_t)id * 0x40; }
-
-static uint32_t new_object(uint32_t type) {
-    uint32_t id = next_var++;
-    put32(var_at(id) + 0x8, type);
-    return id;
-}
-
-// an entity or weapon object
-static uint32_t new_entity(uint16_t classnum, uint64_t entref) {
-    uint32_t id = new_object(0x18);
-    put64(var_at(id) + 0x18, entref);
-    put16(var_at(id) + 0x20, classnum);
-    return id;
-}
-
-// a child of parent with key, at the end of its children and the front of its hash bucket
-static uint32_t add_child(uint32_t parent, uint64_t key, uint8_t name_type, uint64_t value, uint32_t type) {
-    uint32_t id = next_var++;
-    uint64_t at = var_at(id);
-    put64(at, value);
-    put32(at + 0x8, type);
-    memory[at + 0x10] = name_type;
-    put64(at + 0x28, key);
-    put32(at + 0x38, parent);
-    uint32_t last = get32(var_at(parent) + 0x4);
-    if (last == 0)
-        put32(var_at(parent), id);
-    else
-        put32(var_at(last) + 0x30, id);
-    put32(at + 0x34, last);
-    put32(var_at(parent) + 0x4, id);
-    uint16_t bucket = (uint16_t)((uint32_t)key + parent * 0x65u);
-    put32(at + 0x3c, get32(Buckets + bucket * 4u));
-    put32(Buckets + bucket * 4u, id);
-    return id;
-}
-
-static uint32_t add_string(const char *text) {
-    uint32_t id = next_string;
-    size_t len = strlen(text);
-    memcpy(memory + String_Table + id * 0x1c + 4, text, len + 1);
-    next_string += (uint32_t)((len + 4 + 0x1c) / 0x1c); // long strings take more than one slot, as in the game
-    return id;
-}
-
-static loadout_vm_t fake_vm(void) {
-    return (loadout_vm_t){ fake_read, Fake_Base + Glob, Fake_Base + ClassMap, Fake_Base + Strings };
+static loadout_vm_t fake_loadout_vm(void) {
+    return (loadout_vm_t){ fake_read, Fake_Base + FakeVm_Glob, Fake_Base + FakeVm_ClassMap,
+                           Fake_Base + FakeVm_Strings };
 }
 
 static uint32_t player, aat_array, perks_array;
 static const uint64_t raygun = 0x0a5, ar = 0x123 | (33ULL << 9) | (8ULL << 15), pistol = 0x04;
 
 static void build_vm(void) {
-    memset(memory, 0, sizeof(memory));
-    next_var = 1;
-    next_string = 1;
-    put64(Glob + 0x0, Fake_Base + Buckets);
-    put64(Glob + 0x80, Fake_Base + Vars);
-    put64(ClassMap, Fake_Base + Classes);
-    put64(Strings, Fake_Base + String_Table);
-    // the entity class's object, with a child per entity number pointing at the entity's object
-    uint32_t entity_class = new_object(0x14);
-    put32(Classes + 0 * 0x20 + 4, entity_class);
-    uint32_t other = new_entity(0, 1);
-    player = new_entity(0, 0);
-    add_child(entity_class, 1, 1, other, 1);
-    add_child(entity_class, 0, 1, player, 1);
-    // self.aat: the ray gun's and the AR's, a removed one ("none"), one kept as a hash, and one keyed by a number
-    aat_array = new_object(0x19);
-    add_child(player, loadout_script_hash("health_bar"), 4, 7, 7);
-    add_child(player, loadout_script_hash("aat"), 4, aat_array, 1);
-    uint32_t w1 = new_entity(5, raygun), w2 = new_entity(5, ar), w3 = new_entity(5, pistol), w4 = new_entity(5, 0x77);
-    add_child(aat_array, w1, 5, add_string("zm_aat_blast_furnace"), 2);
-    add_child(aat_array, w2, 5, loadout_script_hash("zm_aat_turned"), 5);
-    add_child(aat_array, w3, 5, add_string("none"), 2);
-    add_child(aat_array, 3, 1, add_string("zm_aat_fire_works"), 2);
-    add_child(aat_array, w4, 5, add_string("zm aat"), 2); // not a name
-    // self.perks_active, with one twice
-    perks_array = new_object(0x19);
-    add_child(player, loadout_script_hash("perks_active"), 4, perks_array, 1);
-    add_child(perks_array, 0, 1, add_string("specialty_armorvest"), 2);
-    add_child(perks_array, 1, 1, add_string("specialty_quickrevive"), 2);
-    add_child(perks_array, 2, 1, add_string("specialty_armorvest"), 2);
-    add_child(perks_array, 3, 1, 12, 7); // not a string
+    fake_vm_init(&vm, memory, Fake_Base);
+    fake_vm_player(&vm, 1);
+    player = fake_vm_player(&vm, 0);
+    // self.aat: the ray gun's and the AR's, a removed one ("none"), one kept as a hash, one keyed by a number and one
+    // that isn't a name
+    fake_vm_child(&vm, player, loadout_script_hash("health_bar"), 4, 7, 7);
+    aat_array = fake_vm_array_field(&vm, player, "aat");
+    fake_vm_add_aat(&vm, aat_array, raygun, "zm_aat_blast_furnace");
+    fake_vm_child(&vm, aat_array, fake_vm_entity(&vm, 5, ar), 5, loadout_script_hash("zm_aat_turned"), 5);
+    fake_vm_add_aat(&vm, aat_array, pistol, "none");
+    fake_vm_add_string(&vm, aat_array, 3, "zm_aat_fire_works");
+    fake_vm_add_aat(&vm, aat_array, 0x77, "zm aat");
+    // self.perks_active, with one twice and one that isn't a string
+    perks_array = fake_vm_array_field(&vm, player, "perks_active");
+    fake_vm_add_string(&vm, perks_array, 0, "specialty_armorvest");
+    fake_vm_add_string(&vm, perks_array, 1, "specialty_quickrevive");
+    fake_vm_add_string(&vm, perks_array, 2, "specialty_armorvest");
+    fake_vm_child(&vm, perks_array, 3, 1, 12, 7);
 }
 
 static void test_vm(void) {
     build_vm();
-    loadout_vm_t vm = fake_vm();
-    CHECK(loadout_vm_entity(&vm, 0) == player);
-    CHECK(loadout_vm_entity(&vm, 1) != 0 && loadout_vm_entity(&vm, 1) != player);
-    CHECK(loadout_vm_entity(&vm, 2) == 0);
-    CHECK(loadout_vm_entity(&vm, -1) == 0);
-    CHECK(loadout_vm_array_field(&vm, player, "aat") == aat_array);
-    CHECK(loadout_vm_array_field(&vm, player, "health_bar") == 0); // a number, not an array
-    CHECK(loadout_vm_array_field(&vm, player, "nothing") == 0);
+    loadout_vm_t reader = fake_loadout_vm();
+    CHECK(loadout_vm_entity(&reader, 0) == player);
+    CHECK(loadout_vm_entity(&reader, 1) != 0 && loadout_vm_entity(&reader, 1) != player);
+    CHECK(loadout_vm_entity(&reader, 2) == 0);
+    CHECK(loadout_vm_entity(&reader, -1) == 0);
+    CHECK(loadout_vm_array_field(&reader, player, "aat") == aat_array);
+    CHECK(loadout_vm_array_field(&reader, player, "health_bar") == 0); // a number, not an array
+    CHECK(loadout_vm_array_field(&reader, player, "nothing") == 0);
 
     loadout_aat_t aats[8];
-    int count = loadout_vm_read_aats(&vm, player, aats, 8);
+    int count = loadout_vm_read_aats(&reader, player, aats, 8);
     CHECK(count == 2);
     CHECK(count >= 1 && aats[0].weapon == raygun && strcmp(aats[0].aat, "zm_aat_blast_furnace") == 0);
     CHECK(count >= 2 && aats[1].weapon == ar && strcmp(aats[1].aat, "zm_aat_turned") == 0);
-    CHECK(loadout_vm_read_aats(&vm, player, aats, 1) == 1); // at most max
+    CHECK(loadout_vm_read_aats(&reader, player, aats, 1) == 1); // at most max
 
     char perks[8][Loadout_Short_Size];
-    count = loadout_vm_read_strings(&vm, perks_array, perks, 8);
+    count = loadout_vm_read_strings(&reader, perks_array, perks, 8);
     CHECK(count == 2);
     CHECK(count == 2 && strcmp(perks[0], "specialty_armorvest") == 0 && strcmp(perks[1], "specialty_quickrevive") == 0);
-    CHECK(loadout_vm_read_strings(&vm, aat_array + 1000, perks, 8) == -1); // not an array
+    CHECK(loadout_vm_read_strings(&reader, aat_array + 1000, perks, 8) == -1); // not an array
 
     // per-client classes (client scripts) aren't for the server's players
-    memory[Classes + 0x18] = 1;
-    CHECK(loadout_vm_entity(&vm, 0) == 0);
-    memory[Classes + 0x18] = 0;
+    memory[FakeVm_Classes + 0x18] = 1;
+    CHECK(loadout_vm_entity(&reader, 0) == 0);
+    memory[FakeVm_Classes + 0x18] = 0;
     // a child whose parent isn't the array (freed and reused meanwhile): the walk stops there
-    uint32_t first = get32(var_at(perks_array));
-    put32(var_at(first) + 0x38, 9999);
-    CHECK(loadout_vm_read_strings(&vm, perks_array, perks, 8) == -1);
+    uint32_t first = fake_vm_get32(&vm, fake_vm_var(perks_array));
+    fake_vm_put32(&vm, fake_vm_var(first) + 0x38, 9999);
+    CHECK(loadout_vm_read_strings(&reader, perks_array, perks, 8) == -1);
     // memory that can't be read: nothing, no crash
-    loadout_vm_t broken = vm;
+    loadout_vm_t broken = reader;
     broken.var_glob = 0x10;
     CHECK(loadout_vm_entity(&broken, 0) == 0 && loadout_vm_read_aats(&broken, player, aats, 8) == -1);
-    put64(Glob + 0x80, 0xdead0000);
-    CHECK(loadout_vm_entity(&vm, 0) == 0);
+    fake_vm_put64(&vm, FakeVm_Glob + 0x80, 0xdead0000);
+    CHECK(loadout_vm_entity(&reader, 0) == 0);
 }
 
 // ---- restoring, against made-up game calls

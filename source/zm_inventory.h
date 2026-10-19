@@ -37,6 +37,9 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size);
 
 // sets up plan for the next "give bo3macfix_restore", for 30 seconds; returns that command
 const char *zm_inventory_set_restore(const loadout_t *plan);
+// for testing: the same with plan's guns given the Pack-a-Punch machine's way (zm_weapons::give_build_kit_weapon, the
+// game's camo and build kit), then their ammo types and the perks; the guns' options are left out
+const char *zm_inventory_set_pap_test(const loadout_t *plan);
 
 // once the restore has run: what it did, as one line (loadout_result_text), into out; false until then
 bool zm_inventory_restore_result(char *out, size_t out_size);

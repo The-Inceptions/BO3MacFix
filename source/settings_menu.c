@@ -153,16 +153,18 @@ static int lua_checkpoint_restore_result(lua_State *s) {
     return 1;
 }
 
-// CheckpointTestLoadout(guns, perks): for the test switches, a Guns and a PerkList line set up the same way, the first
-// gun in hand; the give command, nil if they're malformed
+// CheckpointTestLoadout(guns, perks, pap): for the test switches, a Guns and a PerkList line set up the same way, the
+// first gun in hand, or given the Pack-a-Punch machine's way if pap is true; the give command, nil if malformed
 static int lua_checkpoint_test_loadout(lua_State *s) {
     static loadout_t loadout;
+    HksObject *pap = HKS_BASE(s) + 2;
+    bool pap_test = pap < HKS_TOP(s) && (pap->t & 0xF) == HKS_TBOOLEAN && pap->v.boolean;
     if (!loadout_parse(hks_check_string(s, 1), NULL, hks_check_string(s, 2), &loadout)) {
         hks_push_nil(s);
         return 1;
     }
     loadout.held = loadout.gun_count > 0 ? 0 : -1;
-    hks_push_string(s, zm_inventory_set_restore(&loadout));
+    hks_push_string(s, pap_test ? zm_inventory_set_pap_test(&loadout) : zm_inventory_set_restore(&loadout));
     return 1;
 }
 

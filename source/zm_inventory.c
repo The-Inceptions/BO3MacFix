@@ -38,16 +38,8 @@ static uint64_t entities(void) {
     return base != 0 && safe_read(base + ADDR_g_entities_Ptr, &address, sizeof(address)) ? address : 0;
 }
 
-// the weapon's name (like ray_gun_upgraded) and inventory type, from its WeaponVariantDef
-static bool weapon_info(uint64_t weapon, char *name, size_t name_size, int *type) {
-    uint32_t index = (uint32_t)(weapon & Weapon_Index_Mask);
-    int32_t last = 0;
-    uint64_t variant = 0, text = 0, def = 0;
-    if (index == 0 || !safe_read(base + ADDR_bg_lastWeaponIndex, &last, sizeof(last)) || index > (uint32_t)last ||
-        !safe_read(base + ADDR_bg_weaponVariantDefs + index * sizeof(uint64_t), &variant, sizeof(variant)) ||
-        !safe_read(variant, &text, sizeof(text)) || !safe_read(variant + WeaponVariantDef_WeaponDef, &def, sizeof(def)) ||
-        !safe_read(def + WeaponDef_InventoryType, type, sizeof(*type)))
-        return false;
+// a name at text, if it's a weapon name (letters, digits and '_')
+static bool read_name(uint64_t text, char *name, size_t name_size) {
     // a byte at a time, so the end of the name's page doesn't matter
     size_t len = 0;
     for (; len + 1 < name_size; len++) {
@@ -62,6 +54,30 @@ static bool weapon_info(uint64_t weapon, char *name, size_t name_size, int *type
     }
     name[len] = '\0';
     return len > 0 && len + 1 < name_size;
+}
+
+// the name the server looks the weapon up by (G_GetWeaponForName, the give command, GetWeapon): its WeaponVariantDef's
+// second name, which zombies' weapons have without "_zm" (ray_gun_upgraded for ray_gun_upgraded_zm)
+static bool weapon_script_name(uint64_t weapon, char *name, size_t name_size) {
+    uint32_t index = (uint32_t)(weapon & Weapon_Index_Mask);
+    int32_t last = 0;
+    uint64_t variant = 0, text = 0;
+    return index != 0 && safe_read(base + ADDR_bg_lastWeaponIndex, &last, sizeof(last)) && index <= (uint32_t)last &&
+           safe_read(base + ADDR_bg_weaponVariantDefs + index * sizeof(uint64_t), &variant, sizeof(variant)) &&
+           safe_read(variant + WeaponVariantDef_ScriptName, &text, sizeof(text)) && read_name(text, name, name_size);
+}
+
+// the weapon's name (like ray_gun_upgraded) and inventory type, from its WeaponVariantDef
+static bool weapon_info(uint64_t weapon, char *name, size_t name_size, int *type) {
+    uint32_t index = (uint32_t)(weapon & Weapon_Index_Mask);
+    int32_t last = 0;
+    uint64_t variant = 0, text = 0, def = 0;
+    if (index == 0 || !safe_read(base + ADDR_bg_lastWeaponIndex, &last, sizeof(last)) || index > (uint32_t)last ||
+        !safe_read(base + ADDR_bg_weaponVariantDefs + index * sizeof(uint64_t), &variant, sizeof(variant)) ||
+        !safe_read(variant, &text, sizeof(text)) || !safe_read(variant + WeaponVariantDef_WeaponDef, &def, sizeof(def)) ||
+        !safe_read(def + WeaponDef_InventoryType, type, sizeof(*type)))
+        return false;
+    return read_name(text, name, name_size);
 }
 
 bool zm_inventory_read(char *out, size_t out_size) {
@@ -217,6 +233,10 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
         if (!held_weapon(client, i, &weapon, &options, &acvi) || (weapon & Weapon_Index_Mask) == 0 ||
             !weapon_info(weapon, variant, sizeof(variant), &type) || type != 0)
             continue;
+        // by the name the server looks it up by, else the variant's own
+        char script_name[72];
+        if (weapon_script_name(weapon, script_name, sizeof(script_name)))
+            snprintf(variant, sizeof(variant), "%s", script_name);
         loadout_gun_t *gun = &out->guns[out->gun_count];
         if (!loadout_weapon_name(variant, weapon, names, Attachment_Count, gun->name, sizeof(gun->name)))
             continue;
@@ -247,8 +267,12 @@ typedef struct {
     int entnum;
 } restore_context_t;
 
+// the weapon by the name the server looks it up by, or else by its other form (with or without "_zm")
 static uint64_t op_weapon_for_name(void *context, const char *name) {
     uint64_t weapon = BG_GetWeaponForName(name);
+    char other[Loadout_Name_Size];
+    if ((weapon & Weapon_Index_Mask) == 0 && loadout_other_name(name, other, sizeof(other)))
+        weapon = BG_GetWeaponForName(other);
     return (weapon & Weapon_Index_Mask) != 0 ? weapon : 0;
 }
 
@@ -345,18 +369,72 @@ static void op_switch_to(void *context, uint64_t weapon) {
 
 static os_unfair_lock restore_lock = OS_UNFAIR_LOCK_INIT;
 static loadout_t restore_plan;
+static bool restore_pap_test; // the plan is the test switch's, given the Pack-a-Punch machine's way
 static long long restore_until; // when the plan set up stops waiting for its command, 0 for none
 static char restore_result[512];
 static bool restore_finished;
 
-const char *zm_inventory_set_restore(const loadout_t *plan) {
+static const char *set_restore(const loadout_t *plan, bool pap_test) {
     os_unfair_lock_lock(&restore_lock);
     restore_plan = *plan;
+    restore_pap_test = pap_test;
     restore_until = now_ms() + Restore_Ms;
     restore_finished = false;
     restore_result[0] = '\0';
     os_unfair_lock_unlock(&restore_lock);
     return "give " Restore_Command;
+}
+
+const char *zm_inventory_set_restore(const loadout_t *plan) {
+    return set_restore(plan, false);
+}
+
+const char *zm_inventory_set_pap_test(const loadout_t *plan) {
+    return set_restore(plan, true);
+}
+
+// the held weapon with weapon's index, whatever its attachments, 0 for none
+static uint64_t held_like(uint64_t client, uint64_t weapon) {
+    for (int i = 0; i < gclient_HeldWeapon_Count; i++) {
+        uint64_t held = 0;
+        if (held_weapon(client, i, &held, NULL, NULL) && (held & Weapon_Index_Mask) == (weapon & Weapon_Index_Mask))
+            return held;
+    }
+    return 0;
+}
+
+// for the test switch: each gun given as the Pack-a-Punch machine gives one when there's room for it
+// (zm_weapons::give_build_kit_weapon, which picks the camo and the build kit's attachments, then GiveStartAmmo), then
+// aat::acquire(weapon, aat) and the perks, so a test game has guns the game itself upgraded
+static void run_pap_test(restore_context_t *c, const loadout_t *plan, char *out, size_t out_size) {
+    script_handle_t give;
+    bool have = script_function(&give, "scripts/zm/_zm_weapons", "zm_weapons", "give_build_kit_weapon");
+    int client_num = 0, given = 0, aats = 0, perks = 0;
+    safe_read(base + ADDR_scrClientNum, &client_num, sizeof(client_num));
+    uint64_t first = 0;
+    for (int i = 0; have && i < plan->gun_count; i++) {
+        uint64_t weapon = op_weapon_for_name(c, plan->guns[i].name);
+        if (weapon == 0)
+            continue;
+        Scr_AddWeapon(Script_Server, weapon, client_num);
+        Scr_FreeThread(Script_Server, Scr_ExecEntThread(c->ent, 1, give));
+        uint64_t held = held_like((uint64_t)c->client, weapon);
+        if (held == 0)
+            continue;
+        G_GiveStartAmmo(c->ent, held, 0);
+        given++;
+        if (first == 0)
+            first = held;
+        if (plan->guns[i].aat[0] != '\0' && op_acquire_aat(c, held, plan->guns[i].aat))
+            aats++;
+    }
+    for (int i = 0; i < plan->perk_count; i++)
+        if (!op_has_perk(c, plan->perks[i]) && op_give_perk(c, plan->perks[i]))
+            perks++;
+    if (first != 0)
+        op_switch_to(c, first);
+    snprintf(out, out_size, "Pack-a-Punch test: gave %d of %d guns%s, %d ammo types, %d perks", given, plan->gun_count,
+             have ? "" : " (no zm_weapons::give_build_kit_weapon)", aats, perks);
 }
 
 bool zm_inventory_restore_result(char *out, size_t out_size) {
@@ -391,7 +469,7 @@ static bool restore_command(uint64_t return_address) {
 // the game itself runs script callbacks
 static void run_restore(void *ent) {
     os_unfair_lock_lock(&restore_lock);
-    bool pending = restore_until != 0 && now_ms() < restore_until;
+    bool pending = restore_until != 0 && now_ms() < restore_until, pap_test = restore_pap_test;
     static loadout_t plan;
     plan = restore_plan;
     restore_until = 0;
@@ -406,11 +484,15 @@ static void run_restore(void *ent) {
         !safe_read((uint64_t)ent + gentity_Health, &health, sizeof(health)) || health <= 0)
         return finish_restore("not for the local player, or it isn't alive");
     restore_context_t context = { ent, (uint8_t *)client, 0 };
+    char text[512];
+    if (pap_test) {
+        run_pap_test(&context, &plan, text, sizeof(text));
+        return finish_restore(text);
+    }
     loadout_ops_t ops = { &context,     op_weapon_for_name, op_primaries, op_take,      op_give,
                           op_acquire_aat, op_has_perk,      op_give_perk, op_switch_to };
     loadout_result_t result;
     loadout_restore(&plan, &ops, &result);
-    char text[512];
     loadout_result_text(&result, text, sizeof(text));
     finish_restore(text);
 }

@@ -72,6 +72,22 @@ bool loadout_weapon_name(const char *variant, uint64_t weapon, const char *const
     return ok;
 }
 
+bool loadout_other_name(const char *name, char *out, size_t out_size) {
+    if (out_size == 0 || !loadout_valid_name(name))
+        return false;
+    const char *plus = strchr(name, '+');
+    size_t root = plus != NULL ? (size_t)(plus - name) : strlen(name);
+    const char *rest = name + root;
+    bool zm = root > 3 && strncmp(name + root - 3, "_zm", 3) == 0;
+    int len = zm ? snprintf(out, out_size, "%.*s%s", (int)(root - 3), name, rest)
+                 : snprintf(out, out_size, "%.*s_zm%s", (int)root, name, rest);
+    if (len < 0 || (size_t)len >= out_size || !loadout_valid_name(out)) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 // ---- checkpoint.ini
 
 static bool append(char *out, size_t out_size, size_t *used, const char *format, ...) __attribute__((format(printf, 4, 5)));

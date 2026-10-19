@@ -33,6 +33,8 @@ bo3macfix.CheckpointRestoreResult, bo3macfix.CheckpointTestLoadout = restore_res
 local log = bo3macfix.Log or function() end
 
 local POLL_MS = 500
+-- how long the loadout's give command is waited for: zm_inventory.c keeps it set up for 30 s
+local RESTORE_WAIT_POLLS = 62
 -- the options a resume sets (checkpoint.c), whose values in the game ClearCheckpoint compares
 local RESUME_DVARS = { "tfoption_starting_round", "tfoption_starting_points", "tfoption_perkaholic",
     "tfoption_spawn_with_quick_res" }
@@ -572,9 +574,21 @@ local function poll(controller)
         for _, name in ipairs(primaries or {}) do table.insert(names, weapon_text(name)) end
         notice("Guns back: " .. table.concat(names, ", "))
     end
-    -- the loadout's restore, which tells what it did once the game has run it
+    -- the loadout's restore, which tells what it did once the game has run it. A give command the game holds back
+    -- longer than zm_inventory.c waits for it (the pause menu open) is sent again, twice at most.
     if match.restoring_at ~= nil then
         local result = call(bo3macfix.CheckpointRestoreResult)
+        local expired = type(result) == "string" and string.find(result, "^nothing set up") ~= nil
+        if (expired or match.polls > match.restoring_at + RESTORE_WAIT_POLLS) and loadout_pending == "resume" and
+            (match.restore_tries or 1) < 3 then
+            local command = call(bo3macfix.CheckpointRestoreLoadout)
+            if type(command) == "string" and command ~= "" then
+                match.restore_tries = (match.restore_tries or 1) + 1
+                log("checkpoint: the saved loadout's give command didn't run in time (paused?), sending it again")
+                run_commands(controller, command)
+                match.restoring_at, result = match.polls, nil
+            end
+        end
         if type(result) == "string" then
             match.restoring_at, match.restored_at, loadout_pending = nil, match.polls, nil
             local _, _, raw = weapons_now()
@@ -587,7 +601,7 @@ local function poll(controller)
             if #perks > 0 then notice("Perks back: " .. #perks) end
             local failed = string.match(result, "failed: (.*)$")
             if failed ~= nil then notice("Not restored: " .. failed) end
-        elseif match.polls > match.restoring_at + 20 then
+        elseif match.polls > match.restoring_at + RESTORE_WAIT_POLLS then
             match.restoring_at, loadout_pending = nil, nil
             log("checkpoint: the saved loadout wasn't restored: the game didn't run its give command")
         end
@@ -598,9 +612,12 @@ local function poll(controller)
     local seconds = match.polls * POLL_MS / 1000
     if (give_test ~= nil or perks_test ~= nil) and not match.gave_test and seconds >= 12 and
         (string.find(give_test or ":", ":", 1, true) ~= nil) then
-        -- a Guns line and a PerkList line: given the way a resume gives the full loadout
+        -- a Guns line and a PerkList line: given the way a resume gives the full loadout, or after "pap:" the way the
+        -- Pack-a-Punch machine gives a gun (the game's camo and build kit, then the ammo type)
         match.gave_test = true
-        local command = call(bo3macfix.CheckpointTestLoadout, give_test or "", perks_test or "")
+        local pap_guns = string.match(give_test or "", "^pap:(.*)$")
+        local command = call(bo3macfix.CheckpointTestLoadout, pap_guns or give_test or "", perks_test or "",
+            pap_guns ~= nil)
         log("checkpoint test: loadout " .. tostring(give_test) .. "; perks " .. tostring(perks_test) .. ": " ..
             tostring(command))
         if type(command) == "string" and command ~= "" then
