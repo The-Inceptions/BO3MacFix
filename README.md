@@ -54,7 +54,7 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `Notices` | 1 | Shows a short notice at the top of the screen when a controller connects or disconnects (with its battery level), when its battery gets low (20, 10 and 5 %), and when the game moves to another display. The controller ones need `ControllerBridge`. |
 | `FrameStats` | 0 | Logs the frame rate, 1% low and worst frame time every N seconds. |
 | `BatteryFPS` | 0 | Limits the frame rate to N (30 to 240) only while the Mac runs on battery, to save power. |
-| `PauseMenuFPS` | 30 | Limits the frame rate to N (30 to 240) while the pause menu is open in a match, to save power, and lifts the limit as soon as it closes. 0 turns it off. With `FramePacingFPS` or `BatteryFPS` on too, the lowest limit wins. |
+| `PauseMenuFPS` | 30 | Limits the frame rate to N (30 to 240) while the pause menu is open in a match, to save power, and lifts the limit as soon as it closes. 0 turns it off. The settings page offers Off, 30, 40 and 60, rates that divide a 120 Hz display's refresh evenly (45 came out at 40 there). With `FramePacingFPS` or `BatteryFPS` on too, the lowest limit wins. |
 | `MetalHUD` | 0 | Shows macOS's Metal performance HUD (FPS and GPU time). |
 | `GpuDiagnostics` | 0 | Logs the window, display mode and Metal layer whenever they change. |
 | `NoCodePatches` | 0 | For testing only: leaves the game's code exactly as shipped, without any of the fixes. Solo play only. |
