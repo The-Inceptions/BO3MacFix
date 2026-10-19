@@ -311,6 +311,22 @@ int display_policy_launch(const DisplayStore *store, const DisplayInfo *displays
     return out->width > 0 || out->refresh > 0 || out->max_fps >= 0;
 }
 
+#define Menu_Bar_Points 24  // without a camera housing; with one, the menu bar is as tall as the housing
+#define Title_Bar_Points 28 // a titled window's
+
+int display_policy_fit_window(const DisplayInfo *to, int *width, int *height) {
+    int room_w = to->w, room_h = to->h - (to->notch > Menu_Bar_Points ? to->notch : Menu_Bar_Points) - Title_Bar_Points;
+    if (*width <= 0 || *height <= 0 || room_w <= 0 || room_h <= 0 || (*width <= room_w && *height <= room_h))
+        return 0;
+    double scale = fmin((double)room_w / *width, (double)room_h / *height);
+    int w = (int)(*width * scale) & ~1, h = (int)(*height * scale) & ~1;
+    if (w <= 0 || h <= 0)
+        return 0;
+    *width = w;
+    *height = h;
+    return 1;
+}
+
 int display_policy_parse_game(const char *text, GameValues *out) {
     memset(out, 0, sizeof(*out));
     const char *game = strstr(text, "game="), *refresh = strstr(text, "refresh="), *max_fps = strstr(text, "maxfps=");

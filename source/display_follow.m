@@ -814,6 +814,26 @@ int display_follow_launch_choice(DisplayDecision *out) {
     return 1;
 }
 
+// a window keeps its size, unless it doesn't fit the display it starts on: then the engine would squeeze its picture
+// into what fits (1280x800 into 1080x800 on a portrait monitor), so the window gets the biggest size of its shape
+int display_follow_launch_window(int *width, int *height) {
+    DisplayInfo d;
+    pthread_mutex_lock(&lock);
+    int i = display_policy_find(displays, display_count, game_id);
+    int on = started && follow && i >= 0;
+    if (on)
+        d = displays[i];
+    pthread_mutex_unlock(&lock);
+    int old_width = *width, old_height = *height;
+    if (!on || !display_policy_fit_window(&d, width, height))
+        return 0;
+    char text[160];
+    describe(&d, text, sizeof(text));
+    printf("display: a %dx%d window doesn't fit %s (%dx%d points), starting at %dx%d\n", old_width, old_height, text, d.w,
+           d.h, *width, *height);
+    return 1;
+}
+
 void display_follow_note_choice(int width, int height, int refresh) {
     if (!started || !use_memory || width <= 0 || height <= 0)
         return;

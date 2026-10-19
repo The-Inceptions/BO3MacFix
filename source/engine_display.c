@@ -491,6 +491,9 @@ install_hook_name(R_SetWndParms, void, void *parms) {
         } else {
             printf("engine: launch: keeping config.ini's video settings (Monitor %d)\n", Dvar_GetInt(dvars.monitor));
         }
+        int width = 0, height = 0;
+        if (Dvar_GetInt(dvars.fullscreen) == 0 && current_mode(&width, &height) && display_follow_launch_window(&width, &height))
+            set_mode(width, height);
     }
     orig_R_SetWndParms(parms);
 }

@@ -34,6 +34,8 @@ int display_follow_current(DisplayInfo *out);            // the game's display; 
 uint32_t display_follow_launch_target(void);             // main thread, ASL_BuildModeTable hook: the display to start on, 0 = keep SDL's order
 int display_follow_launch_choice(DisplayDecision *out);  // engine thread, R_SetWndParms hook at launch: 1 = apply out, 0 = keep config.ini's values
                                                          // (out comes in holding them: width/height = r_mode, refresh = r_refreshRate, max_fps = com_maxfps)
+int display_follow_launch_window(int *width, int *height); // engine thread, R_SetWndParms hook at launch, windowed: 1 = a
+                                                         // smaller size of its shape in place of r_mode's, which doesn't fit
 void display_follow_note_choice(int width, int height, int refresh); // engine thread: the user changed resolution/refresh in the game's options
 void display_follow_expect_changes(double seconds);      // any thread: our own moves and restarts are about to cause display events
 int display_follow_owns(const char *name);               // for settings.c's apply_live

@@ -120,6 +120,11 @@ void display_policy_decide(const RememberedDisplay *from, const GameValues *now,
 int display_policy_launch(const DisplayStore *store, const DisplayInfo *displays, int count, const DisplayInfo *to,
                           const GameValues *now, int use_memory, int match_refresh, DisplayDecision *out);
 
+// at launch, windowed: a width x height point window that doesn't fit `to` below its menu bar with its title bar (the
+// engine squeezes 1280x800 into the 1080 points of a portrait monitor) becomes the biggest even size of its shape that
+// does. Returns 1 if it changed *width and *height.
+int display_policy_fit_window(const DisplayInfo *to, int *width, int *height);
+
 // reads engine_display_describe's "game=WxH refresh=N maxfps=N", returns 1 if the size was there
 int display_policy_parse_game(const char *text, GameValues *out);
 
