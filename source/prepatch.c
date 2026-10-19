@@ -53,6 +53,8 @@ static const hook_def_t hook_defs[] = {
     { ADDR_ASL_BuildModeTable, Push_R15 },
     { ADDR_ASL_SleepEx, Push_R15 },
     { ADDR_ASL_ToNativePath, Push_R15 },
+    { ADDR_ASL_Window_MetalClientRect, Push_R15 },
+    { ADDR_ASL_Window_UpdateLetterbox, Push_R14 },
     { ADDR_ASL_XInputGetState, Push_R14 },
     { ADDR_ASL_XInputSetState, Push_R14 },
     { ADDR_CL_FirstSnapshot, Push_R15 },
@@ -392,6 +394,13 @@ bool prepatch_set_value(uint32_t site, uint32_t value) {
             return true;
         }
     }
+    return false;
+}
+
+bool prepatch_has_hook(uint32_t offset) {
+    for (uint32_t i = 0; prepatch_active() && i < header->hook_count; i++)
+        if (hooks[i].function == offset)
+            return true;
     return false;
 }
 

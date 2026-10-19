@@ -22,6 +22,10 @@ bool prepatch_active(void);
 // copy has changed some of it already. Returns address itself when nothing there was changed.
 const void *prepatch_original_code(const void *address, size_t size);
 
+// whether the pre-patched copy has a slot for a hook on the function at offset, so hooking it while the game runs only
+// stores a pointer. False when not running from the copy.
+bool prepatch_has_hook(uint32_t offset);
+
 // points the call through objc_msgSend's pointer at offset at function, which the pre-patched copy does through a
 // slot. Returns false when not running from the copy, or it has no such call.
 bool prepatch_redirect_call(uint32_t offset, void *function);

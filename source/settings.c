@@ -7,7 +7,7 @@
 //   BO3MacFix.RestartPending() -> true while a setting saved this session differs from what the game started with
 //                                  and couldn't be applied without a restart
 // Some settings apply right away (live = true): the frame rate ones, the display ones, the controller ones,
-// RawMouseScale, AAEOnline and ExitFix, plus JobIdleFix and RenderIdleFix from the pre-patched executable. The rest
+// RawMouseScale, AAEOnline and ExitFix, plus JobIdleFix, RenderIdleFix and AvoidNotch from the pre-patched executable. The rest
 // are read once at startup, so changing them asks for a restart.
 #include <limits.h>
 #include <spawn.h>
@@ -20,6 +20,7 @@
 #include "display_follow.h"
 #include "gc_bridge.h"
 #include "gpu_tweaks.h"
+#include "notch.h"
 #include "notices.h"
 #include "offsets.h"
 #include "prepatch.h"
@@ -42,6 +43,7 @@ enum {
     Live_Present,   // needs Aspyr's present hooked: already, or late from the pre-patched executable
     Live_Prepatch,  // a value slot of the pre-patched executable
     Live_Prompts,   // needs the prompts hook: already, or late from the pre-patched executable
+    Live_Notch,     // needs AvoidNotch's hooks: already, or late from the pre-patched executable
 };
 
 typedef struct {
@@ -75,6 +77,7 @@ static const setting_t settings[] = {
     { "DisplayMemory", "Remember each display", "Remembers the resolution and refresh rate the game used on each display.", "Display", Toggle_Live(1, Live_Always) },
     { "MatchRefreshRate", "Match refresh rate", "Uses each display's own refresh rate, like 240 Hz on a gaming monitor and 120 Hz on the MacBook.", "Display", Toggle_Live(1, Live_Always) },
     { "ConfineCursor", "Keep cursor on game display", "Stops stray clicks landing on another display in fullscreen menus; push past the edge to leave.", "Display", Toggle_Live(0, Live_Always) },
+    { "AvoidNotch", "Keep picture below notch", "In fullscreen on the MacBook's screen, shows the whole picture below the camera notch; the strip beside it goes black.", "Display", Toggle_Live(0, Live_Notch) },
     { "ControllerMappings", "PlayStation controllers over USB", "Lets DualShock 4, DualSense and DualSense Edge controllers work over USB.", "Controller", Toggle(1) },
     { "ControllerBridge", "macOS controller support", "Reads PlayStation controllers through macOS: Bluetooth and USB, rumble and lightbar. Turn Steam Input off.", "Controller", Toggle(0) },
     { "ButtonPrompts", "Button prompts", "Which button icons the game shows.", "Controller", false, 3, { 0, 1, 2 }, { "Automatic", "Xbox", "PlayStation" }, 0, Live_Prompts },
@@ -112,6 +115,8 @@ static bool live_now(const setting_t *t) {
         return prepatch_active();
     case Live_Prompts:
         return controllers_prompts_live();
+    case Live_Notch:
+        return notch_live_possible();
     default:
         return false;
     }
@@ -136,6 +141,8 @@ static bool apply_live(const setting_t *t, int value) {
         return cpu_tuning_set_idle_fix(true, value);
     if (strcmp(n, "ButtonPrompts") == 0)
         return controllers_set_button_prompts(value);
+    if (strcmp(n, "AvoidNotch") == 0)
+        return notch_set_enabled(value);
     if (strcmp(n, "GyroAim") == 0)
         gc_bridge_set_gyro_mode(value);
     else if (strcmp(n, "GyroSensitivity") == 0)

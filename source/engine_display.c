@@ -19,6 +19,7 @@
 #include "dobby.h"
 #include "offsets.h"
 #include "engine_display.h"
+#include "notch.h"
 #include "sdl_displays.h"
 
 extern uint64_t game_base_address;
@@ -350,8 +351,9 @@ static void *game_asl_window(void) {
 
 // ASL's Window_SetMode returns early when the fullscreen state, the size and the display index are all unchanged, so a
 // move that keeps the resolution doesn't redo what it ends with (0x1000edc58): the letterbox (which the menu mouse mapping
-// uses) and the client rect (and the forced drawable). Do those two, like it does, with ASL's window mutex held.
-static void update_asl_window(void) {
+// uses) and the client rect (and the forced drawable). Do those two, like it does, with ASL's window mutex held. AvoidNotch
+// (notch.m) has them done again when the camera housing it keeps the picture below changes. False if there's no window.
+static bool update_asl_window(void) {
     pthread_mutex_t *mutex = (pthread_mutex_t *)(game_base_address + ADDR_ASL_WindowMutex); // a std::recursive_mutex
     pthread_mutex_lock(mutex);
     void *window = game_asl_window();
@@ -360,8 +362,7 @@ static void update_asl_window(void) {
         ASL_Window_UpdateClientRect(window);
     }
     pthread_mutex_unlock(mutex);
-    if (window == NULL)
-        printf("engine: no ASL window to update for the new display\n");
+    return window != NULL;
 }
 
 #pragma mark - hooks
@@ -426,8 +427,8 @@ static bool apply_request(const DisplayDecision *d) {
     if (d->moved && Dvar_GetInt(dvars.fullscreen) != 0 && *(void **)(game_base_address + ADDR_R_SwapChain) != NULL) {
         printf("engine: entering fullscreen again on the new display\n");
         R_EnterFullscreen();
-        if (!mode_changed)
-            update_asl_window();
+        if (!mode_changed && !update_asl_window())
+            printf("engine: no ASL window to update for the new display\n");
     }
 
     R_CheckVideoDvarsModified();
@@ -449,6 +450,8 @@ install_hook_name(R_CheckVidRestart, void, void) {
     DisplayDecision decision;
     int width, height;
     static bool told_waiting;
+    if (notch_take_refresh())
+        update_asl_window();
     bool pending = atomic_load_explicit(&request_generation, memory_order_acquire) != request_taken;
     bool waiting = pending && find_dvars() && wait_for_fullscreen();
     if (waiting && !told_waiting)

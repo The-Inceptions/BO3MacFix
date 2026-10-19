@@ -122,6 +122,11 @@
 #define ADDR_CritSec_ScopedUnlock 0xd7da30 // func - (lock *) - name is a guess
 #define ADDR_ASL_Window_UpdateLetterbox 0xee14c // func - void (Window *), Window_SetMode calls it last, with ASL's window mutex held
 #define ADDR_ASL_Window_UpdateClientRect 0xee352 // func - void (Window *), takes ASL's window mutex itself
+#define ADDR_ASL_Window_MetalClientRect 0xee6c6 // func - void (Window *), UpdateClientRect's Metal half (through the backend, mutex held): forces the drawable, centres the blit rect
+#define ADDR_ASL_Metal_GetView 0xf2ccb // func - ASL_MetalView *(SDL_Window *), its SDL window data "M"
+#define ADDR_ASL_Metal_GetDrawableSize 0xf2ce5 // func - void (view, int *w, int *h), the layer's drawableSize
+#define ADDR_ASL_Metal_ForceDrawableSize 0xf2d50 // func - void (view, w, h), [view forceDrawableSizeWidth:w height:h], 0 x 0 unforces
+#define ADDR_SDL_GetWindowSize 0x1959c0 // func - void (SDL_Window *, int *w, int *h), in points
 #define ADDR_ASL_WindowList 0x104c9bf8 // std::vector<Window *> { begin, end, capacity } - ASL's windows
 #define ADDR_R_MonitorTable 0x113c0df8 // { uint32_t count; uint32_t modeCounts[8]; DXGI_MODE_DESC *modes[8]; }, modes from new[]
 #define ADDR_R_MonitorSize 0x113c0da4 // { bool valid; int width, height; } - the monitor size fullscreen takes its aspect ratio from
