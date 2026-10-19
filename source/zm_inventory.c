@@ -100,17 +100,29 @@ void zm_inventory_allow_cheats(int count) {
     atomic_store(&allowed, count);
 }
 
+// whether CheatsOk(ent), returning to return_address, is for one of BO3MacFix's own commands, and takes one of those
+// zm_inventory_allow_cheats let through if so: the give or take command asks (not noclip, god or the other cheat
+// commands, which a player could type meanwhile), for the local player, alive, in time
+static bool let_through(void *ent, uint64_t return_address) {
+    if ((return_address != base + ADDR_CheatsOk_From_Give && return_address != base + ADDR_CheatsOk_From_Take) ||
+        ent == NULL || (uint64_t)ent != entities() || now_ms() >= atomic_load(&allowed_until))
+        return false;
+    int health = 0;
+    if (!safe_read((uint64_t)ent + gentity_Health, &health, sizeof(health)) || health <= 0)
+        return false;
+    int left = atomic_load(&allowed);
+    while (left > 0 && !atomic_compare_exchange_weak(&allowed, &left, left - 1)) {
+    }
+    return left > 0;
+}
+
 // CheatsOk(ent): whether ent may use cheat commands (sv_cheats is on and it's alive). BO3MacFix's own give and take
 // commands for the local player get through while zm_inventory_allow_cheats says so; everything else is the game's.
+// The hook is reached by a jump (the pre-patched copy's stub or Dobby's), so the return address is the game's caller.
 install_hook_name(CheatsOk, int, void *ent) {
-    if (atomic_load(&allowed) > 0 && now_ms() < atomic_load(&allowed_until) && ent != NULL &&
-        (uint64_t)ent == entities()) {
-        int health = 0;
-        if (safe_read((uint64_t)ent + gentity_Health, &health, sizeof(health)) && health > 0) {
-            atomic_fetch_sub(&allowed, 1);
-            printf("BO3MacFix: zm inventory: let BO3MacFix's command past the cheat check\n");
-            return 1;
-        }
+    if (let_through(ent, (uint64_t)__builtin_return_address(0))) {
+        printf("BO3MacFix: zm inventory: let BO3MacFix's command past the cheat check\n");
+        return 1;
     }
     return orig_CheatsOk(ent);
 }

@@ -35,6 +35,7 @@ LUI = { roots = { UIRootFull = root }, UITimer = { newElementTimer = function(ms
 
 -- ---- a made-up checkpoint.c and zm_inventory.c
 local store, state, weapons, notices, saves, plans, allowed, cleared_with = {}, 0, nil, {}, {}, {}, nil, nil
+local clear_fails = false -- checkpoint.ini or AAE's mutations file can't be read or written
 local SAVED = { "Map", "Round", "Points", "Perks", "Weapons", "Equipment", "Held", "Character", "Stats" }
 BO3MacFix = {
     Log = function(text) table.insert(logs, text) end,
@@ -56,7 +57,7 @@ BO3MacFix = {
         return "modvar tfoption_starting_round " .. store.Round .. "\nmodvar tfoption_starting_points " .. store.Points .. "\n"
     end,
     ClearCheckpoint = function(current)
-        if state == 0 then return nil end
+        if state == 0 or clear_fails then return nil end
         cleared_with, state = current, 0
         store.AppliedPreset, store.AppliedRound, store.AppliedPoints = nil, nil, nil
         return "modvar tfoption_starting_round 7\nmodvar tfoption_starting_points 500\n"
@@ -218,6 +219,46 @@ check(state == 3 and #plans == 0, "no weapons on another map")
 leave_match()
 polls(1)
 
+-- a resumed game saved before its guns are back (quitting at once) keeps the saved guns, not the starting pistol
+check(store.Map == "zm_theater" and store.Weapons == "ray_gun_upgraded,pistol_burst", "the saved guns before")
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+polls(1)
+check(state == 2, "a resumed game, its guns not back yet")
+local before = #saves
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == before + 1 and saves[#saves].Weapons == "ray_gun_upgraded,pistol_burst" and
+    saves[#saves].Equipment == "frag_grenade,knife", "quitting keeps the saved guns: " .. tostring(saves[#saves].Weapons))
+-- likewise when no weapons can be read (a save without them would drop the saved ones)
+weapons = nil
+save_row.run()
+check(#saves == before + 2 and saves[#saves].Weapons == "ray_gun_upgraded,pistol_burst", "and without the weapons: " ..
+    tostring(saves[#saves].Weapons))
+leave_match()
+polls(1)
+check(state == 0, "cleared after that game")
+
+-- a resume that can't be undone (a file that can't be written) says so and stays on, rather than saying it's off
+resume_row.run()
+clear_fails, logs = true, {}
+resume_row.run()
+check(state == 1 and string.find(message, "Couldn't turn the resume off", 1, true) ~= nil,
+    "turning it off fails visibly: " .. tostring(message))
+-- back in the menus after a resumed game: tried again on every poll, and the log says so once
+enter_match("zm_theater")
+polls(1)
+leave_match()
+polls(3)
+local stuck = 0
+for _, line in ipairs(logs) do
+    if string.find(line, "couldn't undo the resume", 1, true) then stuck = stuck + 1 end
+end
+check(state == 2 and stuck == 1, "still on, logged once: " .. stuck)
+clear_fails = false
+polls(1)
+check(state == 0, "undone once it can be")
+
 -- ---- quitting saves
 enter_match("zm_theater")
 models["controller0.gameScore.roundsPlayed"] = 16
@@ -230,6 +271,15 @@ check(#saves == count + 1, "other menus don't")
 models["controller0.gameScore.roundsPlayed"] = 5
 BO3MacFix.CheckpointMenuCreated("EndGamePopup", {})
 check(#saves == count + 1 and store.Round == "15", "a round 15 save stays")
+-- one round behind it too: roundsPlayed 15 is the HUD's round 14
+models["controller0.gameScore.roundsPlayed"] = 15
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == count + 1 and store.Round == "15", "a round 15 save stays when quitting at round 14: " ..
+    tostring(store.Round))
+-- the same round replaces it
+models["controller0.gameScore.roundsPlayed"] = 16
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == count + 2 and store.Round == "15", "quitting at the same round saves")
 -- the test switches: give, then save and report so many seconds in
 leave_match()
 polls(1)

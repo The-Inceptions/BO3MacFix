@@ -185,6 +185,15 @@ local function collect(controller)
     local character = identity ~= nil and not OTHER_CREW[map] and CHARACTERS[identity] or nil
     if character == nil and icon ~= nil and tostring(icon) ~= "" then character = tostring(icon) end
     local primaries, others, raw = weapons_now()
+    -- a resumed game whose saved guns aren't back yet holds the starting ones, or none that can be read: a save then
+    -- keeps the saved guns (quitting at once would otherwise swap them for the starting pistol)
+    if call(bo3macfix.CheckpointResume, 0) == 2 then
+        local checkpoint = read_checkpoint()
+        if checkpoint.Map == map and checkpoint.Weapons ~= nil and checkpoint.Weapons ~= "" then
+            primaries, others = split(checkpoint.Weapons), split(checkpoint.Equipment)
+            raw = "the saved ones, not given back yet (holding " .. tostring(raw) .. ")"
+        end
+    end
     local lines = { "Map=" .. clean(map), "Round=" .. tostring(math.floor(round)),
         "Points=" .. tostring(math.floor(points)), "Perks=" .. table.concat(perks, ","),
         "Held=" .. clean(held), "Character=" .. clean(character), "Stats=" .. clean(table.concat(stats, ", ")) }
@@ -227,10 +236,20 @@ local function current_options()
     return table.concat(lines, "\n")
 end
 
--- puts the player's own starting options back; true if a resume was set up
+-- puts the player's own starting options back; true if a resume was set up. A resume that can't be undone (a file
+-- that can't be read or written) stays on, and the log says so once.
+local told_stuck = false
 local function clear_resume(controller)
     local commands = bo3macfix.ClearCheckpoint(current_options())
-    if commands == nil then return false end
+    if commands == nil then
+        if not told_stuck and bo3macfix.CheckpointResume(0) ~= 0 then
+            told_stuck = true
+            log("checkpoint: couldn't undo the resume: BO3MacFix/checkpoint.ini or AAE's mutations file can't be " ..
+                "read or written. It stays on, and is tried again.")
+        end
+        return false
+    end
+    told_stuck = false
     run_commands(controller, commands)
     return true
 end
@@ -276,7 +295,10 @@ function bo3macfix.CheckpointRows(controller, message)
     end
     resume.run = function()
         if bo3macfix.CheckpointResume(0) ~= 0 then
-            clear_resume(controller)
+            if not clear_resume(controller) then
+                return message("Couldn't turn the resume off: BO3MacFix/checkpoint.ini or AAE's mutations file " ..
+                    "can't be read or written.")
+            end
             return message("Resume off: games start with your own AAE starting options.")
         end
         if in_match() then return message("Set the resume up from the main menu, before starting the game.") end
@@ -433,7 +455,9 @@ function bo3macfix.CheckpointMenuCreated(name, menu)
     -- quitting a match saves it, unless that would replace a game saved at a higher round that this one didn't resume
     if QUIT_POPUPS[name] and in_match() and string.sub(current_map(), 1, 3) == "zm_" then
         local checkpoint = read_checkpoint()
-        local round = tonumber(model_value(Engine.GetModelForController(0), "gameScore.roundsPlayed"))
+        -- the HUD's round, as a save keeps it: one less than gameScore.roundsPlayed (see collect)
+        local played = tonumber(model_value(Engine.GetModelForController(0), "gameScore.roundsPlayed"))
+        local round = played ~= nil and played - 1 or nil
         local kept = tonumber(checkpoint.Round)
         if kept ~= nil and round ~= nil and kept > round and bo3macfix.CheckpointResume(0) < 2 then
             log("checkpoint: quitting, kept the game saved at round " .. tostring(kept))
