@@ -472,6 +472,47 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         else
             note_failure(result, "no ammo type", gun->aat);
     }
+    // AAE's repack levels, once the guns are back
+    for (int i = 0; i < saved->gun_count; i++) {
+        const loadout_gun_t *gun = &saved->guns[i];
+        if (wanted[i] == 0 || gun->pap_level <= 0 || contains(wanted, i, wanted[i]))
+            continue;
+        if (ops->set_pap_level != NULL && ops->set_pap_level(context, wanted[i], gun->name, gun->pap_level))
+            result->pap_levels++;
+        else
+            note_failure(result, "no repack level for", gun->name);
+    }
+    // the grenades, mines, shield, hero weapon: given the scripts' way when not held, then their counts
+    for (int i = 0; i < saved->item_count; i++) {
+        const loadout_item_t *item = &saved->items[i];
+        uint64_t weapon = ops->weapon_for_name(context, item->name);
+        if (weapon == 0) {
+            note_failure(result, "no item", item->name);
+            continue;
+        }
+        if (ops->holds != NULL && ops->holds(context, weapon))
+            result->items_had++;
+        else if (ops->give_item != NULL && ops->give_item(context, weapon))
+            result->items++;
+        else {
+            note_failure(result, "couldn't give", item->name);
+            continue;
+        }
+        if (item->have_ammo && (ops->set_ammo == NULL || !ops->set_ammo(context, weapon, item->clip, item->stock)))
+            note_failure(result, "no ammo for", item->name);
+        else if (item->have_ammo)
+            result->ammo++;
+    }
+    // the guns' clip and stock, which came back as their start ammo
+    for (int i = 0; i < saved->gun_count; i++) {
+        const loadout_gun_t *gun = &saved->guns[i];
+        if (wanted[i] == 0 || !gun->have_ammo || contains(wanted, i, wanted[i]))
+            continue;
+        if (ops->set_ammo != NULL && ops->set_ammo(context, wanted[i], gun->clip, gun->stock))
+            result->ammo++;
+        else
+            note_failure(result, "no ammo for", gun->name);
+    }
     // the gun that was in hand, or the first one if none was (holding a grenade, say), so the hands aren't left empty
     // after the starting pistol went
     int in_hand = saved->held >= 0 && saved->held < saved->gun_count && wanted[saved->held] != 0 ? saved->held : -1;
@@ -483,9 +524,13 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
 }
 
 void loadout_result_text(const loadout_result_t *result, char *out, size_t out_size) {
-    snprintf(out, out_size, "took %d, gave %d guns (%d held already), %d ammo types, %d perks (%d had already), %d "
+    char more[160] = "";
+    if (result->pap_levels > 0 || result->items > 0 || result->items_had > 0 || result->ammo > 0)
+        snprintf(more, sizeof(more), "%d repack levels, %d items (%d held already), ammo for %d, ", result->pap_levels,
+                 result->items, result->items_had, result->ammo);
+    snprintf(out, out_size, "took %d, gave %d guns (%d held already), %d ammo types, %d perks (%d had already), %s%d "
              "failed%s%s", result->taken, result->given, result->kept, result->aats, result->perks, result->perks_had,
-             result->failed, result->failed > 0 ? ": " : "", result->failures);
+             more, result->failed, result->failed > 0 ? ": " : "", result->failures);
 }
 
 // ---- AAE's Repack-a-Punch levels
@@ -639,4 +684,139 @@ int loadout_vm_read_pap_levels(const loadout_vm_t *vm, const char *guid, loadout
         count += loadout->guns[i].pap_level > 0;
     }
     return count;
+}
+
+// ---- items and ammo
+
+bool loadout_item_worth_saving(const char *name) {
+    // what the game holds for a moment: perk bottles, gums, the build and revive hands, fists, power-ups' weapons
+    static const char *const passing[] = { "bottle", "bgb", "knuckle", "zombie_builder", "zombie_fists", "syrette",
+                                           "minigun", "zombie_beast", "death_throe", "defaultweapon", "powerup" };
+    if (!loadout_valid_name(name))
+        return false;
+    for (size_t i = 0; i < sizeof(passing) / sizeof(passing[0]); i++)
+        if (strstr(name, passing[i]) != NULL)
+            return false;
+    return true;
+}
+
+static bool format_ammo(const char *name, bool have_ammo, int clip, int stock, char *out, size_t out_size, size_t *used) {
+    if (!have_ammo)
+        return append(out, out_size, used, "%s%s::", *used > 0 ? "," : "", name);
+    return clip >= 0 && stock >= 0 && append(out, out_size, used, "%s%s:%d:%d", *used > 0 ? "," : "", name, clip, stock);
+}
+
+bool loadout_format_items(const loadout_t *loadout, char *out, size_t out_size) {
+    if (out_size == 0)
+        return false;
+    out[0] = '\0';
+    size_t used = 0;
+    for (int i = 0; i < loadout->item_count; i++) {
+        const loadout_item_t *item = &loadout->items[i];
+        if (!loadout_valid_name(item->name) ||
+            !format_ammo(item->name, item->have_ammo, item->clip, item->stock, out, out_size, &used)) {
+            out[0] = '\0';
+            return false;
+        }
+    }
+    return true;
+}
+
+bool loadout_format_gun_ammo(const loadout_t *loadout, char *out, size_t out_size) {
+    if (out_size == 0)
+        return false;
+    out[0] = '\0';
+    size_t used = 0;
+    for (int i = 0; i < loadout->gun_count; i++) {
+        const loadout_gun_t *gun = &loadout->guns[i];
+        if (gun->have_ammo &&
+            (!loadout_valid_name(gun->name) || !format_ammo(gun->name, true, gun->clip, gun->stock, out, out_size, &used))) {
+            out[0] = '\0';
+            return false;
+        }
+    }
+    return true;
+}
+
+// a count: digits, at most 6 of them, or nothing (unknown) when blank_ok
+static bool parse_count(const char *start, const char *end, bool *have, int *value) {
+    if (start == end) {
+        *have = false;
+        *value = 0;
+        return true;
+    }
+    if (end - start > 6)
+        return false;
+    int v = 0;
+    for (const char *p = start; p < end; p++) {
+        if (!isdigit((unsigned char)*p))
+            return false;
+        v = v * 10 + (*p - '0');
+    }
+    *have = true;
+    *value = v;
+    return true;
+}
+
+// one "name:clip:stock" entry (both counts given, or both blank)
+static bool parse_ammo_entry(const char *start, const char *end, char *name, size_t name_size, bool *have, int *clip,
+                             int *stock) {
+    const char *c1 = memchr(start, ':', (size_t)(end - start));
+    const char *c2 = c1 != NULL ? memchr(c1 + 1, ':', (size_t)(end - c1 - 1)) : NULL;
+    bool have_clip, have_stock;
+    if (c1 == NULL || c2 == NULL || c1 == start || (size_t)(c1 - start) >= name_size ||
+        !valid_name_len(start, (size_t)(c1 - start), true) || !parse_count(c1 + 1, c2, &have_clip, clip) ||
+        !parse_count(c2 + 1, end, &have_stock, stock) || have_clip != have_stock)
+        return false;
+    memcpy(name, start, (size_t)(c1 - start));
+    name[c1 - start] = '\0';
+    *have = have_clip;
+    return true;
+}
+
+bool loadout_parse_items(const char *value, loadout_t *loadout) {
+    loadout_item_t items[Loadout_Max_Items];
+    int count = 0;
+    for (const char *start = value; start != NULL && *start != '\0';) {
+        const char *end = strchr(start, ',');
+        if (end == NULL)
+            end = start + strlen(start);
+        if (count == Loadout_Max_Items)
+            return false;
+        loadout_item_t *item = &items[count++];
+        if (!parse_ammo_entry(start, end, item->name, sizeof(item->name), &item->have_ammo, &item->clip, &item->stock))
+            return false;
+        start = *end == ',' ? end + 1 : end;
+        if (*end == ',' && *start == '\0')
+            return false;
+    }
+    memcpy(loadout->items, items, sizeof(items[0]) * (size_t)count);
+    loadout->item_count = count;
+    return true;
+}
+
+bool loadout_parse_gun_ammo(const char *value, loadout_t *loadout) {
+    loadout_gun_t guns[Loadout_Max_Guns];
+    memcpy(guns, loadout->guns, sizeof(guns));
+    for (const char *start = value; start != NULL && *start != '\0';) {
+        const char *end = strchr(start, ',');
+        if (end == NULL)
+            end = start + strlen(start);
+        char name[Loadout_Name_Size];
+        bool have;
+        int clip, stock;
+        if (!parse_ammo_entry(start, end, name, sizeof(name), &have, &clip, &stock) || !have)
+            return false;
+        for (int i = 0; i < loadout->gun_count; i++)
+            if (strcmp(guns[i].name, name) == 0) {
+                guns[i].have_ammo = true;
+                guns[i].clip = clip;
+                guns[i].stock = stock;
+            }
+        start = *end == ',' ? end + 1 : end;
+        if (*end == ',' && *start == '\0')
+            return false;
+    }
+    memcpy(loadout->guns, guns, sizeof(guns));
+    return true;
 }

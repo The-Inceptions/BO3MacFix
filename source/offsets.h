@@ -223,6 +223,14 @@
 #define ADDR_scrClassMap 0x20fc330 // a class table pointer per script instance, 0x20 bytes per class: the class's object at +4, per client at +0x18 (Scr_GetEntityId at 0x12f676b) - name is a guess
 #define ADDR_scrDefaultFunction 0x21011a8 // const char *: the do-nothing code Scr_GetFunctionHandle gives a server script that lacks the function - name is a guess
 #define ADDR_scrStringTable 0x150e6048 // char *: 0x1c bytes per string id, its text at +4 (SL_ConvertToString at 0x11b6940) - name is a guess
+#define ADDR_BG_GetAmmoInClip 0xf5326a // func - int (playerState_t *, Weapon): GetWeaponAmmoClip's; the clip weapon's held slot, its clip at ps+0x684 + slot*4
+#define ADDR_BG_GetAmmoStock 0xf532a8 // func - int (playerState_t *, Weapon): GetWeaponAmmoStock's for a weapon that isn't clip-only; ps+0x648 + slot*4
+#define ADDR_BG_SetAmmoInClip 0xf52bf9 // func - void (playerState_t *, Weapon, int): SetWeaponAmmoClip's, after it clamps to the clip size
+#define ADDR_BG_SetAmmoStock 0xf52cdf // func - void (playerState_t *, Weapon, int): SetWeaponAmmoStock's, after it clamps to BG_GetMaxAmmo
+#define ADDR_BG_GetClipSize 0xf52ed4 // func - int (Weapon)
+#define ADDR_BG_WeaponIsClipOnly 0xf52ec2 // func - int (Weapon): SetWeaponAmmoStock sets the clip of one
+#define ADDR_BG_GetMaxAmmo 0xf52d88 // func - int (playerState_t *, Weapon, uint64_t): SetWeaponAmmoStock's clamp, its third argument read from ADDR_bg_maxAmmoArg
+#define ADDR_bg_maxAmmoArg 0x189cb10 // uint64_t SetWeaponAmmoStock passes BG_GetMaxAmmo - name is a guess
 #define scrVarPub_LevelId 0x24 // uint32_t in scrVarPub (ADDR_scrVarPub, 0x78 bytes per instance): the level object's id (GetLevel's opcode handler at 0x127685c pushes it)
 // -- end zm inventory
 // -- END OFFSETS

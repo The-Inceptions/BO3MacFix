@@ -24,7 +24,18 @@ typedef struct {
     uint32_t acvi;                // the attachments' cosmetic variants
     char aat[Loadout_Short_Size]; // like "zm_aat_blast_furnace", "" for none
     int pap_level;                // AAE's Repack-a-Punch level (1 to 5), 0 for none
+    bool have_ammo;               // clip and stock read
+    int clip, stock;
 } loadout_gun_t;
+
+#define Loadout_Max_Items 8
+
+// a held weapon that isn't a gun: a lethal or tactical grenade, a mine, the shield, a hero weapon, the melee weapon
+typedef struct {
+    char name[Loadout_Name_Size]; // like "frag_grenade", "cymbal_monkey", "zod_riotshield"
+    bool have_ammo;
+    int clip, stock;              // a grenade's or a mine's count is its clip
+} loadout_item_t;
 
 typedef struct {
     loadout_gun_t guns[Loadout_Max_Guns];
@@ -32,6 +43,8 @@ typedef struct {
     int held; // the gun in hand, -1 for none
     char perks[Loadout_Max_Perks][Loadout_Short_Size]; // like "specialty_armorvest"
     int perk_count;
+    loadout_item_t items[Loadout_Max_Items];
+    int item_count;
 } loadout_t;
 
 void loadout_clear(loadout_t *loadout);
@@ -108,11 +121,17 @@ typedef struct {
     bool (*has_perk)(void *context, const char *perk);
     bool (*give_perk)(void *context, const char *perk);                   // zm_perks::give_perk(perk, false)
     void (*switch_to)(void *context, uint64_t weapon);
+    // these may be NULL: then what needs them is told as not restored
+    bool (*set_pap_level)(void *context, uint64_t weapon, const char *name, int level); // AAE's own repack function
+    bool (*holds)(void *context, uint64_t weapon);
+    bool (*give_item)(void *context, uint64_t weapon); // zm_weapons::weapon_give, the scripts' own give
+    bool (*set_ammo)(void *context, uint64_t weapon, int clip, int stock);
 } loadout_ops_t;
 
 typedef struct {
     int taken, given, kept, aats, perks, perks_had, failed;
     char failures[256]; // what couldn't be restored, comma-separated
+    int pap_levels, items, items_had, ammo;
 } loadout_result_t;
 
 // turns the player's loadout into saved: takes the held primaries that aren't saved, gives each saved gun that isn't
@@ -142,3 +161,16 @@ bool loadout_vm_guid(const loadout_vm_t *vm, uint32_t entity, char *out, size_t 
 // NULL (unknown), a key that is a number and the root name, if every such key has the same number. The number of guns
 // given a level, -1 if level.pap_lvup can't be read (it's undefined until a gun is Pack-a-Punched with the option on).
 int loadout_vm_read_pap_levels(const loadout_vm_t *vm, const char *guid, loadout_t *loadout);
+
+// ---- items (grenades, mines, the shield, hero weapons) and ammo: checkpoint.ini's "Items = name:clip:stock,..."
+// and "GunAmmo = name:clip:stock,..." (the guns' names as in Guns)
+
+// whether a held weapon that isn't a gun is worth saving: not one the game hands out for a moment (a perk bottle, a
+// gum, the build hands, fists, a power-up's)
+bool loadout_item_worth_saving(const char *name);
+bool loadout_format_items(const loadout_t *loadout, char *out, size_t out_size);
+// loadout's items from an Items value (NULL or empty for none); false, leaving them as they were, if it's malformed
+bool loadout_parse_items(const char *value, loadout_t *loadout);
+bool loadout_format_gun_ammo(const loadout_t *loadout, char *out, size_t out_size);
+// sets loadout's guns' ammo from a GunAmmo value; a name loadout doesn't have is left out. False if it's malformed.
+bool loadout_parse_gun_ammo(const char *value, loadout_t *loadout);

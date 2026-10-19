@@ -18,7 +18,7 @@
 // what checkpoint_save takes from the settings page; the rest of checkpoint.ini is ours
 static const char *const saved_keys[] = { "Map",       "Round", "Points",    "Perks", "Weapons", "Equipment",
                                           "Held",      "Character", "Stats", "Guns",  "GunInHand", "PerkList",
-                                          "PapLevels" };
+                                          "PapLevels", "Items", "GunAmmo" };
 // the ones that are comma-separated names: perks, and weapons that go into give and take commands
 static const char *const list_keys[] = { "Perks", "Weapons", "Equipment", "PerkList" };
 
@@ -380,7 +380,9 @@ bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long no
     const char *in_hand = store_get(&given, "GunInHand");
     if ((in_hand != NULL && in_hand[0] != '\0' && !valid_name(in_hand, strlen(in_hand))) ||
         !loadout_parse(store_get(&given, "Guns"), in_hand, store_get(&given, "PerkList"), &loadout) ||
-        !loadout_parse_pap_levels(store_get(&given, "PapLevels"), &loadout))
+        !loadout_parse_pap_levels(store_get(&given, "PapLevels"), &loadout) ||
+        !loadout_parse_items(store_get(&given, "Items"), &loadout) ||
+        !loadout_parse_gun_ammo(store_get(&given, "GunAmmo"), &loadout))
         return false;
     // a key this save doesn't have goes, so nothing from the last game stays with this one
     for (size_t i = 0; i < sizeof(saved_keys) / sizeof(saved_keys[0]); i++)
@@ -665,5 +667,9 @@ bool checkpoint_loadout(const checkpoint_paths_t *paths, loadout_t *loadout) {
     const char *guns = store_get(&store, "Guns"), *perks = store_get(&store, "PerkList");
     if (guns == NULL && perks == NULL)
         return false;
-    return loadout_parse(guns, store_get(&store, "GunInHand"), perks, loadout);
+    // the repack levels, items and ammo of a newer save; an older one has none, and comes back as it did
+    return loadout_parse(guns, store_get(&store, "GunInHand"), perks, loadout) &&
+           loadout_parse_pap_levels(store_get(&store, "PapLevels"), loadout) &&
+           loadout_parse_items(store_get(&store, "Items"), loadout) &&
+           loadout_parse_gun_ammo(store_get(&store, "GunAmmo"), loadout);
 }

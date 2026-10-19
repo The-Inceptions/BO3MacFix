@@ -249,7 +249,9 @@ local function collect(controller)
             if has_loadout(checkpoint) then
                 loadout = "Guns=" .. (checkpoint.Guns or "") .. "\nGunInHand=" .. (checkpoint.GunInHand or "") ..
                     "\nPerkList=" .. (checkpoint.PerkList or "") ..
-                    (checkpoint.PapLevels ~= nil and ("\nPapLevels=" .. checkpoint.PapLevels) or "")
+                    (checkpoint.PapLevels ~= nil and ("\nPapLevels=" .. checkpoint.PapLevels) or "") ..
+                    (checkpoint.Items ~= nil and ("\nItems=" .. checkpoint.Items) or "") ..
+                    (checkpoint.GunAmmo ~= nil and ("\nGunAmmo=" .. checkpoint.GunAmmo) or "")
                 perks = split(checkpoint.Perks)
             else
                 -- an older save without them stays one: the loadout read now is the starting guns', and a Guns line

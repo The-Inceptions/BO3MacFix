@@ -227,6 +227,9 @@ typedef struct {
     int perk_count;
     char calls[2048];
     bool fail_give, fail_aat;
+    uint64_t items[8]; // the items held
+    int item_count;
+    bool fail_pap, fail_item, fail_ammo;
 } game_t;
 
 static void call(game_t *game, const char *format, ...) __attribute__((format(printf, 2, 3)));
@@ -248,7 +251,39 @@ static uint64_t g_weapon_for_name(void *context, const char *name) {
         return ar;
     if (strcmp(name, "pistol_standard_zm") == 0)
         return pistol;
+    if (strcmp(name, "frag_grenade") == 0)
+        return 0x61;
+    if (strcmp(name, "cymbal_monkey") == 0)
+        return 0x62;
+    if (strcmp(name, "zod_riotshield") == 0)
+        return 0x63;
     return 0;
+}
+
+static bool g_set_pap_level(void *context, uint64_t weapon, const char *name, int level) {
+    game_t *game = context;
+    call(game, "pap %" PRIx64 " %s %d", weapon, name, level);
+    return !game->fail_pap;
+}
+
+static bool g_holds(void *context, uint64_t weapon) {
+    game_t *game = context;
+    for (int i = 0; i < game->item_count; i++)
+        if (game->items[i] == weapon)
+            return true;
+    return false;
+}
+
+static bool g_give_item(void *context, uint64_t weapon) {
+    game_t *game = context;
+    call(game, "item %" PRIx64, weapon);
+    return !game->fail_item;
+}
+
+static bool g_set_ammo(void *context, uint64_t weapon, int clip, int stock) {
+    game_t *game = context;
+    call(game, "ammo %" PRIx64 " %d %d", weapon, clip, stock);
+    return !game->fail_ammo;
 }
 
 static int g_primaries(void *context, uint64_t *out, int max) {
@@ -302,10 +337,108 @@ static const char *restore(game_t *game, const char *guns, const char *in_hand, 
     if (!loadout_parse(guns, in_hand, perks, &saved))
         return "(malformed)";
     loadout_ops_t ops = { game, g_weapon_for_name, g_primaries, g_take,      g_give,
-                          g_acquire_aat, g_has_perk, g_give_perk, g_switch_to };
+                          g_acquire_aat, g_has_perk, g_give_perk, g_switch_to, NULL, NULL, NULL, NULL };
     game->calls[0] = '\0';
     loadout_restore(&saved, &ops, result);
     return game->calls;
+}
+
+// the full loadout of a newer save: repack levels, items, the guns' ammo (NULL ops: the older game calls)
+static const char *restore_full(game_t *game, const char *guns, const char *perks, const char *pap, const char *items,
+                                const char *ammo, bool new_ops, loadout_result_t *result) {
+    loadout_t saved;
+    if (!loadout_parse(guns, NULL, perks, &saved) || !loadout_parse_pap_levels(pap, &saved) ||
+        !loadout_parse_items(items, &saved) || !loadout_parse_gun_ammo(ammo, &saved))
+        return "(malformed)";
+    loadout_ops_t ops = { game,          g_weapon_for_name, g_primaries, g_take,      g_give,
+                          g_acquire_aat, g_has_perk,        g_give_perk, g_switch_to, g_set_pap_level,
+                          g_holds,       g_give_item,       g_set_ammo };
+    if (!new_ops)
+        ops.set_pap_level = NULL, ops.holds = NULL, ops.give_item = NULL, ops.set_ammo = NULL;
+    game->calls[0] = '\0';
+    loadout_restore(&saved, &ops, result);
+    return game->calls;
+}
+
+static void test_restore_more(void) {
+    game_t game;
+    memset(&game, 0, sizeof(game));
+    loadout_result_t result;
+    char text[512];
+    game.held[0] = pistol;
+    game.held_count = 1;
+    game.items[0] = 0x61; // the starting grenades
+    game.item_count = 1;
+    const char *guns = "ar_standard_upgraded_zm+reflex+extclip:822a:17:,ray_gun_upgraded_zm:2a:0:";
+    // perks, guns, levels, items (the held one only gets its count), the guns' ammo, then the gun in hand
+    const char *calls = restore_full(&game, guns, "specialty_additionalprimaryweapon", "ray_gun_upgraded_zm:3",
+                                     "frag_grenade:3:0,cymbal_monkey:2:0,zod_riotshield::",
+                                     "ar_standard_upgraded_zm+reflex+extclip:40:200,ray_gun_upgraded_zm:12:80", true,
+                                     &result);
+    CHECK(strcmp(calls, "perk specialty_additionalprimaryweapon; take 4; give 44323 822a 17; give a5 2a 0; "
+                        "pap a5 ray_gun_upgraded_zm 3; ammo 61 3 0; item 62; ammo 62 2 0; item 63; "
+                        "ammo 44323 40 200; ammo a5 12 80; switch 44323; ") == 0);
+    if (strcmp(calls, "perk specialty_additionalprimaryweapon; take 4; give 44323 822a 17; give a5 2a 0; "
+                      "pap a5 ray_gun_upgraded_zm 3; ammo 61 3 0; item 62; ammo 62 2 0; item 63; "
+                      "ammo 44323 40 200; ammo a5 12 80; switch 44323; ") != 0)
+        printf("  calls: %s\n", calls);
+    CHECK(result.pap_levels == 1 && result.items == 2 && result.items_had == 1 && result.ammo == 4 &&
+          result.failed == 0);
+    loadout_result_text(&result, text, sizeof(text));
+    CHECK(strcmp(text, "took 1, gave 2 guns (0 held already), 0 ammo types, 1 perks (0 had already), 1 repack levels, "
+                       "2 items (1 held already), ammo for 4, 0 failed") == 0);
+
+    // what the game won't do is told, and the rest still comes back
+    game.fail_pap = game.fail_item = game.fail_ammo = true;
+    calls = restore_full(&game, guns, "", "ray_gun_upgraded_zm:3", "frag_grenade:3:0,cymbal_monkey:2:0,nothing_zm::",
+                         "ray_gun_upgraded_zm:12:80", true, &result);
+    CHECK(strcmp(result.failures, "no repack level for ray_gun_upgraded_zm, no ammo for frag_grenade, couldn't give "
+                                  "cymbal_monkey, no item nothing_zm, no ammo for ray_gun_upgraded_zm") == 0);
+    CHECK(result.failed == 5 && result.items_had == 1 && result.items == 0 && result.ammo == 0);
+    game.fail_pap = game.fail_item = game.fail_ammo = false;
+    // a game without the new calls: the guns and perks as before, the rest told
+    calls = restore_full(&game, guns, "", "ray_gun_upgraded_zm:3", "cymbal_monkey:2:0", "", false, &result);
+    CHECK(strcmp(calls, "take 4; give 44323 822a 17; give a5 2a 0; switch 44323; ") == 0);
+    CHECK(result.failed == 2 && result.given == 2);
+    // an older save (none of it): exactly the calls it had
+    calls = restore_full(&game, guns, "", NULL, NULL, NULL, true, &result);
+    CHECK(strcmp(calls, "take 4; give 44323 822a 17; give a5 2a 0; switch 44323; ") == 0);
+    loadout_result_text(&result, text, sizeof(text));
+    CHECK(strcmp(text, "took 1, gave 2 guns (0 held already), 0 ammo types, 0 perks (0 had already), 0 failed") == 0);
+}
+
+// Items and GunAmmo text
+static void test_items_text(void) {
+    loadout_t loadout;
+    char text[512];
+    CHECK(loadout_parse("ray_gun_upgraded:84:0:,pistol_m1911:0:0:", NULL, "", &loadout));
+    CHECK(loadout_format_items(&loadout, text, sizeof(text)) && strcmp(text, "") == 0);
+    CHECK(loadout_format_gun_ammo(&loadout, text, sizeof(text)) && strcmp(text, "") == 0);
+    CHECK(loadout_parse_items("frag_grenade:4:0,cymbal_monkey_upgraded:2:0,zod_riotshield::", &loadout));
+    CHECK(loadout.item_count == 3 && loadout.items[0].have_ammo && loadout.items[0].clip == 4 &&
+          !loadout.items[2].have_ammo);
+    CHECK(loadout_format_items(&loadout, text, sizeof(text)) &&
+          strcmp(text, "frag_grenade:4:0,cymbal_monkey_upgraded:2:0,zod_riotshield::") == 0);
+    CHECK(loadout_parse_gun_ammo("ray_gun_upgraded:20:160,not_held:1:1", &loadout));
+    CHECK(loadout.guns[0].have_ammo && loadout.guns[0].clip == 20 && loadout.guns[0].stock == 160 &&
+          !loadout.guns[1].have_ammo);
+    CHECK(loadout_format_gun_ammo(&loadout, text, sizeof(text)) && strcmp(text, "ray_gun_upgraded:20:160") == 0);
+    const char *bad_items[] = { "frag_grenade", "frag_grenade:4", "frag_grenade:4:", "frag_grenade::0", ":1:1",
+                                "frag grenade:1:1", "frag_grenade:-1:0", "frag_grenade:1234567:0", "a:1:1,",
+                                "a:1:1,b:1:1,c:1:1,d:1:1,e:1:1,f:1:1,g:1:1,h:1:1,i:1:1" };
+    for (size_t i = 0; i < sizeof(bad_items) / sizeof(bad_items[0]); i++) {
+        CHECK(!loadout_parse_items(bad_items[i], &loadout));
+        CHECK(loadout.item_count == 3); // left as it was
+    }
+    CHECK(!loadout_parse_gun_ammo("ray_gun_upgraded::", &loadout)); // a gun's ammo has both counts
+    CHECK(!loadout_parse_gun_ammo("ray_gun_upgraded:1:x", &loadout) && loadout.guns[0].clip == 20);
+    CHECK(loadout_parse_items(NULL, &loadout) && loadout.item_count == 0);
+    // what the game holds only for a moment isn't saved
+    CHECK(loadout_item_worth_saving("frag_grenade") && loadout_item_worth_saving("hero_gravityspikes_melee") &&
+          loadout_item_worth_saving("zod_riotshield") && loadout_item_worth_saving("bowie_knife"));
+    CHECK(!loadout_item_worth_saving("zombie_perk_bottle_jugg") && !loadout_item_worth_saving("zombie_bgb_grab") &&
+          !loadout_item_worth_saving("zombie_knuckle_crack") && !loadout_item_worth_saving("zombie_builder") &&
+          !loadout_item_worth_saving("minigun") && !loadout_item_worth_saving("bad name"));
 }
 
 static void test_restore(void) {
@@ -423,6 +556,8 @@ int main(void) {
     test_vm();
     test_restore();
     test_pap_levels();
+    test_restore_more();
+    test_items_text();
     if (failures == 0)
         printf("test_zm_loadout: all passed\n");
     return failures == 0 ? 0 : 1;

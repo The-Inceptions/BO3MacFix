@@ -323,6 +323,17 @@ static void test_loadout(void) {
     CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\n", 6));
     checkpoint_read(&paths, text, sizeof(text));
     CHECK(strstr(text, "PapLevels") == NULL);
+    // the items and the guns' ammo too, read back for the restore
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\nPapLevels=ray_gun_upgraded:2\n"
+                                  "Items=frag_grenade:3:0,zod_riotshield::\nGunAmmo=ray_gun_upgraded:12:160\n", 7));
+    CHECK(checkpoint_loadout(&paths, &loadout) && loadout.gun_count == 1 && loadout.guns[0].pap_level == 2 &&
+          loadout.item_count == 2 && loadout.items[0].clip == 3 && !loadout.items[1].have_ammo &&
+          loadout.guns[0].have_ammo && loadout.guns[0].stock == 160);
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\nItems=frag grenade:3:0\n", 8));
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\nGunAmmo=ray_gun_upgraded::\n",
+                           8));
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "Saved=7\n") != NULL && strstr(text, "Items=frag_grenade:3:0,zod_riotshield::\n") != NULL);
     CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nPerks=juggernaut\n", 3)); // as the test below expects
     // the longest a Guns line gets: four guns with eight attachments each fit in a value
     char long_guns[1024] = "";
