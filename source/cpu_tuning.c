@@ -3,10 +3,12 @@
 #include <pthread/qos.h>
 #include <sched.h>
 #include <setjmp.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "dobby.h"
 #include "dyld-interposing.h"
 #include "offsets.h"
@@ -103,13 +105,60 @@ static void fast_setjmp_patch(void) {
     printf("game setjmp/longjmp skip the signal mask\n");
 }
 
+// A script error's report (console_mp.log's "******* script error *******" and its call stack) shows the source line of
+// each call, so the first time it needs a script's source it loads it from a scriptsrc.zip: the mod's zone_source/,
+// else zone/. Only the mod tools make those, so the load fails, nothing remembers that, and every line of every report
+// tries both files again: two path conversions and two failed fopens each. The call stack lines say "missing line
+// information" anyway. All-around Enhancement's client scripts hit runtime errors thousands of times a second (zombie
+// health bars, smoke trails), which made that most of the main thread's work. A script whose source didn't load isn't
+// tried again for a second.
+#define Script_Source_Text 0x28 // the script's source text, NULL until it's loaded
+#define Script_Source_Retry_Ns 1000000000ULL
+#define Failed_Source_Slots 256 // a power of 2
+#define Failed_Source_Probes 16
+static struct {
+    _Atomic(uintptr_t) script;
+    _Atomic uint64_t retry_at;
+} failed_sources[Failed_Source_Slots];
+
+// the slot of a script whose source didn't load, else the free slot where it would go (else its first slot when
+// they're all taken). Threads racing for a slot only cost a retry.
+static size_t failed_source_slot(uintptr_t script, bool *found) {
+    size_t first = (size_t)(((script >> 4) * 0x9E3779B97F4A7C15ULL) >> 56) % Failed_Source_Slots;
+    for (size_t i = 0; i < Failed_Source_Probes; i++) {
+        size_t slot = (first + i) % Failed_Source_Slots;
+        uintptr_t there = atomic_load_explicit(&failed_sources[slot].script, memory_order_relaxed);
+        if (there == script || there == 0) {
+            *found = there == script;
+            return slot;
+        }
+    }
+    *found = false;
+    return first;
+}
+
+install_hook_name(Scr_LoadSourceText, void, uint8_t *script) {
+    bool found;
+    size_t slot = failed_source_slot((uintptr_t)script, &found);
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (found && now < atomic_load_explicit(&failed_sources[slot].retry_at, memory_order_relaxed))
+        return;
+    orig_Scr_LoadSourceText(script);
+    void *text;
+    memcpy(&text, script + Script_Source_Text, sizeof(text));
+    if (text == NULL) {
+        atomic_store_explicit(&failed_sources[slot].retry_at, now + Script_Source_Retry_Ns, memory_order_relaxed);
+        atomic_store_explicit(&failed_sources[slot].script, (uintptr_t)script, memory_order_relaxed);
+    }
+}
+
 static int env_override(const char *name, int value) {
     const char *env = getenv(name);
     return env != NULL ? atoi(env) : value;
 }
 
 void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fix, int yield_sleep0, int fast_setjmp,
-                     int render_idle_fix) {
+                     int render_idle_fix, int fast_script_errors) {
     base_address = game_base_address;
     thread_qos_enabled = env_override("BO3MACFIX_THREADQOS", thread_qos) != 0;
     if (thread_qos_enabled)
@@ -124,6 +173,10 @@ void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fi
     }
     if (env_override("BO3MACFIX_FASTSETJMP", fast_setjmp) != 0)
         fast_setjmp_patch();
+    if (env_override("BO3MACFIX_FASTSCRIPTERRORS", fast_script_errors) != 0) {
+        install_hook_Scr_LoadSourceText((void *)(base_address + ADDR_Scr_LoadSourceText));
+        printf("script errors don't look for missing script sources\n");
+    }
 }
 
 // JobIdleFix / RenderIdleFix changed while the game runs: the pre-patched executable's instructions read their

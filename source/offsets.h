@@ -38,6 +38,7 @@
 #define ADDR_hks_pushnamedcclosure 0x1476385 // func
 #define ADDR_R_TrackTextureMemory 0x126dad2 // func - name is a guess
 #define ADDR_ASL_SleepEx 0x111752 // func - Aspyr's Sleep/SleepEx(milliseconds, alertable)
+#define ADDR_Scr_LoadSourceText 0x149347d // func - void (script *), loads its source text from scriptsrc.zip (the mod's zone_source/, else zone/) into script+0x28, for script error call stacks - name is a guess
 #define ADDR_Cocoa_HandleMouseEvent 0x148470 // func - SDL 2.0.7, relative mode motion from [NSEvent deltaX/deltaY]
 #define ADDR_SDL_GetMouse 0x1355b0 // func - SDL 2.0.7
 #define ADDR_SDL_SendMouseMotion 0x135870 // func - SDL 2.0.7 (window, mouseID, relative, x, y)
