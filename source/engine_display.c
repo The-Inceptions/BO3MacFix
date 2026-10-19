@@ -435,6 +435,11 @@ static bool apply_request(const DisplayDecision *d) {
     return true;
 }
 
+// The window size config.ini gave and the smaller one the launch made it to fit its display. The engine saves config.ini
+// at quit from the dvars' current values, so the fitted size would stay, also on a bigger display later.
+static int chosen_width, chosen_height, fitted_width, fitted_height;
+static atomic_bool fit_kept; // the window has the fitted size, as far as we know: no restart from the options since
+
 // Alt-tabbed out of fullscreen the engine is windowed (r_fullscreen 0, with the restore flag set) until it's active
 // again, when the restore sets r_fullscreen 1 (latched, so it still reads 0) and restarts at r_mode. A display change
 // applied meanwhile is applied as to a window: no new resolution, no fullscreen on the new display, and the old
@@ -469,6 +474,8 @@ install_hook_name(R_CheckVidRestart, void, void) {
     bool note = *(volatile bool *)(game_base_address + ADDR_R_VidRestartPending) &&
         !*(volatile bool *)(game_base_address + ADDR_R_RestoreFullscreen) && find_dvars();
     int fullscreen = note ? Dvar_GetInt(dvars.fullscreen) : 0;
+    if (note)
+        atomic_store(&fit_kept, false); // the options' size, if they set one, is the user's
     orig_R_CheckVidRestart();
     if (note && fullscreen != 0 && Dvar_GetInt(dvars.fullscreen) == fullscreen && current_mode(&width, &height))
         display_follow_note_choice(width, height, (int)lroundf(Dvar_GetFloat(dvars.refresh)));
@@ -492,10 +499,50 @@ install_hook_name(R_SetWndParms, void, void *parms) {
             printf("engine: launch: keeping config.ini's video settings (Monitor %d)\n", Dvar_GetInt(dvars.monitor));
         }
         int width = 0, height = 0;
-        if (Dvar_GetInt(dvars.fullscreen) == 0 && current_mode(&width, &height) && display_follow_launch_window(&width, &height))
-            set_mode(width, height);
+        if (Dvar_GetInt(dvars.fullscreen) == 0 && current_mode(&chosen_width, &chosen_height)) {
+            width = chosen_width;
+            height = chosen_height;
+            if (display_follow_launch_window(&width, &height)) {
+                set_mode(width, height);
+                fitted_width = width;
+                fitted_height = height;
+                atomic_store(&fit_kept, true);
+            }
+        }
     }
     orig_R_SetWndParms(parms);
+}
+
+#define HWProfile_Count 58
+#define HWProfile_Value_Size 0x40
+
+typedef struct {
+    const char *key;
+    uint32_t dvar_hash;
+    const char *comment;
+} HWProfileKey;
+_Static_assert(sizeof(HWProfileKey) == 0x18, "HWProfileKey must match the game's layout");
+
+// At quit the engine copies the dvars into the hardware profile here, then writes it to config.ini. If the window still
+// has the size the launch fitted it to (not one the user resized it to or picked in the options), save the size
+// config.ini had instead. Only at quit: the options read the profile too, and must see the window's real size.
+install_hook_name(SyncHardwareProfileWithDvars, void, bool make_latched_current) {
+    orig_SyncHardwareProfileWithDvars(make_latched_current);
+    int width = 0, height = 0;
+    if (__builtin_return_address(0) != (void *)(game_base_address + ADDR_HWProfile_QuitSyncReturn) ||
+        !atomic_load(&fit_kept) || !find_dvars() || !current_mode(&width, &height) || width != fitted_width ||
+        height != fitted_height)
+        return;
+    const HWProfileKey *keys = (const HWProfileKey *)(game_base_address + ADDR_HWProfile_Keys);
+    for (int i = 0; i < HWProfile_Count; i++) {
+        if (keys[i].dvar_hash != Hash_r_mode)
+            continue;
+        char *value = (char *)(game_base_address + ADDR_HWProfile_Values) + (size_t)i * HWProfile_Value_Size;
+        snprintf(value, HWProfile_Value_Size, "%dx%d", chosen_width, chosen_height);
+        printf("engine: quit: config.ini keeps WindowSize %s, not the %dx%d the window was fitted to at launch\n", value,
+               width, height);
+        return;
+    }
 }
 
 #pragma mark - API
@@ -571,5 +618,6 @@ void engine_display_init(void) {
     ASL_Window_UpdateClientRect = (void *)(base + ADDR_ASL_Window_UpdateClientRect);
     install_hook_R_CheckVidRestart((void *)(base + ADDR_R_CheckVidRestart));
     install_hook_R_SetWndParms((void *)(base + ADDR_R_SetWndParms));
+    install_hook_SyncHardwareProfileWithDvars((void *)(base + ADDR_SyncHardwareProfileWithDvars));
     printf("engine: the game's resolution and refresh rate follow its display\n");
 }

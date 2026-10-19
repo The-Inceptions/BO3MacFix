@@ -127,6 +127,10 @@
 // following display changes: the engine's video code (engine_display.c)
 #define ADDR_R_CheckVidRestart 0xdce17e // func - per frame on the engine's Main thread, applies pending video dvar changes
 #define ADDR_R_SetWndParms 0xdcca9a // func - fills the window parameters from r_fullscreen, r_monitor, r_mode, r_refreshRate
+#define ADDR_SyncHardwareProfileWithDvars 0xeb1beb // func - void (bool make_latched_current), the dvars' current values into the hardware profile's
+#define ADDR_HWProfile_QuitSyncReturn 0xeb1c80 // where the quit's call to it returns, before SaveHardwareProfile writes config.ini
+#define ADDR_HWProfile_Keys 0x3a78960 // 58 x { const char *key; uint32_t dvar_hash; const char *comment; }, 0x18 bytes each
+#define ADDR_HWProfile_Values 0x3a78ed0 // 58 x char[0x40], what SaveHardwareProfile writes to config.ini
 #define ADDR_R_EnumDisplayModes 0xdcc7c6 // func - bool (IDXGIAdapter *), fills the monitor table, only R_InitHardware calls it
 #define ADDR_R_EnterFullscreen 0xdccd55 // func - SetFullscreenState(TRUE, output r_monitor - 1) on the window thread (message 0x8044)
 #define ADDR_R_CheckVideoDvarsModified 0xdce0ad // func - vid_restart: marks a restart pending if a video dvar has a latched value
