@@ -439,6 +439,9 @@ static void test_items_text(void) {
     CHECK(!loadout_item_worth_saving("zombie_perk_bottle_jugg") && !loadout_item_worth_saving("zombie_bgb_grab") &&
           !loadout_item_worth_saving("zombie_knuckle_crack") && !loadout_item_worth_saving("zombie_builder") &&
           !loadout_item_worth_saving("minigun") && !loadout_item_worth_saving("bad name"));
+    CHECK(loadout_primary_is_item("zod_riotshield") && loadout_primary_is_item("hero_gravityspikes_melee") &&
+          loadout_primary_is_item("glaive_apothicon_0") && loadout_primary_is_item("lefthand_shield"));
+    CHECK(!loadout_primary_is_item("ray_gun_upgraded") && !loadout_primary_is_item("ar_standard_upgraded+reflex"));
 }
 
 static void test_restore(void) {

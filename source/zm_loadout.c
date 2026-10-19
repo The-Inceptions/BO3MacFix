@@ -700,6 +700,10 @@ bool loadout_item_worth_saving(const char *name) {
     return true;
 }
 
+bool loadout_primary_is_item(const char *name) {
+    return strstr(name, "shield") != NULL || strncmp(name, "hero_", 5) == 0 || strncmp(name, "glaive_", 7) == 0;
+}
+
 static bool format_ammo(const char *name, bool have_ammo, int clip, int stock, char *out, size_t out_size, size_t *used) {
     if (!have_ammo)
         return append(out, out_size, used, "%s%s::", *used > 0 ? "," : "", name);

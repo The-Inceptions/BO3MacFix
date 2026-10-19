@@ -241,7 +241,7 @@ static void read_item(uint64_t client, uint64_t weapon, const char *variant, int
         snprintf(name, sizeof(name), "%s", variant);
     loadout_item_t *item = &out->items[out->item_count];
     if (!loadout_weapon_name(name, weapon, names, Attachment_Count, item->name, sizeof(item->name)) ||
-        !loadout_item_worth_saving(item->name))
+        !loadout_item_worth_saving(item->name) || (type == 0 && !loadout_primary_is_item(item->name)))
         return;
     for (int i = 0; i < out->item_count; i++)
         if (strcmp(out->items[i].name, item->name) == 0)
@@ -274,7 +274,7 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
         if (!held_weapon(client, i, &weapon, &options, &acvi) || (weapon & Weapon_Index_Mask) == 0 ||
             !weapon_info(weapon, variant, sizeof(variant), &type))
             continue;
-        if (type != 0) {
+        if (type != 0 || loadout_primary_is_item(variant)) {
             read_item(client, weapon, variant, type, names, out);
             continue;
         }
@@ -335,8 +335,9 @@ static int op_primaries(void *context, uint64_t *out, int max) {
         uint64_t weapon = 0;
         char name[72];
         int type = -1;
+        // a shield or hero weapon is an item (Items), not a gun to take
         if (held_weapon((uint64_t)c->client, i, &weapon, NULL, NULL) && (weapon & Weapon_Index_Mask) != 0 &&
-            weapon_info(weapon, name, sizeof(name), &type) && type == 0)
+            weapon_info(weapon, name, sizeof(name), &type) && type == 0 && !loadout_primary_is_item(name))
             out[count++] = weapon;
     }
     return count;

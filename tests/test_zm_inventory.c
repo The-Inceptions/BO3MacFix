@@ -72,7 +72,8 @@ static const struct {
     int type;
 } weapons[] = { { 4, "pistol_standard_zm", 0 },       { 7, "frag_grenade_zm", 1 },
                 { 0x23, "ar_standard_upgraded_zm", 0 }, { 0xa5, "ray_gun_upgraded_zm", 0 },
-                { 8, "cymbal_monkey_zm", 1 },           { 9, "zombie_perk_bottle_jugg", 1 } };
+                { 8, "cymbal_monkey_zm", 1 },           { 9, "zombie_perk_bottle_jugg", 1 },
+                { 10, "zod_riotshield_zm", 0 } };
 #define Weapon_Count (sizeof(weapons) / sizeof(weapons[0]))
 _Alignas(8) static uint8_t variants[Weapon_Count][0x20], defs[Weapon_Count][0x80];
 static const uint64_t pistol = 4, frag = 7, ar_bare = 0x23, raygun = 0xa5;
@@ -363,6 +364,7 @@ static void test_loadout(void) {
     hold(2, raygun, 0x2a, 0);
     hold(3, frag, 0, 0);
     hold(4, 9, 0, 0); // a perk bottle in hand for a moment: not saved
+    hold(5, 10, 0, 0); // the shield, a primary to the game: an item
     set_ammo(ar, 25, 180);
     set_ammo(frag, 3, 0);
     set_in_hand(raygun);
@@ -384,8 +386,9 @@ static void test_loadout(void) {
           strcmp(loadout.guns[2].aat, "zm_aat_blast_furnace") == 0);
     CHECK(strcmp(loadout.perks[0], "specialty_armorvest") == 0 && strcmp(loadout.perks[1], "specialty_doubletap2") == 0);
     // the grenades with their count, the guns with their ammo
-    CHECK(loadout.item_count == 1 && strcmp(loadout.items[0].name, "frag_grenade_zm") == 0 &&
-          loadout.items[0].have_ammo && loadout.items[0].clip == 3 && loadout.items[0].stock == 0);
+    CHECK(loadout.item_count == 2 && strcmp(loadout.items[0].name, "frag_grenade_zm") == 0 &&
+          loadout.items[0].have_ammo && loadout.items[0].clip == 3 && loadout.items[0].stock == 0 &&
+          strcmp(loadout.items[1].name, "zod_riotshield_zm") == 0);
     CHECK(loadout.guns[1].have_ammo && loadout.guns[1].clip == 25 && loadout.guns[1].stock == 180);
     char text[1024];
     CHECK(loadout_format_guns(&loadout, text, sizeof(text)));

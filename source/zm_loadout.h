@@ -168,6 +168,9 @@ int loadout_vm_read_pap_levels(const loadout_vm_t *vm, const char *guid, loadout
 // whether a held weapon that isn't a gun is worth saving: not one the game hands out for a moment (a perk bottle, a
 // gum, the build hands, fists, a power-up's)
 bool loadout_item_worth_saving(const char *name);
+// whether a weapon the game counts as a primary is still an item: a shield or a hero weapon, which the scripts give
+// their own way (the shield's model and health, the hero weapon's slot)
+bool loadout_primary_is_item(const char *name);
 bool loadout_format_items(const loadout_t *loadout, char *out, size_t out_size);
 // loadout's items from an Items value (NULL or empty for none); false, leaving them as they were, if it's malformed
 bool loadout_parse_items(const char *value, loadout_t *loadout);
