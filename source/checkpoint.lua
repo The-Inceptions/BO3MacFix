@@ -236,10 +236,20 @@ local function current_options()
     return table.concat(lines, "\n")
 end
 
--- puts the player's own starting options back; true if a resume was set up
+-- puts the player's own starting options back; true if a resume was set up. A resume that can't be undone (a file
+-- that can't be read or written) stays on, and the log says so once.
+local told_stuck = false
 local function clear_resume(controller)
     local commands = bo3macfix.ClearCheckpoint(current_options())
-    if commands == nil then return false end
+    if commands == nil then
+        if not told_stuck and bo3macfix.CheckpointResume(0) ~= 0 then
+            told_stuck = true
+            log("checkpoint: couldn't undo the resume: BO3MacFix/checkpoint.ini or AAE's mutations file can't be " ..
+                "read or written. It stays on, and is tried again.")
+        end
+        return false
+    end
+    told_stuck = false
     run_commands(controller, commands)
     return true
 end
@@ -285,7 +295,10 @@ function bo3macfix.CheckpointRows(controller, message)
     end
     resume.run = function()
         if bo3macfix.CheckpointResume(0) ~= 0 then
-            clear_resume(controller)
+            if not clear_resume(controller) then
+                return message("Couldn't turn the resume off: BO3MacFix/checkpoint.ini or AAE's mutations file " ..
+                    "can't be read or written.")
+            end
             return message("Resume off: games start with your own AAE starting options.")
         end
         if in_match() then return message("Set the resume up from the main menu, before starting the game.") end
