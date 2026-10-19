@@ -427,6 +427,7 @@ static void update_stream_stall_recovery(int localClientNum) {
 
 install_hook_name(CL_SetCGameTime, void, int localClientNum) {
     update_stream_stall_recovery(localClientNum);
+    display_testhooks_frame(localClientNum);
     orig_CL_SetCGameTime(localClientNum);
 }
 
