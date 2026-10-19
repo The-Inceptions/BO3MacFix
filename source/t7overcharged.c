@@ -194,7 +194,14 @@ void t7o_push_init(lua_State *s, const char *dll_path) {
 // The game's isprofilebuild ignores its parameters and returns 0, so on the Mac AAE's client scripts got 0 for the view
 // origin and indexed it every frame (its HUD movement and the view code its smoke trails and zombie health bars use):
 // about 2,000 script errors a second in a match, each one a call stack in console_mp.log. We answer hash and the
-// natives below; any other call still gets 0, and is logged once.
+// natives below; any other call still gets 0, and is logged once as missing.
+//
+// AAE's other three, startweaponanim, playanim and anim_event, play viewmodel animations (inferred from aae_core.csc:
+// the server sends "firstraise", "reloadempty" and "lowready" on its "deadshot_keyline" client system, and the client
+// starts the weapon's animation and its event; a debug loop also plays any set in the anim2 and anim3 dvars). The real
+// DLL's code isn't in the mod, and the game has no script call for a viewmodel animation, so they stay no-ops here:
+// they get the 0 the game's isprofilebuild gave them, without the missing line. The callers start them as threads or
+// statements and don't use the result (inferred from the import flags), so the weapon just keeps its usual animation.
 #define Hash_Native 0x22ea46c7u
 
 typedef struct {
@@ -241,8 +248,13 @@ static uint32_t script_hash(const char *name) {
 }
 
 // the natives, by hash, and whether each was logged yet
-typedef enum { Native_GetViewOrigin, Native_GetViewAngles, Native_Count } native_t;
-static const char *const native_names[Native_Count] = { "getvieworigin", "getviewang" };
+typedef enum {
+    Native_GetViewOrigin, Native_GetViewAngles, // vectors from the local client's cg_t
+    Native_StartWeaponAnim, Native_PlayAnim, Native_AnimEvent, // no-ops, 0
+    Native_Count
+} native_t;
+static const char *const native_names[Native_Count] = { "getvieworigin", "getviewang", "startweaponanim", "playanim",
+                                                        "anim_event" };
 static uint32_t native_hashes[Native_Count];
 static bool native_logged[Native_Count];
 
@@ -304,12 +316,18 @@ static bool call_native(int inst, uint32_t hash) {
     for (int native = 0; native < Native_Count; native++) {
         if (hash != native_hashes[native])
             continue;
-        const uint8_t *cg = local_client_cg(inst);
-        if (cg == NULL)
+        bool no_op = native >= Native_StartWeaponAnim;
+        const uint8_t *cg = no_op ? NULL : local_client_cg(inst);
+        if (!no_op && cg == NULL)
             return false;
         if (!native_logged[native]) {
             native_logged[native] = true;
-            printf("T7Overcharged: scripts use %s\n", native_names[native]);
+            printf("T7Overcharged: scripts use %s%s\n", native_names[native],
+                   no_op ? " (no weapon animations here, they get 0)" : "");
+        }
+        if (no_op) {
+            Scr_AddInt(inst, 0);
+            return true;
         }
         Scr_AddVector(inst, (const float *)(cg + (native == Native_GetViewOrigin ? Cg_ViewOrigin : Cg_ViewAngles)));
         return true;
