@@ -469,13 +469,20 @@ static bool restore_command(uint64_t return_address) {
 // the game itself runs script callbacks
 static void run_restore(void *ent) {
     os_unfair_lock_lock(&restore_lock);
-    bool pending = restore_until != 0 && now_ms() < restore_until, pap_test = restore_pap_test;
+    bool set_up = restore_until != 0, pending = set_up && now_ms() < restore_until, pap_test = restore_pap_test;
     static loadout_t plan;
     plan = restore_plan;
     restore_until = 0;
     os_unfair_lock_unlock(&restore_lock);
     uint64_t first = entities(), client = 0;
     int health = 0;
+    // A command with nothing set up (Lua sent it again while the game held the first back, and the first has run
+    // since, often in the same frame) keeps the result Lua hasn't read: "nothing set up" would have it set the restore
+    // up and send it once more, and restore again over what the player has by then.
+    if (!set_up) {
+        printf("BO3MacFix: zm inventory: a restore command with nothing set up (one sent again), ignored\n");
+        return;
+    }
     if (!pending)
         return finish_restore("nothing set up (or set up too long ago)");
     // the local player, the first entity in a game hosted here, as for the give and take commands let through
