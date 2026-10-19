@@ -583,7 +583,9 @@ local function poll(controller)
     if match.restoring_at ~= nil then
         local result = call(bo3macfix.CheckpointRestoreResult)
         local expired = type(result) == "string" and string.find(result, "^nothing set up") ~= nil
-        if (expired or match.polls > match.restoring_at + RESTORE_WAIT_POLLS) and loadout_pending == "resume" and
+        -- (an answer that came in just as the wait ran out is the answer: sending again would restore twice)
+        if (expired or (result == nil and match.polls > match.restoring_at + RESTORE_WAIT_POLLS)) and
+            loadout_pending == "resume" and
             (match.restore_tries or 1) < 3 then
             local command = call(bo3macfix.CheckpointRestoreLoadout)
             if type(command) == "string" and command ~= "" then

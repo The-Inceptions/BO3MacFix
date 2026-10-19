@@ -421,6 +421,20 @@ check(restore_plans == 2, "sent again: " .. restore_plans)
 restore_result = "took 1, gave 1 guns (0 held already), 0 ammo types, 0 perks (0 had already), 0 failed"
 polls(1)
 check(string.find(notices[#notices - 1] or notices[#notices] or "", "Guns back", 1, true) ~= nil, "then restored")
+-- an answer that comes in on the poll the wait runs out is taken, not sent again over
+leave_match()
+polls(1)
+resume_row.run()
+enter_match("zm_theater")
+restore_plans, notices = 0, {}
+for _ = 1, 30 do if restore_plans == 0 then polls(1) end end
+check(restore_plans == 1, "the loadout's command sent once")
+polls(62)
+check(restore_plans == 1, "still waiting: " .. restore_plans)
+restore_result = "took 1, gave 1 guns (0 held already), 0 ammo types, 0 perks (0 had already), 0 failed"
+polls(1)
+check(restore_plans == 1 and string.find(table.concat(notices, "\n"), "Guns back", 1, true) ~= nil,
+    "the late answer taken: " .. restore_plans)
 
 -- quitting a resumed game before the loadout is back keeps the saved one
 leave_match()
