@@ -17,7 +17,8 @@
 
 // what checkpoint_save takes from the settings page; the rest of checkpoint.ini is ours
 static const char *const saved_keys[] = { "Map",       "Round", "Points",    "Perks", "Weapons", "Equipment",
-                                          "Held",      "Character", "Stats", "Guns",  "GunInHand", "PerkList" };
+                                          "Held",      "Character", "Stats", "Guns",  "GunInHand", "PerkList",
+                                          "PapLevels" };
 // the ones that are comma-separated names: perks, and weapons that go into give and take commands
 static const char *const list_keys[] = { "Perks", "Weapons", "Equipment", "PerkList" };
 
@@ -378,7 +379,8 @@ bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long no
     static loadout_t loadout;
     const char *in_hand = store_get(&given, "GunInHand");
     if ((in_hand != NULL && in_hand[0] != '\0' && !valid_name(in_hand, strlen(in_hand))) ||
-        !loadout_parse(store_get(&given, "Guns"), in_hand, store_get(&given, "PerkList"), &loadout))
+        !loadout_parse(store_get(&given, "Guns"), in_hand, store_get(&given, "PerkList"), &loadout) ||
+        !loadout_parse_pap_levels(store_get(&given, "PapLevels"), &loadout))
         return false;
     // a key this save doesn't have goes, so nothing from the last game stays with this one
     for (size_t i = 0; i < sizeof(saved_keys) / sizeof(saved_keys[0]); i++)

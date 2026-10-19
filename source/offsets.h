@@ -223,5 +223,6 @@
 #define ADDR_scrClassMap 0x20fc330 // a class table pointer per script instance, 0x20 bytes per class: the class's object at +4, per client at +0x18 (Scr_GetEntityId at 0x12f676b) - name is a guess
 #define ADDR_scrDefaultFunction 0x21011a8 // const char *: the do-nothing code Scr_GetFunctionHandle gives a server script that lacks the function - name is a guess
 #define ADDR_scrStringTable 0x150e6048 // char *: 0x1c bytes per string id, its text at +4 (SL_ConvertToString at 0x11b6940) - name is a guess
+#define scrVarPub_LevelId 0x24 // uint32_t in scrVarPub (ADDR_scrVarPub, 0x78 bytes per instance): the level object's id (GetLevel's opcode handler at 0x127685c pushes it)
 // -- end zm inventory
 // -- END OFFSETS

@@ -310,8 +310,20 @@ static void test_loadout(void) {
     CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_zm;quit:0:0:\n", 4));
     CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nPerkList=specialty armorvest\n", 4));
     CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGunInHand=ray gun\n", 4));
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_zm:0:0:\nPapLevels=ray_gun_zm:9\n", 4));
     checkpoint_read(&paths, text, sizeof(text));
     CHECK(strstr(text, "Saved=3\n") != NULL); // the last good save stays
+    CHECK(strstr(text, "PapLevels") == NULL);
+    // AAE's repack levels go with their guns, and a save without them drops the last one's
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:,pistol_m1911:0:0:\n"
+                                  "PapLevels=ray_gun_upgraded:4\n", 5));
+    CHECK(checkpoint_loadout(&paths, &loadout) && loadout.gun_count == 2);
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "PapLevels=ray_gun_upgraded:4\n") != NULL);
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\n", 6));
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "PapLevels") == NULL);
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nPerks=juggernaut\n", 3)); // as the test below expects
     // the longest a Guns line gets: four guns with eight attachments each fit in a value
     char long_guns[1024] = "";
     for (int i = 0; i < 4; i++)

@@ -109,10 +109,11 @@ static int lua_checkpoint_allow_cheats(lua_State *s) {
 }
 
 // CheckpointLoadout(): the local player's full loadout as "Guns=...\nGunInHand=...\nPerkList=..." lines (zm_loadout.h),
+// and "\nPapLevels=..." when a gun has an AAE repack level,
 // nil without a game hosted here
 static int lua_checkpoint_loadout(lua_State *s) {
     static loadout_t loadout;
-    static char guns[1024], perks[1024], lines[2304];
+    static char guns[1024], perks[1024], pap[1024], lines[3392];
     char note[256];
     if (!zm_inventory_read_loadout(&loadout, note, sizeof(note))) {
         hks_push_nil(s);
@@ -120,13 +121,14 @@ static int lua_checkpoint_loadout(lua_State *s) {
     }
     if (note[0] != '\0')
         printf("BO3MacFix: checkpoint: loadout: %s\n", note);
-    if (!loadout_format_guns(&loadout, guns, sizeof(guns)) || !loadout_format_perks(&loadout, perks, sizeof(perks))) {
+    if (!loadout_format_guns(&loadout, guns, sizeof(guns)) || !loadout_format_perks(&loadout, perks, sizeof(perks)) ||
+        !loadout_format_pap_levels(&loadout, pap, sizeof(pap))) {
         printf("BO3MacFix: checkpoint: the loadout doesn't fit in checkpoint.ini\n");
         hks_push_nil(s);
         return 1;
     }
-    snprintf(lines, sizeof(lines), "Guns=%s\nGunInHand=%s\nPerkList=%s", guns,
-             loadout.held >= 0 ? loadout.guns[loadout.held].name : "", perks);
+    snprintf(lines, sizeof(lines), "Guns=%s\nGunInHand=%s\nPerkList=%s%s%s", guns,
+             loadout.held >= 0 ? loadout.guns[loadout.held].name : "", perks, pap[0] != '\0' ? "\nPapLevels=" : "", pap);
     hks_push_string(s, lines);
     return 1;
 }

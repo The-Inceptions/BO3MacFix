@@ -151,7 +151,7 @@ static bool fake_read(uint64_t address, void *out, size_t size) {
 
 static loadout_vm_t fake_loadout_vm(void) {
     return (loadout_vm_t){ fake_read, Fake_Base + FakeVm_Glob, Fake_Base + FakeVm_ClassMap,
-                           Fake_Base + FakeVm_Strings };
+                           Fake_Base + FakeVm_Strings, 0 };
 }
 
 static uint32_t player, aat_array, perks_array;
@@ -354,12 +354,75 @@ static void test_restore(void) {
     CHECK(strcmp(calls, "") == 0 && result.taken == 0);
 }
 
+// AAE's Repack-a-Punch levels: PapLevels text, and level.pap_lvup[guid + root name] read from the VM
+static void test_pap_levels(void) {
+    loadout_t loadout;
+    char text[256];
+    CHECK(loadout_parse("ar_standard_upgraded+extclip+reflex:84:0:zm_aat_dead_wire,ray_gun_upgraded:84:0:,"
+                        "pistol_m1911:0:0:", "ray_gun_upgraded", "", &loadout));
+    CHECK(loadout_format_pap_levels(&loadout, text, sizeof(text)) && strcmp(text, "") == 0);
+    CHECK(loadout_parse_pap_levels(NULL, &loadout) && loadout_parse_pap_levels("", &loadout));
+    CHECK(loadout_parse_pap_levels("ar_standard_upgraded+extclip+reflex:3,ray_gun_upgraded:5,not_held:2", &loadout));
+    CHECK(loadout.guns[0].pap_level == 3 && loadout.guns[1].pap_level == 5 && loadout.guns[2].pap_level == 0);
+    CHECK(loadout_format_pap_levels(&loadout, text, sizeof(text)) &&
+          strcmp(text, "ar_standard_upgraded+extclip+reflex:3,ray_gun_upgraded:5") == 0);
+    CHECK(!loadout_format_pap_levels(&loadout, text, 20) && text[0] == '\0'); // doesn't fit
+    const char *bad[] = { "ray_gun_upgraded:6", "ray_gun_upgraded:0", "ray_gun_upgraded:", ":3", "ray_gun_upgraded",
+                          "ray_gun_upgraded:3,", "ray_gun_upgraded:33", "ray gun:3", "ray_gun_upgraded:3,,a:1" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        CHECK(!loadout_parse_pap_levels(bad[i], &loadout));
+        CHECK(loadout.guns[1].pap_level == 5); // left as it was
+    }
+
+    // the VM: one player (guid 12345) with two levels, another player's entry, and things that aren't levels
+    fake_vm_init(&vm, memory, Fake_Base);
+    loadout_vm_t reader = fake_loadout_vm();
+    loadout_t read;
+    CHECK(loadout_parse("ar_standard_upgraded+extclip+reflex:84:0:,ray_gun_upgraded:84:0:,pistol_m1911:0:0:", NULL,
+                        "", &read));
+    CHECK(loadout_vm_read_pap_levels(&reader, NULL, &read) == -1); // no level object known
+    reader.level_id = Fake_Base + 0x110;
+    CHECK(loadout_vm_level(&reader) == 0);
+    uint32_t level = fake_vm_object(&vm, 0x14);
+    fake_vm_put32(&vm, 0x110, level);
+    CHECK(loadout_vm_level(&reader) == level);
+    CHECK(loadout_vm_read_pap_levels(&reader, NULL, &read) == -1); // pap_lvup undefined: nothing PaP'd yet
+    uint32_t player = fake_vm_player(&vm, 0);
+    char guid[32];
+    CHECK(!loadout_vm_guid(&reader, player, guid, sizeof(guid)));
+    fake_vm_child(&vm, player, loadout_script_hash("guid"), 4, 12345, 7);
+    CHECK(loadout_vm_guid(&reader, player, guid, sizeof(guid)) && strcmp(guid, "12345") == 0);
+    CHECK(!loadout_vm_guid(&reader, player, guid, 5)); // doesn't fit
+    uint32_t levels = fake_vm_array_field(&vm, level, "pap_lvup");
+    fake_vm_child(&vm, levels, fake_vm_string(&vm, "12345ar_standard_upgraded"), 3, 3, 7);
+    fake_vm_child(&vm, levels, fake_vm_string(&vm, "12345ray_gun_upgraded"), 3, 1, 7);
+    fake_vm_child(&vm, levels, fake_vm_string(&vm, "12345pistol_m1911"), 3, 9, 7);         // not a level
+    fake_vm_child(&vm, levels, fake_vm_string(&vm, "12345pistol_m1911x"), 3, 2, 7);        // another gun
+    fake_vm_child(&vm, levels, 7, 1, 2, 7);                                                // a number key
+    CHECK(loadout_vm_read_pap_levels(&reader, "12345", &read) == 2);
+    CHECK(read.guns[0].pap_level == 3 && read.guns[1].pap_level == 1 && read.guns[2].pap_level == 0);
+    CHECK(loadout_vm_read_pap_levels(&reader, NULL, &read) == 2); // one guid in the keys: theirs
+    CHECK(read.guns[0].pap_level == 3 && read.guns[1].pap_level == 1);
+    CHECK(loadout_vm_read_pap_levels(&reader, "999", &read) == 0);
+    CHECK(read.guns[0].pap_level == 0 && read.guns[1].pap_level == 0);
+    // another player's level for the same gun: found by the guid, and without it nothing (it can't tell whose)
+    fake_vm_child(&vm, levels, fake_vm_string(&vm, "777ar_standard_upgraded"), 3, 5, 7);
+    CHECK(loadout_vm_read_pap_levels(&reader, "12345", &read) == 2 && read.guns[0].pap_level == 3);
+    CHECK(loadout_vm_read_pap_levels(&reader, "777", &read) == 1 && read.guns[0].pap_level == 5);
+    CHECK(loadout_vm_read_pap_levels(&reader, NULL, &read) == 0 && read.guns[0].pap_level == 0);
+    // a string guid
+    uint32_t other = fake_vm_player(&vm, 1);
+    fake_vm_child(&vm, other, loadout_script_hash("guid"), 4, fake_vm_string(&vm, "abc"), 2);
+    CHECK(loadout_vm_guid(&reader, other, guid, sizeof(guid)) && strcmp(guid, "abc") == 0);
+}
+
 int main(void) {
     test_hash();
     test_names();
     test_text();
     test_vm();
     test_restore();
+    test_pap_levels();
     if (failures == 0)
         printf("test_zm_loadout: all passed\n");
     return failures == 0 ? 0 : 1;

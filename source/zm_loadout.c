@@ -485,3 +485,156 @@ void loadout_result_text(const loadout_result_t *result, char *out, size_t out_s
              "failed%s%s", result->taken, result->given, result->kept, result->aats, result->perks, result->perks_had,
              result->failed, result->failed > 0 ? ": " : "", result->failures);
 }
+
+// ---- AAE's Repack-a-Punch levels
+
+#define Var_Int 7
+#define Name_String 3
+#define Pap_Key_Size (Loadout_Name_Size + 32) // a guid and a root weapon name
+
+// the length of a gun name's root weapon name (before its attachments)
+static size_t root_len(const char *name) {
+    const char *plus = strchr(name, '+');
+    return plus != NULL ? (size_t)(plus - name) : strlen(name);
+}
+
+bool loadout_format_pap_levels(const loadout_t *loadout, char *out, size_t out_size) {
+    if (out_size == 0)
+        return false;
+    out[0] = '\0';
+    size_t used = 0;
+    for (int i = 0; i < loadout->gun_count; i++) {
+        const loadout_gun_t *gun = &loadout->guns[i];
+        if (gun->pap_level <= 0)
+            continue;
+        if (gun->pap_level > Loadout_Max_Pap_Level || !loadout_valid_name(gun->name) ||
+            !append(out, out_size, &used, "%s%s:%d", used > 0 ? "," : "", gun->name, gun->pap_level)) {
+            out[0] = '\0';
+            return false;
+        }
+    }
+    return true;
+}
+
+bool loadout_parse_pap_levels(const char *value, loadout_t *loadout) {
+    int levels[Loadout_Max_Guns];
+    for (int i = 0; i < loadout->gun_count; i++)
+        levels[i] = loadout->guns[i].pap_level;
+    for (const char *start = value; start != NULL && *start != '\0';) {
+        const char *end = strchr(start, ',');
+        if (end == NULL)
+            end = start + strlen(start);
+        const char *colon = memchr(start, ':', (size_t)(end - start));
+        // name:level, the level one digit
+        if (colon == NULL || colon == start || end - colon != 2 || colon[1] < '1' ||
+            colon[1] > '0' + Loadout_Max_Pap_Level || !valid_name_len(start, (size_t)(colon - start), true))
+            return false;
+        for (int i = 0; i < loadout->gun_count; i++)
+            if (strlen(loadout->guns[i].name) == (size_t)(colon - start) &&
+                memcmp(loadout->guns[i].name, start, (size_t)(colon - start)) == 0)
+                levels[i] = colon[1] - '0';
+        start = *end == ',' ? end + 1 : end;
+        if (*end == ',' && *start == '\0')
+            return false;
+    }
+    for (int i = 0; i < loadout->gun_count; i++)
+        loadout->guns[i].pap_level = levels[i];
+    return true;
+}
+
+uint32_t loadout_vm_level(const loadout_vm_t *vm) {
+    uint32_t id = 0;
+    vm_var_t object;
+    if (vm->level_id == 0 || !vm_read(vm, vm->level_id, &id, sizeof(id)) || !vm_var(vm, id, &object))
+        return 0;
+    return id;
+}
+
+// the text of string id: printable characters, at least one, shorter than out_size
+static bool vm_text(const loadout_vm_t *vm, uint32_t id, char *out, size_t out_size) {
+    uint64_t table = 0;
+    if (id == 0 || out_size == 0 || !vm_read(vm, vm->strings, &table, sizeof(table)) || table == 0)
+        return false;
+    uint64_t text = table + (uint64_t)id * String_Size + String_Text;
+    for (size_t len = 0; len < out_size; len++) {
+        char c;
+        if (!vm_read(vm, text + len, &c, 1))
+            return false;
+        out[len] = c;
+        if (c == '\0')
+            return len > 0;
+        if (c <= ' ' || c > '~')
+            return false;
+    }
+    return false;
+}
+
+bool loadout_vm_guid(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size) {
+    vm_var_t var;
+    uint32_t id = loadout_vm_find(vm, entity, loadout_script_hash("guid"));
+    if (out_size == 0 || id == 0 || !vm_var(vm, id, &var))
+        return false;
+    if (var.type == Var_Int) {
+        int len = snprintf(out, out_size, "%d", (int32_t)(uint32_t)var.value);
+        return len > 0 && (size_t)len < out_size;
+    }
+    return var.type == Var_String && vm_text(vm, (uint32_t)var.value, out, out_size);
+}
+
+// whether text is a GSC int's decimal
+static bool decimal(const char *text, size_t len) {
+    size_t i = len > 0 && text[0] == '-' ? 1 : 0;
+    if (i == len)
+        return false;
+    for (; i < len; i++)
+        if (!isdigit((unsigned char)text[i]))
+            return false;
+    return true;
+}
+
+int loadout_vm_read_pap_levels(const loadout_vm_t *vm, const char *guid, loadout_t *loadout) {
+    uint32_t array = loadout_vm_array_field(vm, loadout_vm_level(vm), "pap_lvup");
+    vm_var_t object;
+    if (array == 0 || !vm_var(vm, array, &object))
+        return -1;
+    int levels[Loadout_Max_Guns] = { 0 };
+    char prefix[Pap_Key_Size] = "";
+    bool mixed = false;
+    uint32_t id = (uint32_t)object.value;
+    for (int steps = 0; id != 0 && steps < Max_Children; steps++) {
+        vm_var_t child;
+        char key[Pap_Key_Size];
+        if (!vm_var(vm, id, &child) || child.parent != array)
+            break;
+        id = child.next;
+        int level = (int32_t)(uint32_t)child.value;
+        if ((child.name_type & 7) != Name_String || child.type != Var_Int || level < 1 ||
+            level > Loadout_Max_Pap_Level || !vm_text(vm, (uint32_t)child.key, key, sizeof(key)))
+            continue;
+        size_t key_len = strlen(key);
+        for (int i = 0; i < loadout->gun_count; i++) {
+            const char *name = loadout->guns[i].name;
+            size_t len = root_len(name);
+            if (key_len <= len || memcmp(key + key_len - len, name, len) != 0)
+                continue;
+            size_t prefix_len = key_len - len;
+            if (guid != NULL) {
+                if (strlen(guid) == prefix_len && memcmp(key, guid, prefix_len) == 0)
+                    levels[i] = level;
+            } else if (decimal(key, prefix_len)) {
+                // without the guid, every gun's key has to have the same one (another player's would differ)
+                if (prefix[0] == '\0')
+                    snprintf(prefix, sizeof(prefix), "%.*s", (int)prefix_len, key);
+                else if (strlen(prefix) != prefix_len || memcmp(prefix, key, prefix_len) != 0)
+                    mixed = true;
+                levels[i] = level;
+            }
+        }
+    }
+    int count = 0;
+    for (int i = 0; i < loadout->gun_count; i++) {
+        loadout->guns[i].pap_level = mixed ? 0 : levels[i];
+        count += loadout->guns[i].pap_level > 0;
+    }
+    return count;
+}

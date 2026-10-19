@@ -23,6 +23,7 @@ typedef struct {
     uint64_t options;             // the weapon options: camo in the low byte (CalcWeaponOptions)
     uint32_t acvi;                // the attachments' cosmetic variants
     char aat[Loadout_Short_Size]; // like "zm_aat_blast_furnace", "" for none
+    int pap_level;                // AAE's Repack-a-Punch level (1 to 5), 0 for none
 } loadout_gun_t;
 
 typedef struct {
@@ -74,6 +75,7 @@ typedef struct {
     uint64_t var_glob;   // the script instance's variable globals (0x100 bytes: hash buckets, then the variables)
     uint64_t class_map;  // where the instance's class table pointer is
     uint64_t strings;    // where the string table pointer is
+    uint64_t level_id;   // where the level object's id is (a uint32_t), 0 if unknown
 } loadout_vm_t;
 
 // the script object of entity entnum (a player), 0 if it has none
@@ -120,3 +122,23 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
 
 // one line for the log: what a restore did
 void loadout_result_text(const loadout_result_t *result, char *out, size_t out_size);
+
+// ---- AAE's Repack-a-Punch (option tfoption_dpap): tfoption.gsc keeps each gun's level in a level array,
+// level.pap_lvup[self.guid + rootweapon.name] = 1 to 5 (1 at the first Pack-a-Punch, +1 at each repack after it)
+
+#define Loadout_Max_Pap_Level 5
+
+// checkpoint.ini's "PapLevels = name:level,...", the guns' names as Guns has them, only the guns that have one
+bool loadout_format_pap_levels(const loadout_t *loadout, char *out, size_t out_size);
+// sets loadout's guns' levels from a PapLevels value (NULL or empty for none); a name loadout doesn't have is left
+// out. False, leaving the levels as they were, if it's malformed.
+bool loadout_parse_pap_levels(const char *value, loadout_t *loadout);
+
+// the level object, 0 if it can't be read
+uint32_t loadout_vm_level(const loadout_vm_t *vm);
+// entity's guid field as GSC writes it when it adds it to a string (an int in decimal, or a string); false if none
+bool loadout_vm_guid(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size);
+// each gun's level from level.pap_lvup: the key is guid and the gun's root name (its name before any "+"). With guid
+// NULL (unknown), a key that is a number and the root name, if every such key has the same number. The number of guns
+// given a level, -1 if level.pap_lvup can't be read (it's undefined until a gun is Pack-a-Punched with the option on).
+int loadout_vm_read_pap_levels(const loadout_vm_t *vm, const char *guid, loadout_t *loadout);

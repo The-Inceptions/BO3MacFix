@@ -170,7 +170,8 @@ static void (*Scr_AddInt)(int inst, int value);
 // the server script VM, read through safe_read
 static loadout_vm_t server_vm(void) {
     return (loadout_vm_t){ safe_read, base + ADDR_scrVarGlob + Script_Server * 0x100,
-                           base + ADDR_scrClassMap + Script_Server * sizeof(uint64_t), base + ADDR_scrStringTable };
+                           base + ADDR_scrClassMap + Script_Server * sizeof(uint64_t), base + ADDR_scrStringTable,
+                           base + ADDR_scrVarPub + Script_Server * 0x78 + scrVarPub_LevelId };
 }
 
 // the game's attachment names, by the ids a Weapon's attachment fields hold; NULL where one can't be read
@@ -249,6 +250,10 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
             out->held = out->gun_count;
         out->gun_count++;
     }
+    // AAE's Repack-a-Punch levels (level.pap_lvup, keyed by self.guid and the root weapon's name)
+    char guid[32];
+    bool have_guid = player != 0 && loadout_vm_guid(&vm, player, guid, sizeof(guid));
+    int pap_count = loadout_vm_read_pap_levels(&vm, have_guid ? guid : NULL, out);
     uint32_t perks = player != 0 ? loadout_vm_array_field(&vm, player, "perks_active") : 0;
     int perk_count = perks != 0 ? loadout_vm_read_strings(&vm, perks, out->perks, Loadout_Max_Perks) : -1;
     out->perk_count = perk_count > 0 ? perk_count : 0;
@@ -257,6 +262,8 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
                  aat_count < 0 ? "self.aat unreadable; " : "");
     if (note_size > 0 && player != 0 && perks == 0)
         snprintf(note + strlen(note), note_size - strlen(note), "no self.perks_active; ");
+    if (note_size > 0 && pap_count > 0 && !have_guid)
+        snprintf(note + strlen(note), note_size - strlen(note), "repack levels matched without self.guid; ");
     return true;
 }
 
