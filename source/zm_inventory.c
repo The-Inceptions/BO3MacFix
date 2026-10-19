@@ -473,7 +473,8 @@ static bool op_holds(void *context, uint64_t weapon) {
 
 // zm_weapons::weapon_give(weapon, is_upgrade 0, magic_box 0, nosound 1, b_switch_weapon 0): the zombies scripts' own
 // give, which puts a grenade, mine, hero or melee weapon in its slot (zm_utility's set_player_*, the old one taken)
-// and gives equipment like the shield through zm_equipment::give
+// and gives equipment like the shield through zm_equipment::give. True once the give ran: equipment is held only a
+// moment later (live: Shadows of Evil's shield wasn't held yet right after, and was by the next save).
 static bool op_give_item(void *context, uint64_t weapon) {
     restore_context_t *c = context;
     script_handle_t handle;
@@ -488,7 +489,7 @@ static bool op_give_item(void *context, uint64_t weapon) {
     Scr_AddInt(Script_Server, 0);
     Scr_AddWeapon(Script_Server, weapon, client_num);
     Scr_FreeThread(Script_Server, Scr_ExecEntThread(c->ent, 5, handle));
-    return holds((uint64_t)c->client, weapon);
+    return true;
 }
 
 // what SetWeaponAmmoClip and SetWeaponAmmoStock do: clamped to the clip size and the most stock (a clip-only

@@ -498,10 +498,13 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
             note_failure(result, "couldn't give", item->name);
             continue;
         }
-        if (item->have_ammo && (ops->set_ammo == NULL || !ops->set_ammo(context, weapon, item->clip, item->stock)))
-            note_failure(result, "no ammo for", item->name);
-        else if (item->have_ammo)
+        // equipment (a shield) comes a moment after the scripts' give: its count then is the scripts' own
+        if (!item->have_ammo || (ops->holds != NULL && !ops->holds(context, weapon)))
+            continue;
+        if (ops->set_ammo != NULL && ops->set_ammo(context, weapon, item->clip, item->stock))
             result->ammo++;
+        else
+            note_failure(result, "no ammo for", item->name);
     }
     // the guns' clip and stock, which came back as their start ammo
     for (int i = 0; i < saved->gun_count; i++) {
