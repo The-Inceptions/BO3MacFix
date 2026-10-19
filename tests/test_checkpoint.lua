@@ -218,6 +218,26 @@ check(state == 3 and #plans == 0, "no weapons on another map")
 leave_match()
 polls(1)
 
+-- a resumed game saved before its guns are back (quitting at once) keeps the saved guns, not the starting pistol
+check(store.Map == "zm_theater" and store.Weapons == "ray_gun_upgraded,pistol_burst", "the saved guns before")
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+polls(1)
+check(state == 2, "a resumed game, its guns not back yet")
+local before = #saves
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == before + 1 and saves[#saves].Weapons == "ray_gun_upgraded,pistol_burst" and
+    saves[#saves].Equipment == "frag_grenade,knife", "quitting keeps the saved guns: " .. tostring(saves[#saves].Weapons))
+-- likewise when no weapons can be read (a save without them would drop the saved ones)
+weapons = nil
+save_row.run()
+check(#saves == before + 2 and saves[#saves].Weapons == "ray_gun_upgraded,pistol_burst", "and without the weapons: " ..
+    tostring(saves[#saves].Weapons))
+leave_match()
+polls(1)
+check(state == 0, "cleared after that game")
+
 -- ---- quitting saves
 enter_match("zm_theater")
 models["controller0.gameScore.roundsPlayed"] = 16

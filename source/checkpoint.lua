@@ -185,6 +185,15 @@ local function collect(controller)
     local character = identity ~= nil and not OTHER_CREW[map] and CHARACTERS[identity] or nil
     if character == nil and icon ~= nil and tostring(icon) ~= "" then character = tostring(icon) end
     local primaries, others, raw = weapons_now()
+    -- a resumed game whose saved guns aren't back yet holds the starting ones, or none that can be read: a save then
+    -- keeps the saved guns (quitting at once would otherwise swap them for the starting pistol)
+    if call(bo3macfix.CheckpointResume, 0) == 2 then
+        local checkpoint = read_checkpoint()
+        if checkpoint.Map == map and checkpoint.Weapons ~= nil and checkpoint.Weapons ~= "" then
+            primaries, others = split(checkpoint.Weapons), split(checkpoint.Equipment)
+            raw = "the saved ones, not given back yet (holding " .. tostring(raw) .. ")"
+        end
+    end
     local lines = { "Map=" .. clean(map), "Round=" .. tostring(math.floor(round)),
         "Points=" .. tostring(math.floor(points)), "Perks=" .. table.concat(perks, ","),
         "Held=" .. clean(held), "Character=" .. clean(character), "Stats=" .. clean(table.concat(stats, ", ")) }
