@@ -7,3 +7,5 @@ bool t7o_is_overcharged_dll(const char *path);
 void t7o_push_init(lua_State *s, const char *dll_path);
 // AAEOnline: lets the mod's Axios fetch its version notes and the weather (GET only, a few public hosts)
 void t7o_set_online(int enabled);
+// T7Overcharged's script natives (GSC/CSC calls through isprofilebuild), see t7overcharged.c
+void t7o_install_script_functions(void);

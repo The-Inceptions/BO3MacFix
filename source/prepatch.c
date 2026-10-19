@@ -66,6 +66,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_DB_GetStreamFraction, Push_R15 },
     { ADDR_dwInstantMessageDispatch, Push_R15 },
     { ADDR_GPad_GetGamepadType, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xC7 } }, // ...; movsxd rax, edi
+    { ADDR_GScr_IsProfileBuild, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xF6 } }, // ...; xor esi, esi
     { ADDR_HKAI_InitMapData, Push_R15 },
     { ADDR_hks_load_dll, Push_R15 },
     { ADDR_hksf_fopen_internal, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xC0 } }, // ...; xor eax, eax

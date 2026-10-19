@@ -1017,6 +1017,8 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_CSteamAPIContext_Init((void *)(game_base_address + ADDR_CSteamAPIContext_Init));
     install_hook_dwInstantDispatchMessage((void *)(game_base_address + ADDR_dwInstantMessageDispatch));
     install_hook_hks_load_dll((void *)(game_base_address + ADDR_hks_load_dll));
+    // T7Overcharged's script functions, which All-around Enhancement's client scripts call every frame
+    t7o_install_script_functions();
     install_hook_hksf_fopen_internal((void *)(game_base_address + ADDR_hksf_fopen_internal));
     install_hook_CL_FirstSnapshot((void *)(game_base_address + ADDR_CL_FirstSnapshot));
     install_hook_DB_GetStreamFraction((void *)(game_base_address + ADDR_DB_GetStreamFraction));

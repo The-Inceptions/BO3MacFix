@@ -39,6 +39,8 @@
 #define ADDR_R_TrackTextureMemory 0x126dad2 // func - name is a guess
 #define ADDR_ASL_SleepEx 0x111752 // func - Aspyr's Sleep/SleepEx(milliseconds, alertable)
 #define ADDR_Scr_LoadSourceText 0x149347d // func - void (script *), loads its source text from scriptsrc.zip (the mod's zone_source/, else zone/) into script+0x28, for script error call stacks - name is a guess
+#define ADDR_Scr_GetCodePosInfo 0x1493740 // func - void (inst, const char *codePos, const char **file, int *line, const char **lineText), line -1 without line information - name is a guess
+#define ADDR_Scr_FindScriptForCodePos 0x1493425 // func - entry * (inst, const char *codePos), the loaded script whose code holds codePos, its buffer (the compiled script's header) at +0 - name is a guess
 #define ADDR_Cocoa_HandleMouseEvent 0x148470 // func - SDL 2.0.7, relative mode motion from [NSEvent deltaX/deltaY]
 #define ADDR_SDL_GetMouse 0x1355b0 // func - SDL 2.0.7
 #define ADDR_SDL_SendMouseMotion 0x135870 // func - SDL 2.0.7 (window, mouseID, relative, x, y)
@@ -50,6 +52,11 @@
 #define ADDR_SDL_PrivateGameControllerAddMapping 0x13cff0 // func
 #define ADDR_SDL_GameControllerInitMappings 0x13d450 // func
 #define ADDR_Cbuf_AddText 0xf754aa // func
+#define ADDR_GScr_IsProfileBuild 0x1205df7 // func - void (scriptInstance_t inst), the GSC/CSC builtin isprofilebuild(): Scr_AddInt(inst, 0)
+#define ADDR_Scr_GetInt 0x11a1e78 // func - int (scriptInstance_t inst, unsigned int index), takes int and hash params
+#define ADDR_Scr_GetString 0x11a2281 // func - const char * (scriptInstance_t inst, unsigned int index)
+#define ADDR_Scr_AddInt 0x11a30e6 // func - void (scriptInstance_t inst, int value)
+#define ADDR_Scr_AddVector 0x11a344b // func - void (scriptInstance_t inst, const float *value)
 
 //globals
 #define ADDR_g_workshopMapId 0x3087dac // char[] - name is a guess
@@ -65,6 +72,8 @@
 #define ADDR_LOCAL_CLIENT_COUNT 0x11534590 // int
 #define ADDR_LOCAL_CLIENTS 0x11534598 // pointer
 #define ADDR_CLIENT_GLOBALS 0x115345a0 // pointer
+#define ADDR_scrVmPub 0x14450ef0 // scrVmPub_t[2] (server, client), 0xa048 bytes each: VariableValue *top at +0x20, unsigned int outparamcount at +0x38
+#define ADDR_cgArray 0x145b9fd0 // cg_t * - the local clients' cg_t, 0x342a80 bytes each: refdef view origin at +0x131dc8, view angles at +0x2d8930 (GetCamPosByLocalClientNum / GetCamAnglesByLocalClientNum)
 #define ADDR_Prepatch_Header 0x1964080 // pre-patched executable: header and stubs, in __TEXT's padding after __eh_frame
 #define ADDR_Prepatch_CodeEnd 0x1965000 // end of that padding
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
