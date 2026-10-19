@@ -1,9 +1,11 @@
 // The in-game settings page (settings_menu.lua), set up in each UI Lua state the game creates.
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include "checkpoint.h"
+#include "checkpoint_autosave.h"
 #include "checkpoint_lua.h"
 #include "havok.h"
 #include "notices.h"
@@ -114,6 +116,106 @@ static int lua_checkpoint_notice(lua_State *s) {
     return 0;
 }
 
+// ---- AutoSave (checkpoint_autosave.c): its background writer saves to checkpoint.ini too, so the bindings above that
+// read or write it are pushed as the locked_ ones below, which hold checkpoint_lock(). Their string arguments are read
+// before it's taken: a Lua error for a wrong one would leave the lock held.
+
+#define Autosave_Interval_Ms 15000 // the least time between two automatic saves
+
+static int locked_checkpoint_save(lua_State *s) {
+    hks_check_string(s, 1);
+    checkpoint_lock();
+    // this save is newer than an automatic one the writer hasn't written yet
+    checkpoint_autosave_cancel();
+    int results = lua_checkpoint_save(s);
+    checkpoint_unlock();
+    return results;
+}
+
+static int locked_checkpoint_read(lua_State *s) {
+    checkpoint_lock();
+    int results = lua_checkpoint_read(s);
+    checkpoint_unlock();
+    return results;
+}
+
+static int locked_checkpoint_apply(lua_State *s) {
+    hks_check_string(s, 1);
+    checkpoint_lock();
+    int results = lua_checkpoint_apply(s);
+    checkpoint_unlock();
+    return results;
+}
+
+static int locked_checkpoint_clear(lua_State *s) {
+    hks_check_string(s, 1);
+    checkpoint_lock();
+    int results = lua_checkpoint_clear(s);
+    checkpoint_unlock();
+    return results;
+}
+
+// the timer asks CheckpointResume(0) twice a second, so that never waits for the writer: while the writer has the lock
+// the answer is the last one, which the writer doesn't change
+static atomic_int last_resume_state;
+static int locked_checkpoint_resume(lua_State *s) {
+    float mark = 0;
+    if (hks_number_arg(s, 1, &mark) && mark != 0) {
+        checkpoint_lock();
+    } else if (!checkpoint_trylock()) {
+        hks_push_number(s, (float)atomic_load(&last_resume_state));
+        return 1;
+    }
+    int results = lua_checkpoint_resume(s);
+    HksObject *answer = HKS_TOP(s) - 1;
+    if (results == 1 && (answer->t & 0xF) == HKS_TNUMBER)
+        atomic_store(&last_resume_state, (int)answer->v.number);
+    checkpoint_unlock();
+    return results;
+}
+
+// the argument at index if it's a string, else NULL (without the Lua error hks_check_string raises)
+static const char *string_arg(lua_State *s, int index) {
+    HksObject *arg = HKS_BASE(s) + (index - 1);
+    return arg < HKS_TOP(s) && (arg->t & 0xF) == HKS_TSTRING ? hks_check_string(s, index) : NULL;
+}
+
+// CheckpointAutoSave(lines, note): gives this game ("Key=value" lines, as SaveCheckpoint takes) to the background
+// writer, with a note for the log, true if it took it; with no arguments, whether AutoSave is on
+static int lua_checkpoint_autosave(lua_State *s) {
+    const char *lines = string_arg(s, 1), *note = string_arg(s, 2);
+    hks_push_boolean(s, lines != NULL ? checkpoint_autosave_post(lines, note) : checkpoint_autosave_enabled());
+    return 1;
+}
+
+// CheckpointDelete(): whether the saved game is gone (not while a resume is set up)
+static int lua_checkpoint_delete(lua_State *s) {
+    bool deleted = checkpoint_delete(&checkpoint_paths);
+    printf("BO3MacFix: checkpoint: %s\n", deleted ? "deleted the saved game" : "couldn't delete the saved game");
+    hks_push_boolean(s, deleted);
+    return 1;
+}
+
+// what the writer did with an automatic save, on its queue
+static void autosave_report(autosave_outcome_t outcome, long round, long kept, const char *note) {
+    switch (outcome) {
+    case Autosave_Saved:
+        printf("BO3MacFix: checkpoint: AutoSave saved round %ld: %s\n", round, note);
+        notices_post("Saved round %ld", round);
+        break;
+    case Autosave_Kept_Deeper:
+        printf("BO3MacFix: checkpoint: AutoSave kept the game saved at round %ld, which this one didn't resume (round "
+               "%ld)\n", kept, round);
+        break;
+    case Autosave_Resuming:
+        printf("BO3MacFix: checkpoint: AutoSave waits for the resumed game's weapons (round %ld)\n", round);
+        break;
+    case Autosave_Failed:
+        printf("BO3MacFix: checkpoint: AutoSave couldn't save round %ld\n", round);
+        break;
+    }
+}
+
 // pushes the environment variable's value, or nil
 static void push_env(lua_State *s, const char *name) {
     const char *value = getenv(name);
@@ -141,13 +243,15 @@ static int lua_load_menu(lua_State *s) {
     // then checkpoint.lua, given its C functions here rather than when the state is set up: compiling and running any
     // more Lua in lua_install, while All-around Enhancement's scripts load, makes AAE quit the game at a map's load.
     // Then the test switches: save so many seconds into a match, give these weapons first, log what the match has
-    // so many seconds in.
+    // so many seconds in. Then AutoSave's writer and deleting the save, and its test switch: how many seconds of a
+    // match only set the round it starts at.
+    checkpoint_autosave_init(&checkpoint_paths, Autosave_Interval_Ms, autosave_report);
     if (hks_load_source(s, (const char *)checkpoint_lua, checkpoint_lua_len, "=BO3MacFix checkpoint")) {
-        hks_push_cfunction(s, lua_checkpoint_save, "CheckpointSave");
-        hks_push_cfunction(s, lua_checkpoint_read, "CheckpointRead");
-        hks_push_cfunction(s, lua_checkpoint_apply, "CheckpointApply");
-        hks_push_cfunction(s, lua_checkpoint_clear, "CheckpointClear");
-        hks_push_cfunction(s, lua_checkpoint_resume, "CheckpointResume");
+        hks_push_cfunction(s, locked_checkpoint_save, "CheckpointSave");
+        hks_push_cfunction(s, locked_checkpoint_read, "CheckpointRead");
+        hks_push_cfunction(s, locked_checkpoint_apply, "CheckpointApply");
+        hks_push_cfunction(s, locked_checkpoint_clear, "CheckpointClear");
+        hks_push_cfunction(s, locked_checkpoint_resume, "CheckpointResume");
         hks_push_cfunction(s, lua_checkpoint_weapons, "CheckpointWeapons");
         hks_push_cfunction(s, lua_checkpoint_weapon_commands, "CheckpointWeaponCommands");
         hks_push_cfunction(s, lua_checkpoint_allow_cheats, "CheckpointAllowCheats");
@@ -155,7 +259,10 @@ static int lua_load_menu(lua_State *s) {
         push_env(s, "BO3MACFIX_CHECKPOINT_SAVE");
         push_env(s, "BO3MACFIX_CHECKPOINT_GIVE");
         push_env(s, "BO3MACFIX_CHECKPOINT_REPORT");
-        hks_pcall(s, 12, 0);
+        hks_push_cfunction(s, lua_checkpoint_autosave, "CheckpointAutoSave");
+        hks_push_cfunction(s, lua_checkpoint_delete, "CheckpointDelete");
+        push_env(s, "BO3MACFIX_AUTOSAVE_START");
+        hks_pcall(s, 15, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;
