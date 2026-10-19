@@ -1,6 +1,7 @@
 // macOS replacement for T7Overcharged (https://github.com/JariKCoding/T7Overcharged),
 // a Windows DLL that workshop mods such as All-around Enhancement load through Lua.
 #include <errno.h>
+#include <os/lock.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -266,29 +267,38 @@ static struct {
     char name[48];
 } hashed_names[Hashed_Names];
 static unsigned int hashed_name_count;
+// the client's and the server's script VMs run on different threads and both use the table
+static os_unfair_lock hashed_names_lock = OS_UNFAIR_LOCK_INIT;
 
 static void remember_hashed_name(uint32_t hash, const char *name) {
-    for (unsigned int i = 0; i < hashed_name_count; i++) {
-        if (hashed_names[i].hash == hash)
-            return;
-    }
-    if (hashed_name_count < Hashed_Names) {
+    os_unfair_lock_lock(&hashed_names_lock);
+    bool known = false;
+    for (unsigned int i = 0; i < hashed_name_count && !known; i++)
+        known = hashed_names[i].hash == hash;
+    if (!known && hashed_name_count < Hashed_Names) {
         hashed_names[hashed_name_count].hash = hash;
         strncpy(hashed_names[hashed_name_count].name, name, sizeof(hashed_names[0].name) - 1);
         hashed_name_count++;
     }
+    os_unfair_lock_unlock(&hashed_names_lock);
 }
 
 static void log_unknown_native(uint32_t hash) {
+    char name[sizeof(hashed_names[0].name)];
+    bool log = false;
+    os_unfair_lock_lock(&hashed_names_lock);
     for (unsigned int i = 0; i < hashed_name_count; i++) {
         if (hashed_names[i].hash == hash) {
             if (!hashed_names[i].logged) {
-                hashed_names[i].logged = true;
-                printf("T7Overcharged: no script function \"%s\" here, scripts get 0\n", hashed_names[i].name);
+                hashed_names[i].logged = log = true;
+                memcpy(name, hashed_names[i].name, sizeof(name));
             }
-            return;
+            break;
         }
     }
+    os_unfair_lock_unlock(&hashed_names_lock);
+    if (log)
+        printf("T7Overcharged: no script function \"%s\" here, scripts get 0\n", name);
 }
 
 // the local client's cg_t, or NULL
