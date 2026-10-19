@@ -231,6 +231,6 @@
 #define ADDR_BG_WeaponIsClipOnly 0xf52ec2 // func - int (Weapon): SetWeaponAmmoStock sets the clip of one
 #define ADDR_BG_GetMaxAmmo 0xf52d88 // func - int (playerState_t *, Weapon, uint64_t): SetWeaponAmmoStock's clamp, its third argument read from ADDR_bg_maxAmmoArg
 #define ADDR_bg_maxAmmoArg 0x189cb10 // uint64_t SetWeaponAmmoStock passes BG_GetMaxAmmo - name is a guess
-#define scrVarPub_LevelId 0x24 // uint32_t in scrVarPub (ADDR_scrVarPub, 0x78 bytes per instance): the level object's id (GetLevel's opcode handler at 0x127685c pushes it)
+#define scrVarPub_LevelId 0x2c // uint32_t in scrVarPub (ADDR_scrVarPub, 0x78 bytes per instance): the level object's id, as GetLevel's opcode handler (0x12768de) and LevelEvalFieldVariable's (0x1277291) read it (+0x24, which handler 0x127685c pushes, is another object: live, it had no pap_lvup)
 // -- end zm inventory
 // -- END OFFSETS
