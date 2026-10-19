@@ -321,8 +321,8 @@ static void test_restore(void) {
     const char *calls = restore(&game, "ar_standard_upgraded_zm+reflex+extclip:822a:17:zm_aat_dead_wire,"
                                        "ray_gun_upgraded_zm:2a:0:zm_aat_turned",
                                 "ray_gun_upgraded_zm", "specialty_armorvest,specialty_quickrevive", &result);
-    CHECK(strcmp(calls, "take 4; take 99; give 44323 822a 17; give a5 2a 0; aat 44323 zm_aat_dead_wire; "
-                        "aat a5 zm_aat_turned; perk specialty_armorvest; switch a5; ") == 0);
+    CHECK(strcmp(calls, "perk specialty_armorvest; take 4; take 99; give 44323 822a 17; give a5 2a 0; "
+                        "aat 44323 zm_aat_dead_wire; aat a5 zm_aat_turned; switch a5; ") == 0);
     CHECK(result.taken == 2 && result.given == 2 && result.kept == 0 && result.aats == 2 && result.perks == 1 &&
           result.perks_had == 1 && result.failed == 0);
     char text[512];
@@ -338,10 +338,10 @@ static void test_restore(void) {
     game.fail_aat = true;
     calls = restore(&game, "thundergun_zm:0:0:zm_aat_fire_works,ray_gun_upgraded_zm:2a:0:zm_aat_turned,"
                            "ray_gun_upgraded_zm:2a:0:", "thundergun_zm", "specialty_unknown", &result);
-    CHECK(strcmp(calls, "take 4; take 99; give a5 2a 0; aat a5 zm_aat_turned; perk specialty_unknown; switch a5; ") ==
+    CHECK(strcmp(calls, "perk specialty_unknown; take 4; take 99; give a5 2a 0; aat a5 zm_aat_turned; switch a5; ") ==
           0);
     CHECK(result.failed == 3 && result.given == 1 && result.aats == 0);
-    CHECK(strcmp(result.failures, "no weapon thundergun_zm, no ammo type zm_aat_turned, no perk specialty_unknown") ==
+    CHECK(strcmp(result.failures, "no weapon thundergun_zm, no perk specialty_unknown, no ammo type zm_aat_turned") ==
           0);
     game.fail_aat = false;
     game.fail_give = true;

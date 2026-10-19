@@ -425,6 +425,16 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         if (wanted[i] == 0)
             note_failure(result, "no weapon", saved->guns[i].name);
     }
+    // the perks first: with Mule Kick (specialty_additionalprimaryweapon) a third gun has room, and the game's weapon
+    // limit would take one given before it
+    for (int i = 0; i < saved->perk_count; i++) {
+        if (ops->has_perk(context, saved->perks[i]))
+            result->perks_had++;
+        else if (ops->give_perk(context, saved->perks[i]))
+            result->perks++;
+        else
+            note_failure(result, "no perk", saved->perks[i]);
+    }
     // nothing to give (a save without guns, or none this game has): the guns the game started with stay
     int resolved = 0;
     for (int i = 0; i < saved->gun_count; i++)
@@ -461,14 +471,6 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
             result->aats++;
         else
             note_failure(result, "no ammo type", gun->aat);
-    }
-    for (int i = 0; i < saved->perk_count; i++) {
-        if (ops->has_perk(context, saved->perks[i]))
-            result->perks_had++;
-        else if (ops->give_perk(context, saved->perks[i]))
-            result->perks++;
-        else
-            note_failure(result, "no perk", saved->perks[i]);
     }
     // the gun that was in hand, or the first one if none was (holding a grenade, say), so the hands aren't left empty
     // after the starting pistol went

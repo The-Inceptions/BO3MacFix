@@ -359,12 +359,12 @@ static void test_loadout(void) {
 
     zm_inventory_set_restore(&loadout);
     const char *result = restore_now(player_entity);
-    CHECK(strcmp(calls, "select 0 0; take 4 (hands empty); give 44223 822a 17; ammo 44223; give a5 2a 0; ammo a5; "
-                        "acquire 44223 zm_aat_dead_wire; acquire a5 zm_aat_blast_furnace; "
-                        "give_perk specialty_armorvest; switch a5; ") == 0);
-    if (strcmp(calls, "select 0 0; take 4 (hands empty); give 44223 822a 17; ammo 44223; give a5 2a 0; ammo a5; "
-                      "acquire 44223 zm_aat_dead_wire; acquire a5 zm_aat_blast_furnace; "
-                      "give_perk specialty_armorvest; switch a5; ") != 0)
+    CHECK(strcmp(calls, "give_perk specialty_armorvest; select 0 0; take 4 (hands empty); give 44223 822a 17; ammo 44223; "
+                        "give a5 2a 0; ammo a5; acquire 44223 zm_aat_dead_wire; acquire a5 zm_aat_blast_furnace; "
+                        "switch a5; ") == 0);
+    if (strcmp(calls, "give_perk specialty_armorvest; select 0 0; take 4 (hands empty); give 44223 822a 17; ammo 44223; "
+                      "give a5 2a 0; ammo a5; acquire 44223 zm_aat_dead_wire; acquire a5 zm_aat_blast_furnace; "
+                      "switch a5; ") != 0)
         printf("  calls: %s\n", calls);
     CHECK(strcmp(result, "took 1, gave 2 guns (0 held already), 2 ammo types, 1 perks (1 had already), 0 failed") == 0);
     CHECK(!zm_inventory_restore_result(text, sizeof(text))); // told once
@@ -396,7 +396,7 @@ static void test_loadout(void) {
     acquire_missing = false;
     CHECK(strcmp(calls, "take 4; give a5 2a 0; ammo a5; switch a5; ") == 0);
     CHECK(strcmp(result, "took 1, gave 1 guns (0 held already), 0 ammo types, 0 perks (0 had already), 2 failed: no "
-                         "ammo type zm_aat_turned, no perk specialty_phdflopper") == 0);
+                         "perk specialty_phdflopper, no ammo type zm_aat_turned") == 0);
 
     // the test switch's: the Pack-a-Punch machine's way, the build kit's attachments, then the ammo type
     memset(client + gclient_HeldWeapons, 0, gclient_HeldWeapon_Count * gclient_HeldWeapon_Size);
