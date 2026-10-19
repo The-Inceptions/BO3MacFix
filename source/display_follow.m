@@ -641,7 +641,17 @@ static void reconfigured(CGDirectDisplayID display, CGDisplayChangeSummaryFlags 
         });
 }
 
+// The Mac or just its displays go to sleep: monitors can drop off meanwhile (DisplayPort ones do) and come back when
+// they wake, so nothing is decided until then. After the wake: 3 s to settle, and 5 s of grace for the game's display.
+static void went_to_sleep(const char *what) {
+    if (!sleeping)
+        printf("display: %s, nothing moves until they wake\n", what);
+    sleeping = 1;
+}
+
 static void woke(void) {
+    if (sleeping)
+        printf("display: awake again, looking at the displays in 3 s\n");
     sleeping = 0;
     woke_at = now_seconds();
     poke(0);
@@ -702,7 +712,10 @@ static void start_appkit(void) {
     }];
     NSNotificationCenter *workspace = [[NSWorkspace sharedWorkspace] notificationCenter];
     [workspace addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
-        sleeping = 1;
+        went_to_sleep("the Mac is going to sleep");
+    }];
+    [workspace addObserverForName:NSWorkspaceScreensDidSleepNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
+        went_to_sleep("the displays are asleep");
     }];
     [workspace addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
         woke();
