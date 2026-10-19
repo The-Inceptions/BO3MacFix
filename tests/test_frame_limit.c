@@ -32,7 +32,7 @@ static void test_lowest_limit(void) {
     CHECK(frame_limit_fps(120, 45, false, 60, true) == 60);
     // a lower limit already applies
     CHECK(frame_limit_fps(30, 0, false, 60, true) == 30);
-    CHECK(frame_limit_fps(0, 30, true, 45, true) == 30);
+    CHECK(frame_limit_fps(0, 30, true, 40, true) == 30);
     // off (0) isn't the lowest
     CHECK(frame_limit_fps(0, 0, true, 60, true) == 60);
     CHECK(frame_limit_fps(90, 0, true, 0, true) == 90);
@@ -96,8 +96,8 @@ static void test_pause_menu_settings(void) {
     atomic_store(&limits.pause_menu_fps, 30);
     CHECK(frame_limit_for_frame(&limits, Second + Frame, &log) == 30 && log == 1);
     // changed: the new rate, nothing logged
-    atomic_store(&limits.pause_menu_fps, 45);
-    CHECK(frame_limit_for_frame(&limits, Second + 2 * Frame, &log) == 45 && log == 0);
+    atomic_store(&limits.pause_menu_fps, 40);
+    CHECK(frame_limit_for_frame(&limits, Second + 2 * Frame, &log) == 40 && log == 0);
     // turned off with it open: unlimited, but it isn't the menu closing
     atomic_store(&limits.pause_menu_fps, 0);
     CHECK(frame_limit_for_frame(&limits, Second + 3 * Frame, &log) == 0 && log == 0);
