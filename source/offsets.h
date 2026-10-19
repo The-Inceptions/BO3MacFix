@@ -57,6 +57,7 @@
 #define ADDR_SDL_PrivateGameControllerAddMapping 0x13cff0 // func
 #define ADDR_SDL_GameControllerInitMappings 0x13d450 // func
 #define ADDR_Cbuf_AddText 0xf754aa // func
+#define ADDR_ChatClient_Send 0x13bef1c // func - void (int localClientNum, const char *text, int channel), what the chat box calls on enter: sends chat "<channel> <text>" (or say "<text>") to the server; name is a guess
 #define ADDR_GScr_IsProfileBuild 0x1205df7 // func - void (scriptInstance_t inst), the GSC/CSC builtin isprofilebuild(): Scr_AddInt(inst, 0)
 #define ADDR_Scr_GetInt 0x11a1e78 // func - int (scriptInstance_t inst, unsigned int index), takes int and hash params
 #define ADDR_Scr_GetString 0x11a2281 // func - const char * (scriptInstance_t inst, unsigned int index)
