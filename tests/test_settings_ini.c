@@ -39,6 +39,42 @@ static int read_hex(const char *text, const char *name, int fallback) {
     return settings_ini_read(path, name, fallback, 16);
 }
 
+// the text read for name, or "(none)"
+static const char *read_text(const char *text, const char *name, size_t size) {
+    static char value[64];
+    put(text);
+    return settings_ini_read_string(path, name, value, size) ? value : "(none)";
+}
+
+static void test_reading_text(void) {
+    const size_t big = 64;
+    assert(strcmp(read_text("AAEBuildTime = Wed Dec 10 17:10:46 2025\n", "AAEBuildTime", big), "Wed Dec 10 17:10:46 2025") == 0);
+    assert(strcmp(read_text("AAEBuildTime=Thu Mar  5 09:08:07 2026\r\n", "AAEBuildTime", big), "Thu Mar  5 09:08:07 2026") == 0);
+    assert(strcmp(read_text("\xEF\xBB\xBF\tAAEBuildTime \t= \t\"Wed Dec 10 17:10:46 2025\" \t\n", "AAEBuildTime", big),
+                  "Wed Dec 10 17:10:46 2025") == 0);
+    assert(strcmp(read_text("AAEBuildTime = 'x y'", "AAEBuildTime", big), "x y") == 0);
+    // a lone quote stays
+    assert(strcmp(read_text("AAEBuildTime = \"x\n", "AAEBuildTime", big), "\"x") == 0);
+    // the last line with text wins, an empty one doesn't count
+    assert(strcmp(read_text("AAEBuildTime = a\nAAEBuildTime = b\nAAEBuildTime =\nAAEBuildTime = \"\"\n", "AAEBuildTime", big),
+                  "b") == 0);
+    // not set, a comment, another setting, too long for out
+    assert(strcmp(read_text("// AAEBuildTime = a\nAAEBuildTimeX = b\nAAEBuildTime b\n", "AAEBuildTime", big), "(none)") == 0);
+    assert(strcmp(read_text("AAEBuildTime = abcd\n", "AAEBuildTime", 4), "(none)") == 0);
+    assert(strcmp(read_text("AAEBuildTime = abc\n", "AAEBuildTime", 4), "abc") == 0);
+    // a line too long to read whole doesn't set it
+    char long_line[1200];
+    memset(long_line, 'x', sizeof(long_line));
+    memcpy(long_line, "AAEBuildTime = ", 15);
+    long_line[sizeof(long_line) - 1] = '\0';
+    assert(strcmp(read_text(long_line, "AAEBuildTime", big), "(none)") == 0);
+    unlink(path);
+    assert(strcmp(read_text("", "AAEBuildTime", big), "(none)") == 0);
+    unlink(path);
+    char value[8] = "kept";
+    assert(!settings_ini_read_string(path, "AAEBuildTime", value, sizeof(value)) && strcmp(value, "kept") == 0);
+}
+
 static void check_write(const char *before, const char *name, const char *value, const char *after) {
     if (before != NULL)
         put(before);
@@ -160,6 +196,7 @@ int main(void) {
     assert(mkdtemp(dir) != NULL);
     snprintf(path, sizeof(path), "%s/settings.ini", dir);
     test_reading();
+    test_reading_text();
     test_writing();
     unlink(path);
     rmdir(dir);

@@ -22,6 +22,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDDevice.h>
 
+#include "aae_build.h"
 #include "bo3macnative.h"
 #include "codhavoktypes.h"
 #include "cpu_tuning.h"
@@ -633,6 +634,20 @@ static int read_int_setting_or_env(const char *name, int fallback) {
     return env != NULL ? atoi(env) : read_int_setting(name, fallback);
 }
 
+// text from BO3MACFIX_<NAME> at env if it's set, else from settings.ini, else ""
+static void read_string_setting_or_env(const char *name, char *out, size_t out_size) {
+    char env_name[64];
+    snprintf(env_name, sizeof(env_name), "BO3MACFIX_%s", name);
+    for (char *p = env_name; *p != '\0'; p++)
+        *p = toupper((unsigned char)*p);
+    const char *env = getenv(env_name);
+    out[0] = '\0';
+    if (env != NULL)
+        snprintf(out, out_size, "%s", env);
+    else
+        settings_ini_read_string(Settings_Path, name, out, out_size);
+}
+
 // the job system's worker thread count comes from a dvar that allows 2 to 4, which the Mac version leaves at 2
 static void job_threads_patch(int threads) {
     static const uint8_t mov_edx_2[] = { 0xBA, 0x02, 0x00, 0x00, 0x00 };
@@ -892,16 +907,14 @@ install_hook_name(Com_GetBuildIntField, int, int field) {
     return orig_Com_GetBuildIntField(field);
 }
 
-// Lua sees the build info of the current Windows version, since some workshop mods
-// (e.g. All-around Enhancement) quit the game on any other build
+// Lua sees the build info of the Windows version All-around Enhancement expects, since it quits the game on any other
+// build: what its core_mod.ff compares with (see aae_build.c), or AAEChangelist / AAEBuildTime from settings.ini
 #define BUILD_INTFIELD_CHANGELIST 1
 #define BUILD_STRINGFIELD_BUILD_TIME 6
-#define PC_BUILD_CHANGELIST 13892626
-#define PC_BUILD_TIME "Wed Dec 10 17:10:46 2025"
 install_hook_name(Lua_GetBuildIntField, int, lua_State *s) {
     float field;
     if (hks_number_arg(s, 1, &field) && (int)field == BUILD_INTFIELD_CHANGELIST) {
-        hks_push_number(s, PC_BUILD_CHANGELIST);
+        hks_push_number(s, (float)aae_build_changelist());
         return 1;
     }
     return orig_Lua_GetBuildIntField(s);
@@ -914,7 +927,7 @@ install_hook_name(Lua_GetBuildStringField, int, lua_State *s) {
     // puts the stack back)
     settings_menu_run(s);
     if (build_time) {
-        hks_push_string(s, PC_BUILD_TIME);
+        hks_push_string(s, aae_build_time());
         return 1;
     }
     return orig_Lua_GetBuildStringField(s);
@@ -1113,6 +1126,13 @@ __attribute__((constructor)) static void dylib_main() {
 
     // aiming with the mouse's raw movement instead of macOS's accelerated one (RawMouse, off by default)
     rawmouse_init(game_base_address, read_int_setting("RawMouse", 0), read_int_setting("RawMouseScale", 100));
+
+    // the build All-around Enhancement checks the game against, read from its fastfile on a background thread (with
+    // the Steam library's workshop folder next to the game's), unless AAEChangelist / AAEBuildTime set it
+    char aae_build_time_setting[128];
+    read_string_setting_or_env("AAEBuildTime", aae_build_time_setting, sizeof(aae_build_time_setting));
+    aae_build_start(Basegame_Path "../../workshop/content/311210/2631943123/core_mod.ff", Macfix_Path "/aae_build.cache",
+                    read_int_setting_or_env("AAEChangelist", 0), aae_build_time_setting);
 
     // AAE's online version notes and weather (AAEOnline = 1, off by default), see t7overcharged.c
     const char *aae_online_env = getenv("BO3MACFIX_AAEONLINE");

@@ -55,6 +55,39 @@ int settings_ini_read(const char *path, const char *name, int fallback, int base
     return value;
 }
 
+bool settings_ini_read_string(const char *path, const char *name, char *out, size_t out_size) {
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL)
+        return false;
+    bool found = false;
+    char line[Line_Size];
+    bool line_start = true;
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        size_t len = strlen(line);
+        bool line_end = len > 0 && line[len - 1] == '\n';
+        const char *at = line_start ? settings_ini_match(line, name) : NULL;
+        // a line too long to read whole doesn't set it
+        if (at != NULL && (line_end || feof(fp))) {
+            at += strspn(at, " \t");
+            size_t n = strcspn(at, "\r\n");
+            while (n > 0 && (at[n - 1] == ' ' || at[n - 1] == '\t'))
+                n--;
+            if (n >= 2 && (at[0] == '"' || at[0] == '\'') && at[n - 1] == at[0]) {
+                at++;
+                n -= 2;
+            }
+            if (n > 0 && n < out_size) {
+                memcpy(out, at, n);
+                out[n] = '\0';
+                found = true;
+            }
+        }
+        line_start = line_end;
+    }
+    fclose(fp);
+    return found;
+}
+
 bool settings_ini_write(const char *path, const char *name, const char *value) {
     char temp[PATH_MAX + 32];
     if (snprintf(temp, sizeof(temp), "%s.tmp%d", path, (int)getpid()) >= (int)sizeof(temp))

@@ -59,6 +59,18 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 Most can also be set with an environment variable, `BO3MACFIX_` and the name in capitals. When the game is started
 from Steam, BO3MacFix's log goes to `BO3MacFix/log.txt` and the launcher's to `BO3MacFix/launcher.log`.
 
+All-around Enhancement only runs on the latest Windows build: it compares the game's changelist and build time with
+that build's, and on anything else opens its downgrade guide and quits. BO3MacFix gives it the values it expects,
+read from AAE's own `core_mod.ff` when the game starts (once per AAE update, then remembered in
+`BO3MacFix/aae_build.cache`), so an AAE update for a new Windows patch doesn't need a new BO3MacFix. `log.txt` says
+what it found, in lines starting with `AAE build check:`. If AAE opens its downgrade guide anyway, two settings that
+aren't on the in-game page set the values by hand:
+
+| Setting | Example | What it does |
+| --- | --- | --- |
+| `AAEChangelist` | `13892626` | The changelist AAE checks for. |
+| `AAEBuildTime` | `Wed Dec 10 17:10:46 2025` | The build time AAE checks for, the rest of the line (quotes are optional). |
+
 ## Credits
 
 - [Alyssa / alltheamps](https://github.com/shiversoftdev) - guidance, help, t7patch and the cod2map64 patch DLL.
