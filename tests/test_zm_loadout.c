@@ -550,6 +550,18 @@ static void test_pap_levels(void) {
     uint32_t other = fake_vm_player(&vm, 1);
     fake_vm_child(&vm, other, loadout_script_hash("guid"), 4, fake_vm_string(&vm, "abc"), 2);
     CHECK(loadout_vm_guid(&reader, other, guid, sizeof(guid)) && strcmp(guid, "abc") == 0);
+    char about[512];
+    loadout_vm_describe_pap(&reader, player, about, sizeof(about));
+    CHECK(strstr(about, "guid type 7 value 3039; ") == about && strstr(about, " 12345ray_gun_upgraded nt 3 = type 7 value 1;"));
+    // a guid GSC writes with letters (a hex id): still the one prefix every key has
+    loadout_t hex;
+    CHECK(loadout_parse("ray_gun_upgraded:0:0:", NULL, "", &hex));
+    fake_vm_init(&vm, memory, Fake_Base);
+    level = fake_vm_object(&vm, 0x14);
+    fake_vm_put32(&vm, 0x110, level);
+    levels = fake_vm_array_field(&vm, level, "pap_lvup");
+    fake_vm_child(&vm, levels, fake_vm_string(&vm, "11000010a1b2c3dray_gun_upgraded"), 3, 4, 7);
+    CHECK(loadout_vm_read_pap_levels(&reader, NULL, &hex) == 1 && hex.guns[0].pap_level == 4);
 }
 
 int main(void) {

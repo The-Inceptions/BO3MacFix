@@ -4,6 +4,7 @@
 #include <os/lock.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "dobby.h"
@@ -309,6 +310,12 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
         snprintf(note + strlen(note), note_size - strlen(note), "no self.perks_active; ");
     if (note_size > 0 && pap_count > 0 && !have_guid)
         snprintf(note + strlen(note), note_size - strlen(note), "repack levels matched without self.guid; ");
+    if (getenv("BO3MACFIX_CHECKPOINT_PAP_DEBUG") != NULL && player != 0) {
+        char text[512];
+        loadout_vm_describe_pap(&vm, player, text, sizeof(text));
+        printf("BO3MacFix: zm inventory: repack levels: %d read (guid %s); %s\n", pap_count, have_guid ? guid : "none",
+               text);
+    }
     return true;
 }
 

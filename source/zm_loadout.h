@@ -177,3 +177,6 @@ bool loadout_parse_items(const char *value, loadout_t *loadout);
 bool loadout_format_gun_ammo(const loadout_t *loadout, char *out, size_t out_size);
 // sets loadout's guns' ammo from a GunAmmo value; a name loadout doesn't have is left out. False if it's malformed.
 bool loadout_parse_gun_ammo(const char *value, loadout_t *loadout);
+// for the test switch BO3MACFIX_CHECKPOINT_PAP_DEBUG: entity's guid variable and level.pap_lvup's first entries as
+// the VM has them
+void loadout_vm_describe_pap(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size);

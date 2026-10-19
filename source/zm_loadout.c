@@ -628,13 +628,13 @@ bool loadout_vm_guid(const loadout_vm_t *vm, uint32_t entity, char *out, size_t 
     return var.type == Var_String && vm_text(vm, (uint32_t)var.value, out, out_size);
 }
 
-// whether text is a GSC int's decimal
-static bool decimal(const char *text, size_t len) {
-    size_t i = len > 0 && text[0] == '-' ? 1 : 0;
-    if (i == len)
+// whether text can be a guid as GSC writes it into a string: letters, digits and '-', no '_' (which a weapon name
+// has, so a key's guid part never runs into the name)
+static bool guid_text(const char *text, size_t len) {
+    if (len == 0)
         return false;
-    for (; i < len; i++)
-        if (!isdigit((unsigned char)text[i]))
+    for (size_t i = 0; i < len; i++)
+        if (!isalnum((unsigned char)text[i]) && text[i] != '-')
             return false;
     return true;
 }
@@ -668,7 +668,7 @@ int loadout_vm_read_pap_levels(const loadout_vm_t *vm, const char *guid, loadout
             if (guid != NULL) {
                 if (strlen(guid) == prefix_len && memcmp(key, guid, prefix_len) == 0)
                     levels[i] = level;
-            } else if (decimal(key, prefix_len)) {
+            } else if (guid_text(key, prefix_len)) {
                 // without the guid, every gun's key has to have the same one (another player's would differ)
                 if (prefix[0] == '\0')
                     snprintf(prefix, sizeof(prefix), "%.*s", (int)prefix_len, key);
@@ -823,4 +823,35 @@ bool loadout_parse_gun_ammo(const char *value, loadout_t *loadout) {
     }
     memcpy(loadout->guns, guns, sizeof(guns));
     return true;
+}
+
+void loadout_vm_describe_pap(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size) {
+    if (out_size == 0)
+        return;
+    out[0] = '\0';
+    size_t used = 0;
+    vm_var_t var;
+    uint32_t id = loadout_vm_find(vm, entity, loadout_script_hash("guid"));
+    if (id != 0 && vm_var(vm, id, &var))
+        append(out, out_size, &used, "guid type %u value %" PRIx64 "; ", var.type, var.value);
+    else
+        append(out, out_size, &used, "no guid variable; ");
+    uint32_t level = loadout_vm_level(vm);
+    uint32_t array = loadout_vm_array_field(vm, level, "pap_lvup");
+    append(out, out_size, &used, "level %u pap_lvup %u:", level, array);
+    vm_var_t object;
+    if (array == 0 || !vm_var(vm, array, &object))
+        return;
+    id = (uint32_t)object.value;
+    for (int steps = 0; id != 0 && steps < 8; steps++) {
+        vm_var_t child;
+        char key[Pap_Key_Size];
+        if (!vm_var(vm, id, &child) || child.parent != array)
+            break;
+        if (!vm_text(vm, (uint32_t)child.key, key, sizeof(key)))
+            snprintf(key, sizeof(key), "(key %" PRIx64 ")", child.key);
+        append(out, out_size, &used, " %s nt %u = type %u value %" PRIx64 ";", key, child.name_type & 7u, child.type,
+               child.value);
+        id = child.next;
+    }
 }
