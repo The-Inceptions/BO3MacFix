@@ -131,13 +131,18 @@ int main(void) {
         ports[i] = -1;
     *gamepad_port = 4;
     log_game_gamepads(NULL);
+    CHECK(controllers_game_user_index() == -1);
     ports[0] = 0;
     ports[1] = 0;
     *gamepad_port = 0;
     log_game_gamepads(NULL);
+    CHECK(controllers_game_user_index() == 0);
     ports[2] = 1;
+    *gamepad_port = 1;
+    CHECK(controllers_game_user_index() == 1);
     *gamepad_port = 4;
     log_game_gamepads(NULL);
+    CHECK(controllers_game_user_index() == -1);
 
     if (failures == 0)
         printf("controllers tests passed\n");

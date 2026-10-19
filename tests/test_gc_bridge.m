@@ -1,7 +1,7 @@
 // Tests gc_bridge.m's player slots as the game's XInputGetState and XInputSetState calls see them: the "found" line,
-// SDL taking and letting go of user indexes, bridged controllers moving, waiting and moving down, disconnects, and when
-// the game is asked to look for controllers. The controllers are stand-ins (FakeController), and nothing here talks to
-// the GameController daemon or a real controller.
+// SDL taking and letting go of user indexes, bridged controllers moving, waiting and moving down, disconnects, when
+// the game is asked to look for controllers, and which disconnects PauseOnDisconnect pauses for. The controllers are
+// stand-ins (FakeController), and nothing here talks to the GameController daemon or a real controller.
 #include <sys/mman.h>
 #include "../source/gc_bridge.m"
 
@@ -50,6 +50,14 @@ void controllers_request_gamepad_scan(const char *why) {
     asked++;
     asked_why = why;
 }
+static int game_reads = -1; // the player the game's first gamepad reads
+int controllers_game_user_index(void) {
+    return game_reads;
+}
+static int lost = 0; // PauseOnDisconnect's requests
+void notices_controller_lost(void) {
+    lost++;
+}
 
 // Aspyr's own XInput functions: connected only where SDL has a controller
 static uint32_t aspyr_get_state(uint32_t user_index, XINPUT_STATE *state) {
@@ -87,6 +95,16 @@ static bridged_pad *bridge(id controller, const char *kind) {
 static void drain_input_queue(void) {
     dispatch_sync(input_queue, ^{
     });
+}
+
+static void disconnect_pad(id controller) {
+    if (@available(macOS 11.3, *))
+        controller_disconnected((GCController *)controller);
+}
+
+// runs what's waiting on the main queue: PauseOnDisconnect's check (with lost_grace at 0) and player index updates
+static void run_main_queue(void) {
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
 }
 
 int main(void) {
@@ -175,6 +193,65 @@ int main(void) {
         controller_disconnected((GCController *)other);
     CHECK(asked == 7 && strcmp(asked_why, "a controller disconnected") == 0);
     CHECK(b->controller == dualsense_usb && b->user_index == 0);
+
+    // PauseOnDisconnect, with the game reading player 1 (the DualSense from above): only that controller going away,
+    // with none taking its place in time, asks to pause
+    lost_grace = 0;
+    game_reads = 0;
+    CHECK(b->found);
+
+    // an idle second controller on player 2 dies, and one SDL has: no
+    FakeController *idle = [FakeController new];
+    bridged_pad *c = bridge(idle, "DualShock 4");
+    CHECK(c->user_index == 1 && get(1) == ERROR_SUCCESS && c->found);
+    disconnect_pad(idle);
+    disconnect_pad(other);
+    run_main_queue();
+    CHECK(lost == 0 && c->controller == nil && b->user_index == 0);
+
+    // the DualSense's Bluetooth link comes back while its USB cable is in (a second DualSense, on player 2), then the
+    // cable comes out: the Bluetooth one moves down to player 1 at the game's next read, no
+    FakeController *bluetooth = [FakeController new];
+    bridged_pad *d = bridge(bluetooth, "DualSense");
+    CHECK(d->user_index == 1);
+    disconnect_pad(dualsense_usb);
+    CHECK(get(0) == ERROR_SUCCESS && d->user_index == 0 && d->found);
+    run_main_queue();
+    CHECK(lost == 0);
+
+    // and back: the Bluetooth link drops and the DualSense is on USB again before the check looks: no
+    FakeController *usb = [FakeController new];
+    disconnect_pad(bluetooth);
+    bridged_pad *e = bridge(usb, "DualSense");
+    CHECK(e->user_index == 0);
+    run_main_queue();
+    CHECK(lost == 0);
+
+    // the DualSense the game reads goes away for good: yes, once
+    CHECK(get(0) == ERROR_SUCCESS && e->found);
+    disconnect_pad(usb);
+    run_main_queue();
+    CHECK(lost == 1);
+
+    // the game reads SDL's controller (an Xbox one, say). Another one going away: no. That one going away: yes,
+    // whether SDL lets go of it after macOS says it's gone or before
+    set_sdl(0, xbox);
+    get(0);
+    FakeController *xbox_pad = [FakeController new];
+    disconnect_pad(xbox_pad);
+    run_main_queue();
+    CHECK(lost == 1);
+    disconnect_pad(xbox_pad);
+    set_sdl(0, NULL);
+    run_main_queue();
+    CHECK(lost == 2);
+    set_sdl(0, xbox);
+    get(0);
+    set_sdl(0, NULL);
+    get(0);
+    disconnect_pad(xbox_pad);
+    run_main_queue();
+    CHECK(lost == 3);
 
     drain_input_queue();
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.2, false); // the player index updates, on the main queue

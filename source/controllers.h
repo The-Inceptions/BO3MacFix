@@ -19,3 +19,6 @@ bool controllers_prompts_live(void);
 // message would. From any thread; does nothing until the game's gamepad code is up, and requests close together make
 // one. why: a string literal for the log.
 void controllers_request_gamepad_scan(const char *why);
+
+// the XInput user index (player, 0-3) the game's first gamepad reads, or -1: none, or the game's gamepad code isn't up
+int controllers_game_user_index(void);
