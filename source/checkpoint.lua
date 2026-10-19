@@ -684,8 +684,36 @@ local function start_timer()
 end
 
 -- settings_menu.lua calls this for every menu made
-function bo3macfix.CheckpointMenuCreated(name, menu)
+-- the quit and end-game popups are system overlays: CoD.OverlayUtility.CreateOverlay(controller, menu, name, ...) opens
+-- them as a generic overlay menu, so CoD.Menu.NewForUIEditor (settings_menu.c) never sees their names, and the End
+-- Game popup of AAE's start menu didn't save live. So CreateOverlay is wrapped too (again if something replaces it),
+-- and gives its overlay's name to CheckpointMenuCreated.
+local overlay_wrapper, reporting_overlay = nil, false
+local function watch_overlays()
+    local utility = CoD ~= nil and CoD.OverlayUtility or nil
+    if type(utility) ~= "table" or type(utility.CreateOverlay) ~= "function" then return end
+    if utility.CreateOverlay == overlay_wrapper then return end
+    local create = utility.CreateOverlay
+    overlay_wrapper = function(controller, menu, name, ...)
+        if reporting_overlay or type(name) ~= "string" then return create(controller, menu, name, ...) end
+        -- set while the overlay is made, so an older wrapper of ours further down the chain doesn't report it again
+        reporting_overlay = true
+        local ok, err = pcall(bo3macfix.CheckpointMenuCreated, name, menu, "overlay")
+        if not ok then log("checkpoint error: " .. tostring(err)) end
+        local made, overlay = pcall(create, controller, menu, name, ...)
+        reporting_overlay = false
+        if not made then error(overlay, 0) end
+        return overlay
+    end
+    utility.CreateOverlay = overlay_wrapper
+end
+
+-- kind: "overlay" for a system overlay's name (above), nil for a menu
+function bo3macfix.CheckpointMenuCreated(name, menu, kind)
     start_timer()
+    watch_overlays()
+    -- the report test switch also logs what a match makes, to tell which menu or overlay a popup is
+    if report_after ~= nil and in_match() then log("checkpoint test: " .. (kind or "menu") .. " " .. tostring(name)) end
     -- quitting a match saves it, unless that would replace a game saved at a higher round that this one didn't resume
     if QUIT_POPUPS[name] and in_match() and string.sub(current_map(), 1, 3) == "zm_" then
         local checkpoint = read_checkpoint()
