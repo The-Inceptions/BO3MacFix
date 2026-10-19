@@ -177,7 +177,7 @@ tests/test_gc_bridge: tests/test_gc_bridge.m source/gc_bridge.m source/gc_bridge
 	$(CLANG) -O1 -Wall -Wextra -Werror -Wno-unused-parameter -mmacosx-version-min=$(OSXVER) -framework Foundation \
 		-weak_framework GameController -weak_framework CoreHaptics -framework IOKit -o $@ tests/test_gc_bridge.m
 
-$(TARGET): $(SOURCES) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
+$(TARGET): $(SOURCES) $(wildcard source/*.h) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(DEFINES) $(LDFLAGS) -o $@ $(SOURCES)
 
 # the Lua half of our T7Overcharged support, embedded as a byte array
