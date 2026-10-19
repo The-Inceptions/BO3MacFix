@@ -277,6 +277,9 @@ static bool g_holds(void *context, uint64_t weapon) {
 static bool g_give_item(void *context, uint64_t weapon) {
     game_t *game = context;
     call(game, "item %" PRIx64, weapon);
+    // held at once, as the scripts give a grenade or a hero weapon; the shield (equipment) only a moment later
+    if (!game->fail_item && weapon != 0x63 && game->item_count < 8)
+        game->items[game->item_count++] = weapon;
     return !game->fail_item;
 }
 
@@ -389,6 +392,7 @@ static void test_restore_more(void) {
                        "2 items (1 held already), ammo for 4, 0 failed") == 0);
 
     // what the game won't do is told, and the rest still comes back
+    game.item_count = 1;
     game.fail_pap = game.fail_item = game.fail_ammo = true;
     calls = restore_full(&game, guns, "", "ray_gun_upgraded_zm:3", "frag_grenade:3:0,cymbal_monkey:2:0,nothing_zm::",
                          "ray_gun_upgraded_zm:12:80", true, &result);
@@ -396,6 +400,11 @@ static void test_restore_more(void) {
                                   "cymbal_monkey, no item nothing_zm, no ammo for ray_gun_upgraded_zm") == 0);
     CHECK(result.failed == 5 && result.items_had == 1 && result.items == 0 && result.ammo == 0);
     game.fail_pap = game.fail_item = game.fail_ammo = false;
+    // a shield the scripts give a moment later: given, and its count left to them (no failure)
+    game.item_count = 1; // only the starting grenades held, and the give doesn't make the shield held
+    calls = restore_full(&game, guns, "", NULL, "zod_riotshield:3:0", NULL, true, &result);
+    CHECK(strcmp(calls, "take 4; give 44323 822a 17; give a5 2a 0; item 63; switch 44323; ") == 0);
+    CHECK(result.items == 1 && result.ammo == 0 && result.failed == 0);
     // a game without the new calls: the guns and perks as before, the rest told
     calls = restore_full(&game, guns, "", "ray_gun_upgraded_zm:3", "cymbal_monkey:2:0", "", false, &result);
     CHECK(strcmp(calls, "take 4; give 44323 822a 17; give a5 2a 0; switch 44323; ") == 0);
