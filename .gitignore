@@ -28,4 +28,5 @@ tests/test_frame_limit
 tests/test_players_cfg
 tests/test_aae_build
 tests/test_notch
+tests/test_notch_hooks
 tests/test_checkpoint
