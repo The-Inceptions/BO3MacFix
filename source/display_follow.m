@@ -641,7 +641,17 @@ static void reconfigured(CGDirectDisplayID display, CGDisplayChangeSummaryFlags 
         });
 }
 
+// The Mac or just its displays go to sleep: monitors can drop off meanwhile (DisplayPort ones do) and come back when
+// they wake, so nothing is decided until then. After the wake: 3 s to settle, and 5 s of grace for the game's display.
+static void went_to_sleep(const char *what) {
+    if (!sleeping)
+        printf("display: %s, nothing moves until they wake\n", what);
+    sleeping = 1;
+}
+
 static void woke(void) {
+    if (sleeping)
+        printf("display: awake again, looking at the displays in 3 s\n");
     sleeping = 0;
     woke_at = now_seconds();
     poke(0);
@@ -702,7 +712,10 @@ static void start_appkit(void) {
     }];
     NSNotificationCenter *workspace = [[NSWorkspace sharedWorkspace] notificationCenter];
     [workspace addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
-        sleeping = 1;
+        went_to_sleep("the Mac is going to sleep");
+    }];
+    [workspace addObserverForName:NSWorkspaceScreensDidSleepNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
+        went_to_sleep("the displays are asleep");
     }];
     [workspace addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
         woke();
@@ -798,6 +811,26 @@ int display_follow_launch_choice(DisplayDecision *out) {
     printf("display: starting at %dx%d, %d Hz%s (config.ini has %dx%d, %d Hz: %s)\n",
            out->width > 0 ? out->width : values.width, out->width > 0 ? out->height : values.height,
            out->refresh > 0 ? out->refresh : values.refresh, cap, values.width, values.height, values.refresh, out->why);
+    return 1;
+}
+
+// a window keeps its size, unless it doesn't fit the display it starts on: then the engine would squeeze its picture
+// into what fits (1280x800 into 1080x800 on a portrait monitor), so the window gets the biggest size of its shape
+int display_follow_launch_window(int *width, int *height) {
+    DisplayInfo d;
+    pthread_mutex_lock(&lock);
+    int i = display_policy_find(displays, display_count, game_id);
+    int on = started && follow && i >= 0;
+    if (on)
+        d = displays[i];
+    pthread_mutex_unlock(&lock);
+    int old_width = *width, old_height = *height;
+    if (!on || !display_policy_fit_window(&d, width, height))
+        return 0;
+    char text[160];
+    describe(&d, text, sizeof(text));
+    printf("display: a %dx%d window doesn't fit %s (%dx%d points), starting at %dx%d\n", old_width, old_height, text, d.w,
+           d.h, *width, *height);
     return 1;
 }
 

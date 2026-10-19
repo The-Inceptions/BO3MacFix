@@ -388,6 +388,35 @@ static void test_launch(void) {
     assert(!display_policy_launch(&store, all, 2, &gaming, &settled, 1, 1, &d));
 }
 
+static void test_fit_window(void) {
+    // 1280x800 on a 1080x1920 portrait monitor: as wide as the monitor, at the window's shape
+    DisplayInfo portrait = another(&tv, 4, "44444444-4444-4444-4444-444444444444");
+    portrait.w = 1080;
+    portrait.h = 1920;
+    int w = 1280, h = 800;
+    assert(display_policy_fit_window(&portrait, &w, &h) && w == 1080 && h == 674);
+    // a window that fits stays as it is
+    w = 1280, h = 800;
+    assert(!display_policy_fit_window(&gaming, &w, &h) && w == 1280 && h == 800);
+    w = 1080, h = 674;
+    assert(!display_policy_fit_window(&portrait, &w, &h) && w == 1080 && h == 674);
+    // too tall: the menu bar (as tall as the 32 point camera housing) and the title bar come off the built-in's 1117
+    w = 1728, h = 1117;
+    assert(display_policy_fit_window(&builtin, &w, &h) && h == 1056 && w == 1634);
+    // without a housing, the usual 24 point menu bar
+    DisplayInfo plain = builtin;
+    plain.notch = 0;
+    w = 1728, h = 1117;
+    assert(display_policy_fit_window(&plain, &w, &h) && h == 1064 && w == 1646);
+    // nothing to go by
+    w = 0, h = 0;
+    assert(!display_policy_fit_window(&portrait, &w, &h));
+    DisplayInfo none = portrait;
+    none.w = none.h = 0;
+    w = 1280, h = 800;
+    assert(!display_policy_fit_window(&none, &w, &h) && w == 1280 && h == 800);
+}
+
 static void test_parse(void) {
     GameValues v;
     assert(display_policy_parse_game("game=2624x1696 refresh=120 maxfps=120", &v));
@@ -616,6 +645,7 @@ int main(void) {
     test_same_display_changed();
     test_refresh();
     test_launch();
+    test_fit_window();
     test_parse();
     test_store();
     test_store_full();
