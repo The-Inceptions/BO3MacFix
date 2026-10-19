@@ -19,5 +19,6 @@ void zm_inventory_install_hook(void);
 // address gives false, not a crash. False, with out empty, if there's no game hosted here or no player in it.
 bool zm_inventory_read(char *out, size_t out_size);
 
-// lets the local player's next count cheat-protected commands (give, take) through the cheat check, for 10 seconds
+// lets the local player's next count give and take commands through the cheat check, for 10 seconds; the other cheat
+// commands (noclip, god and the like) still need sv_cheats
 void zm_inventory_allow_cheats(int count);

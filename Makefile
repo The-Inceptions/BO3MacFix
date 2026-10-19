@@ -4,7 +4,7 @@ TARGET = BO3MacFix.dylib
 TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
 	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint \
-	tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan
+	tests/test_zm_inventory tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -140,6 +140,12 @@ tests/test_players_cfg: tests/test_players_cfg.c source/players_cfg.c source/pla
 tests/test_checkpoint: tests/test_checkpoint.c source/checkpoint.c source/checkpoint.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_checkpoint.c \
 		source/checkpoint.c
+
+# zm_inventory.c's pass through the game's cheat check for BO3MacFix's give and take commands, against a made-up
+# g_entities (the test includes the source)
+tests/test_zm_inventory: tests/test_zm_inventory.c source/zm_inventory.c source/zm_inventory.h source/offsets.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -o $@ \
+		tests/test_zm_inventory.c
 
 # checkpoint_autosave.c (AutoSave's background writer, its rules, deleting the save, the lock) with made-up files, with
 # the address and undefined behaviour sanitizers, and again with the thread sanitizer since it's about two threads

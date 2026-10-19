@@ -174,6 +174,10 @@
 // zombies weapons and the cheat check (zm_inventory.c), from the game's give and take console commands (Cmd_Give_f at
 // 0xf42c29, Cmd_Take_f at 0xf43169, both called by the client command dispatch at 0xf45eef)
 #define ADDR_CheatsOk 0xf428c0 // func: int CheatsOk(gentity_t *ent): sv_cheats is on and ent is alive
+// where CheatsOk returns to in Cmd_Give_f (its call at 0xf42c45) and in Cmd_Take_f (at 0xf4317d). Nine other calls ask
+// it too, for the other cheat commands (god at 0xf4370f, with GAME_GODMODE_ON/OFF)
+#define ADDR_CheatsOk_From_Give 0xf42c4a
+#define ADDR_CheatsOk_From_Take 0xf43182
 #define ADDR_g_entities_Ptr 0x1966be8 // holds g_entities' address (gentity_t, 0x4f8 bytes each; CheatsOk divides by it)
 #define ADDR_bg_weaponVariantDefs 0x14ce0a70 // WeaponVariantDef *[], by weapon index (BG_GetWeaponDef at 0x12362cd)
 #define ADDR_bg_lastWeaponIndex 0x14ce0a68 // int: the number of weapons less one (BG_GetNumWeapons at 0x12362a8)

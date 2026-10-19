@@ -43,7 +43,7 @@ LUI = { roots = { UIRootFull = { addElement = function() end } },
 
 -- ---- a made-up C side
 local store, state, weapons, weapon_reads, posts, saves, deleted, cleared = {}, 0, nil, 0, {}, {}, 0, 0
-local autosave_on, clock_now = true, 0
+local autosave_on, clock_now, delete_fails = true, 0, false
 local function c_side()
     local save = function(lines)
         local given = {}
@@ -79,7 +79,7 @@ local function c_side()
         return true
     end
     local delete = function()
-        if state ~= 0 then return false end
+        if state ~= 0 or delete_fails then return false end
         store, deleted = {}, deleted + 1
         return true
     end
@@ -257,18 +257,22 @@ delete_row.run()
 delete_row.run()
 check(cleared == 2 and state == 0 and deleted == 2, "the resume undone, then deleted")
 check(execs[1] == "modvar tfoption_starting_round 7", "the player's starting round set again: " .. tostring(execs[1]))
--- the C side refusing it
+-- a resume that can't be undone stays, and so does the save
 store = { Round = "12", Points = "23450", Map = "zm_theater" }
 local real_clear = clear
-local refuse = function() return nil end
-rows = nil
-BO3MacFix.ClearCheckpoint = refuse
+BO3MacFix.ClearCheckpoint = function() return nil end
 state = 1
-local delete_rows = BO3MacFix.CheckpointRows(0, function(text) message = text end)
-delete_rows[3].run()
-delete_rows[3].run()
-check(string.find(message, "Couldn't delete", 1, true) ~= nil and deleted == 2, "a refusal is shown: " .. tostring(message))
+delete_row.run()
+delete_row.run()
+check(string.find(message, "Couldn't turn the resume off first", 1, true) ~= nil and deleted == 2 and
+    store.Round == "12", "nothing deleted: " .. tostring(message))
 BO3MacFix.ClearCheckpoint, state = real_clear, 0
+-- the C side refusing it
+delete_fails = true
+delete_row.run()
+delete_row.run()
+check(string.find(message, "Couldn't delete", 1, true) ~= nil and deleted == 2, "a refusal is shown: " .. tostring(message))
+delete_fails = false
 
 -- ---- quitting keeps a deeper save, by the HUD's round
 enter_match("zm_theater", 14)
