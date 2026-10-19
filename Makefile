@@ -2,7 +2,8 @@
 # unofficial custom-map stream-stall workaround.
 TARGET = BO3MacFix.dylib
 TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
-	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit
+	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
+	tests/test_players_cfg
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -23,6 +24,8 @@ FRAMEWORKS = -framework CoreFoundation -framework IOKit -framework CoreGraphics 
 
 SOURCES = source/bo3macfix.c source/bo3macnative.m source/stream_stall_recovery.c source/utilities.c source/steam.c source/exports.c source/havok.c source/t7overcharged.c source/cpu_tuning.c
 SOURCES += source/controllers.c source/gpu_tweaks.c
+# which players folder a .cfg comes from, for mods that save them from Lua (players_cfg.c)
+SOURCES += source/players_cfg.c
 # which frame rate limit applies to a frame, and the pause menu's state for PauseMenuFPS (frame_limit.c)
 SOURCES += source/frame_limit.c
 # PlayStation controllers through macOS's GameController framework (gc_bridge.m), weak-linked because it needs macOS 11.3
@@ -93,6 +96,10 @@ tests/test_notice_queue: tests/test_notice_queue.c source/notice_queue.c source/
 # which frame rate limit applies to a frame and the pause menu's state (frame_limit.c), plain C as well
 tests/test_frame_limit: tests/test_frame_limit.c source/frame_limit.c source/frame_limit.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_frame_limit.c source/frame_limit.c
+
+# which players folder a .cfg comes from (players_cfg.c), against made-up folders
+tests/test_players_cfg: tests/test_players_cfg.c source/players_cfg.c source/players_cfg.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_players_cfg.c source/players_cfg.c
 
 # controllers.c (when the game is asked to look for controllers, the version SDL is given) against a fake game image and
 # fake HID devices, and gc_bridge.m's player slots as the game's XInput calls see them, with stand-in controllers
