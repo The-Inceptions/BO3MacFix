@@ -305,6 +305,37 @@ check(#saves == count + 1 and store.Round == "15", "a round 15 save stays when q
 models["controller0.gameScore.roundsPlayed"] = 16
 BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
 check(#saves == count + 2 and store.Round == "15", "quitting at the same round saves")
+-- the quit and end-game popups are system overlays (CoD.OverlayUtility.CreateOverlay), not menus of their own name:
+-- the End Game popup of AAE's start menu didn't save live while only menus were watched
+local overlays_made = {}
+CoD.OverlayUtility = { CreateOverlay = function(controller, menu, name, extra)
+    table.insert(overlays_made, name .. ":" .. tostring(extra))
+    return { overlay = name }
+end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+local before_overlays = #saves
+local overlay = CoD.OverlayUtility.CreateOverlay(0, {}, "EndGamePopup", "x")
+check(#saves == before_overlays + 1 and overlay ~= nil and overlay.overlay == "EndGamePopup" and
+    overlays_made[1] == "EndGamePopup:x", "an End Game overlay saves, and is still made with its arguments")
+CoD.OverlayUtility.CreateOverlay(0, {}, "SomeOtherPopup")
+check(#saves == before_overlays + 1 and #overlays_made == 2, "other overlays don't save")
+-- something that wraps ours, then ours again around that: still one save for one overlay
+local inner = CoD.OverlayUtility.CreateOverlay
+CoD.OverlayUtility.CreateOverlay = function(...) return inner(...) end
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+CoD.OverlayUtility.CreateOverlay(0, {}, "QuitPCGamePopup")
+check(#saves == before_overlays + 2 and #overlays_made == 3, "one save through two wrappers: " ..
+    (#saves - before_overlays))
+-- an overlay that can't be made still fails (after saving), and the next one saves again
+CoD.OverlayUtility = { CreateOverlay = function() error("no such overlay") end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+check(not pcall(CoD.OverlayUtility.CreateOverlay, 0, {}, "QuitGamePopup") and #saves == before_overlays + 3,
+    "a failing overlay still fails")
+CoD.OverlayUtility = { CreateOverlay = function(controller, menu, name) return name end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+check(CoD.OverlayUtility.CreateOverlay(0, {}, "QuitGamePopup") == "QuitGamePopup" and #saves == before_overlays + 4,
+    "and the next one saves again")
+CoD.OverlayUtility = nil
 -- the test switches: give, then save and report so many seconds in
 leave_match()
 polls(1)
@@ -317,6 +348,9 @@ check(execs[1] == "take pistol_m1911" or execs[1] == "give ray_gun_upgraded", "t
 local logged = table.concat(logs, "\n")
 check(string.find(logged, "checkpoint test: saved true", 1, true) ~= nil, "the test save runs")
 check(string.find(logged, "checkpoint test: this match has round 12", 1, true) ~= nil, "the test report runs")
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+check(string.find(table.concat(logs, "\n"), "checkpoint test: menu StartMenu_Main", 1, true) ~= nil,
+    "the report switch logs the menus a match makes")
 
 -- ---- the full loadout: each gun with its attachments, options and ammo type, and the perks
 leave_match()
