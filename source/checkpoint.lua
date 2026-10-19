@@ -391,13 +391,16 @@ local AUTOSAVE_START_POLLS = math.floor((tonumber(autosave_start) or 10) * 1000 
 local AUTOSAVE_SETTLE_POLLS = 4
 local AUTOSAVE_AFTER_GIVE_POLLS = 10 -- a resumed game's weapons arrive a moment after the give commands
 
--- one player: no split screen, and no one else in the game's lobby (a game started with +map may have no lobby). Only
--- a clear answer that it isn't counts. Also what it found, for the log.
-local function solo()
-    if call(Engine.IsSplitscreen) == true then return false, "split screen" end
+-- why this game isn't solo, nil if it is: split screen, a recording played back, or more than one client in the game's
+-- lobby (a game started with +map may have no lobby, and only a clear answer counts); and the lobby's count, for the log
+local function not_solo()
     local lobby = Enum ~= nil and Enum.LobbyType ~= nil and Enum.LobbyType.LOBBY_TYPE_GAME or nil
     local clients = lobby ~= nil and tonumber(call(Engine.GetLobbyClientCount, lobby)) or nil
-    return clients == nil or clients <= 1, tostring(clients) .. " in the game's lobby"
+    local count = tostring(clients) .. " in the game's lobby"
+    if call(Engine.IsSplitscreen) == true then return "this one is split screen", count end
+    if call(Engine.IsDemoPlaying) == true then return "this one is a recording", count end
+    if clients ~= nil and clients > 1 then return "this one has " .. count, count end
+    return nil, count
 end
 
 local function autosave_tick(controller, round, state)
@@ -422,9 +425,9 @@ local function autosave_tick(controller, round, state)
     end
     auto.round, auto.next = round, nil
     if autosave_fn() ~= true or string.sub(current_map(), 1, 3) ~= "zm_" then return end
-    local alone, players = solo()
-    if not alone then
-        if not auto.told then log("checkpoint: AutoSave is for solo games, this one has " .. players) end
+    local why, players = not_solo()
+    if why ~= nil then
+        if not auto.told then log("checkpoint: AutoSave is for solo games, and " .. why) end
         auto.told = true
         return
     end

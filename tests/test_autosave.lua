@@ -13,7 +13,7 @@ end
 
 -- ---- a made-up game
 local models, logs, execs = {}, {}, {}
-local map, in_game, lobby_clients, splitscreen = "core_frontend", false, 1, false
+local map, in_game, lobby_clients, splitscreen, demo = "core_frontend", false, 1, false, false
 local function model(path) return { path = path } end
 Engine = {
     GetModelForController = function(c) return model("controller" .. c) end,
@@ -29,6 +29,7 @@ Engine = {
     DvarString = function() return "" end,
     Exec = function(_, command) table.insert(execs, command) end,
     IsSplitscreen = function() return splitscreen end,
+    IsDemoPlaying = function() return demo end,
     GetLobbyClientCount = function(lobby)
         if lobby ~= Enum.LobbyType.LOBBY_TYPE_GAME then return 9 end
         return lobby_clients
@@ -164,7 +165,7 @@ polls(10)
 check(#posts == 3, "not with two players in the game's lobby")
 local told = 0
 for _, line in ipairs(logs) do
-    if string.find(line, "AutoSave is for solo games, this one has 2 in the game's lobby", 1, true) then told = told + 1 end
+    if string.find(line, "AutoSave is for solo games, and this one has 2 in the game's lobby", 1, true) then told = told + 1 end
 end
 check(told == 1, "says so in the log once: " .. told)
 round(5)
@@ -178,16 +179,21 @@ round(7)
 polls(10)
 check(#posts == 4, "not in split screen")
 splitscreen = false
+demo = true
+round(8)
+polls(10)
+check(#posts == 4, "not in a recording")
+demo = false
 autosave_on = false
 local reads = weapon_reads
-round(8)
+round(9)
 polls(10)
 check(#posts == 4, "not with AutoSave off")
 check(weapon_reads == reads, "which doesn't even read the game")
 autosave_on = true
-round(9)
+round(10)
 polls(4)
-check(#posts == 5 and posts[5].lines.Round == "9", "on again, the next round saves")
+check(#posts == 5 and posts[5].lines.Round == "10", "on again, the next round saves")
 leave_match()
 lobby_clients = 1
 enter_match("mp_nuketown_x", 3)
