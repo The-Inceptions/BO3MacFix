@@ -1,5 +1,5 @@
-// Tests for checkpoint.c: AAE's custom mutations lines, and saving, applying and clearing a checkpoint, with made-up
-// files in a temporary folder.
+// Tests for checkpoint.c: AAE's custom mutations lines, saving a game, setting up its resume (round, points, perks)
+// and undoing it, and the commands that give its weapons back, with made-up files in a temporary folder.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -108,23 +108,32 @@ static void test_save(void) {
     CHECK(!checkpoint_save(&paths, "Round=0\nPoints=100\n", 1));
     CHECK(!checkpoint_save(&paths, "Round=5\nPoints=-1\n", 1));
     CHECK(!checkpoint_save(&paths, "Round=5\nPoints=100\njunk\n", 1)); // a line that isn't Key=value
-    CHECK(!checkpoint_save(&paths, "Round=5\nPoints=100\nWeapon=a\tb\n", 1)); // a control character
+    CHECK(!checkpoint_save(&paths, "Round=5\nPoints=100\nHeld=a\tb\n", 1)); // a control character
+    // weapon and perk lists are names only, since weapons go into console commands
+    CHECK(!checkpoint_save(&paths, "Round=5\nPoints=100\nWeapons=ray_gun;quit\n", 1));
+    CHECK(!checkpoint_save(&paths, "Round=5\nPoints=100\nWeapons=ray gun\n", 1));
+    CHECK(!checkpoint_save(&paths, "Round=5\nPoints=100\nWeapons=ray_gun,,thundergun\n", 1));
+    CHECK(!checkpoint_save(&paths, "Round=5\nPoints=100\nPerks=juggernaut,\n", 1));
     CHECK(read_text(checkpoint_path) == NULL);
     CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=23\nPoints=12340\nPerks=juggernaut,quick_revive\n"
-                                  "Weapon=Ray Gun Mark II (Pack-a-Punched)\nStats=Kills 812, Downs 1\nApplied=1\n",
+                                  "Weapons=ray_gun_upgraded,ar_standard+reflex\nEquipment=frag_grenade,knife\n"
+                                  "Held=Ray Gun (Pack-a-Punched)\nCharacter=Richtofen\nStats=Kills 812, Downs 1\n"
+                                  "Applied=1\n",
                           1760000000));
     char text[4096];
     checkpoint_read(&paths, text, sizeof(text));
     CHECK(strstr(text, "Map=zm_theater\n") != NULL);
     CHECK(strstr(text, "Round=23\n") != NULL);
-    CHECK(strstr(text, "Weapon=Ray Gun Mark II (Pack-a-Punched)\n") != NULL);
+    CHECK(strstr(text, "Weapons=ray_gun_upgraded,ar_standard+reflex\n") != NULL);
+    CHECK(strstr(text, "Held=Ray Gun (Pack-a-Punched)\n") != NULL);
+    CHECK(strstr(text, "Character=Richtofen\n") != NULL);
     CHECK(strstr(text, "Saved=1760000000\n") != NULL);
-    CHECK(strstr(text, "Applied") == NULL); // only the checkpoint's own keys come from the page
+    CHECK(strstr(text, "Applied") == NULL); // only the saved game's own keys come from the page
     CHECK(checkpoint_resume_state(&paths) == Checkpoint_No_Resume);
     // a new save replaces the fields, leaving out the ones it doesn't have
     CHECK(checkpoint_save(&paths, "Round=24\nPoints=100\n", 1760000100));
     checkpoint_read(&paths, text, sizeof(text));
-    CHECK(strstr(text, "Round=24\n") != NULL && strstr(text, "Map=") == NULL);
+    CHECK(strstr(text, "Round=24\n") != NULL && strstr(text, "Map=") == NULL && strstr(text, "Weapons=") == NULL);
 }
 
 static const char *user_mutations = "modvar tfoption_max_ammo 1\n"
@@ -133,72 +142,163 @@ static const char *user_mutations = "modvar tfoption_max_ammo 1\n"
                                     "modvar tfoption_starting_points 500\n"
                                     "modvar tfoption_loadoutsave 1\n";
 
+static const char *game_values = "tfoption_starting_round=23\ntfoption_starting_points=12340\n"
+                                 "tfoption_perkaholic=1\ntfoption_spawn_with_quick_res=\n";
+
 static void test_apply_and_clear(void) {
     char commands[512];
     write_text(mutations, user_mutations);
     unlink(checkpoint_path);
-    CHECK(!checkpoint_apply(&paths, "_Default", "7", "500", commands, sizeof(commands))); // no checkpoint yet
+    CHECK(!checkpoint_apply(&paths, "_Default", commands, sizeof(commands))); // no checkpoint yet
     CHECK(!checkpoint_mark_in_use(&paths));
-    CHECK(!checkpoint_clear(&paths, "7", "500", commands, sizeof(commands))); // nothing to clear
-    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=23\nPoints=12340\n", 1));
+    CHECK(!checkpoint_clear(&paths, game_values, commands, sizeof(commands))); // nothing to clear
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=23\nPoints=12340\nPerks=juggernaut\n", 1));
 
-    // malformed arguments change nothing
-    CHECK(!checkpoint_apply(&paths, "_Default", "7; quit", "500", commands, sizeof(commands)));
-    CHECK(!checkpoint_apply(&paths, "/../x", "7", "500", commands, sizeof(commands)));
-    CHECK(!checkpoint_apply(&paths, "", "7", "500", commands, sizeof(commands)));
+    // malformed presets change nothing
+    CHECK(!checkpoint_apply(&paths, "/../x", commands, sizeof(commands)));
+    CHECK(!checkpoint_apply(&paths, "", commands, sizeof(commands)));
+    CHECK(!checkpoint_apply(&paths, "_Default;quit", commands, sizeof(commands)));
     CHECK(strcmp(read_text(mutations), user_mutations) == 0);
     CHECK(checkpoint_resume_state(&paths) == Checkpoint_No_Resume);
 
-    CHECK(checkpoint_apply(&paths, "_Default", "7", "500", commands, sizeof(commands)));
+    // the round and points; Perkaholic is on already, so it's left alone
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
     CHECK(strcmp(commands, "modvar tfoption_starting_round 23\nmodvar tfoption_starting_points 12340\n") == 0);
     CHECK(strcmp(read_text(mutations), "modvar tfoption_max_ammo 1\n"
                                        "modvar tfoption_starting_round 23\n"
                                        "modvar tfoption_perkaholic 1\n"
                                        "modvar tfoption_starting_points 12340\n"
                                        "modvar tfoption_loadoutsave 1\n") == 0);
-    CHECK(checkpoint_resume_state(&paths) != Checkpoint_No_Resume);
-    // again (the game's options are the checkpoint's now): the first previous values stay
-    CHECK(checkpoint_apply(&paths, "_Default", "23", "12340", commands, sizeof(commands)));
-    CHECK(strcmp(commands, "modvar tfoption_starting_round 23\nmodvar tfoption_starting_points 12340\n") == 0);
-    // a game starts with it; saving then keeps it set up
     CHECK(checkpoint_resume_state(&paths) == Checkpoint_Resume_Set_Up);
+    // again (the file has the checkpoint's values now): the values from before the first time stay
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strcmp(commands, "modvar tfoption_starting_round 23\nmodvar tfoption_starting_points 12340\n") == 0);
+    // a game starts with it and gets its weapons; saving then keeps it set up
+    CHECK(!checkpoint_mark_weapons_given(&paths)); // not before a game has started with it
     CHECK(checkpoint_mark_in_use(&paths));
     CHECK(checkpoint_resume_state(&paths) == Checkpoint_Resume_In_Use);
     CHECK(!checkpoint_mark_in_use(&paths));
+    CHECK(checkpoint_mark_weapons_given(&paths));
+    CHECK(checkpoint_resume_state(&paths) == Checkpoint_Resume_Weapons_Given);
+    CHECK(!checkpoint_mark_weapons_given(&paths));
     CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=25\nPoints=20000\n", 2));
-    CHECK(checkpoint_resume_state(&paths) == Checkpoint_Resume_In_Use);
+    CHECK(checkpoint_resume_state(&paths) == Checkpoint_Resume_Weapons_Given);
 
-    CHECK(checkpoint_clear(&paths, "23", "12340", commands, sizeof(commands)));
+    CHECK(checkpoint_clear(&paths, game_values, commands, sizeof(commands)));
     CHECK(strcmp(commands, "modvar tfoption_starting_round 7\nmodvar tfoption_starting_points 500\n") == 0);
     CHECK(strcmp(read_text(mutations), user_mutations) == 0);
     CHECK(checkpoint_resume_state(&paths) == Checkpoint_No_Resume);
-    CHECK(!checkpoint_clear(&paths, "23", "12340", commands, sizeof(commands)));
+    CHECK(!checkpoint_clear(&paths, game_values, commands, sizeof(commands)));
     char text[4096];
     checkpoint_read(&paths, text, sizeof(text));
-    CHECK(strstr(text, "Round=25\n") != NULL); // the checkpoint stays for next time
+    CHECK(strstr(text, "Round=25\n") != NULL); // the saved game stays for next time
+    CHECK(strstr(text, "Applied") == NULL && strstr(text, "Previous") == NULL && strstr(text, "InUse") == NULL);
 
     // unset before: the lines go again, and the commands unset them; a value changed since is the player's
     write_text(mutations, "modvar tfoption_max_ammo 1\n");
-    CHECK(checkpoint_apply(&paths, "_Default", "", "", commands, sizeof(commands)));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
     CHECK(strcmp(read_text(mutations), "modvar tfoption_max_ammo 1\nmodvar tfoption_starting_round 25\n"
                                        "modvar tfoption_starting_points 20000\n") == 0);
     write_text(mutations, "modvar tfoption_max_ammo 1\nmodvar tfoption_starting_round 30\n"
                           "modvar tfoption_starting_points 20000\n");
-    CHECK(checkpoint_clear(&paths, "30", "20000", commands, sizeof(commands)));
+    CHECK(checkpoint_clear(&paths, "tfoption_starting_round=30\r\ntfoption_starting_points=20000", commands,
+                           sizeof(commands)));
     CHECK(strcmp(commands, "modvar tfoption_starting_points \"\"\n") == 0);
     CHECK(strcmp(read_text(mutations), "modvar tfoption_max_ammo 1\nmodvar tfoption_starting_round 30\n") == 0);
 
     // rounds past AAE's slider are its last, and no mutations file yet gets one
     unlink(mutations);
     CHECK(checkpoint_save(&paths, "Round=300\nPoints=99999999\n", 3));
-    CHECK(checkpoint_apply(&paths, "_Default", "", "", commands, sizeof(commands)));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
     CHECK(strcmp(commands, "modvar tfoption_starting_round 255\nmodvar tfoption_starting_points 9999990\n") == 0);
     CHECK(strcmp(read_text(mutations), "modvar tfoption_starting_round 255\n"
                                        "modvar tfoption_starting_points 9999990\n") == 0);
     // at start-up there's no game to give commands to
-    CHECK(checkpoint_clear(&paths, NULL, NULL, commands, sizeof(commands)));
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
     CHECK(strcmp(commands, "") == 0);
     CHECK(strcmp(read_text(mutations), "") == 0);
+}
+
+static void test_perks(void) {
+    char commands[512];
+    // perks but Perkaholic off: it goes on, with Quick Revive for that one, and both go back after
+    write_text(mutations, "modvar tfoption_perkaholic 0\nmodvar tfoption_starting_round 7\n");
+    unlink(checkpoint_path);
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nPerks=quick_revive,doubletap2\n", 1));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strcmp(commands, "modvar tfoption_starting_round 12\nmodvar tfoption_starting_points 4000\n"
+                           "modvar tfoption_perkaholic 1\nmodvar tfoption_spawn_with_quick_res 1\n") == 0);
+    CHECK(strcmp(read_text(mutations), "modvar tfoption_perkaholic 1\nmodvar tfoption_starting_round 12\n"
+                                       "modvar tfoption_starting_points 4000\n"
+                                       "modvar tfoption_spawn_with_quick_res 1\n") == 0);
+    CHECK(checkpoint_clear(&paths, "tfoption_starting_round=12\ntfoption_starting_points=4000\n"
+                                   "tfoption_perkaholic=1\ntfoption_spawn_with_quick_res=1\n",
+                           commands, sizeof(commands)));
+    CHECK(strcmp(commands, "modvar tfoption_starting_round 7\nmodvar tfoption_starting_points \"\"\n"
+                           "modvar tfoption_perkaholic 0\nmodvar tfoption_spawn_with_quick_res \"\"\n") == 0);
+    CHECK(strcmp(read_text(mutations), "modvar tfoption_perkaholic 0\nmodvar tfoption_starting_round 7\n") == 0);
+
+    // Quick Revive alone: only that, never Perkaholic
+    CHECK(checkpoint_save(&paths, "Round=3\nPoints=900\nPerks=quick_revive\n", 2));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strstr(commands, "tfoption_perkaholic") == NULL);
+    CHECK(strstr(commands, "modvar tfoption_spawn_with_quick_res 1\n") != NULL);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+
+    // no perks: the player's own perk options stay as they are
+    CHECK(checkpoint_save(&paths, "Round=3\nPoints=900\nPerks=\n", 3));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strcmp(commands, "modvar tfoption_starting_round 3\nmodvar tfoption_starting_points 900\n") == 0);
+    CHECK(strcmp(read_text(mutations), "modvar tfoption_perkaholic 0\nmodvar tfoption_starting_round 3\n"
+                                       "modvar tfoption_starting_points 900\n") == 0);
+
+    // set up again after a save without perks: Perkaholic, turned on the first time, goes back now
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+    CHECK(checkpoint_save(&paths, "Round=3\nPoints=900\nPerks=juggernaut\n", 4));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strstr(read_text(mutations), "modvar tfoption_perkaholic 1\n") != NULL);
+    CHECK(checkpoint_save(&paths, "Round=4\nPoints=900\n", 5));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strstr(commands, "modvar tfoption_perkaholic 0\n") != NULL);
+    CHECK(strcmp(read_text(mutations), "modvar tfoption_perkaholic 0\nmodvar tfoption_starting_round 4\n"
+                                       "modvar tfoption_starting_points 900\n") == 0);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+    CHECK(strcmp(read_text(mutations), "modvar tfoption_perkaholic 0\nmodvar tfoption_starting_round 7\n") == 0);
+}
+
+// the commands for saved and held, "(error)" if malformed
+static const char *weapon_commands(const char *saved, const char *held, int *count) {
+    static char out[1024];
+    *count = checkpoint_weapon_commands(saved, held, out, sizeof(out));
+    return *count >= 0 ? out : "(error)";
+}
+
+static void test_weapon_commands(void) {
+    int count;
+    // take what isn't saved first, then give what isn't held
+    CHECK(strcmp(weapon_commands("ray_gun_upgraded,thundergun_upgraded", "pistol_m1911,pistol_burst", &count),
+                 "take pistol_m1911\ntake pistol_burst\ngive ray_gun_upgraded\ngive thundergun_upgraded\n") == 0);
+    CHECK(count == 4);
+    // what's held already stays
+    CHECK(strcmp(weapon_commands("pistol_burst,ray_gun", "pistol_m1911,pistol_burst", &count),
+                 "take pistol_m1911\ngive ray_gun\n") == 0);
+    CHECK(count == 2);
+    CHECK(strcmp(weapon_commands("pistol_burst", "pistol_burst", &count), "") == 0 && count == 0);
+    // nothing saved (an old save, or the weapons couldn't be read): the game's own weapons stay
+    CHECK(strcmp(weapon_commands("", "pistol_m1911", &count), "") == 0 && count == 0);
+    CHECK(strcmp(weapon_commands(NULL, "pistol_m1911", &count), "") == 0 && count == 0);
+    // nothing held yet: all given; a name twice once; attachments kept
+    CHECK(strcmp(weapon_commands("ar_standard+reflex,ray_gun,ray_gun", "", &count),
+                 "give ar_standard+reflex\ngive ray_gun\n") == 0);
+    CHECK(count == 2);
+    // a name that only starts the same is another weapon
+    CHECK(strcmp(weapon_commands("ray_gun_upgraded", "ray_gun", &count), "take ray_gun\ngive ray_gun_upgraded\n") ==
+          0);
+    // anything but names is refused, so nothing else can get into a command
+    CHECK(strcmp(weapon_commands("ray_gun;quit", "", &count), "(error)") == 0);
+    CHECK(strcmp(weapon_commands("ray_gun", "a b", &count), "(error)") == 0);
+    char small[8];
+    CHECK(checkpoint_weapon_commands("ray_gun_upgraded", "", small, sizeof(small)) == -1);
 }
 
 int main(void) {
@@ -216,6 +316,8 @@ int main(void) {
     test_cfg_set();
     test_save();
     test_apply_and_clear();
+    test_perks();
+    test_weapon_commands();
 
     unlink(checkpoint_path);
     unlink(mutations);

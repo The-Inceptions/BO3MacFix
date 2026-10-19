@@ -153,4 +153,19 @@
 // -- end sdl_displays
 // following display changes: the present path (metalfx.m, gpu_tweaks.c, gpu_diag.m)
 // -- end present
+// zombies weapons and the cheat check (zm_inventory.c), from the game's give and take console commands (Cmd_Give_f at
+// 0xf42c29, Cmd_Take_f at 0xf43169, both called by the client command dispatch at 0xf45eef)
+#define ADDR_CheatsOk 0xf428c0 // func: int CheatsOk(gentity_t *ent): sv_cheats is on and ent is alive
+#define ADDR_g_entities_Ptr 0x1966be8 // holds g_entities' address (gentity_t, 0x4f8 bytes each; CheatsOk divides by it)
+#define ADDR_bg_weaponVariantDefs 0x14ce0a70 // WeaponVariantDef *[], by weapon index (BG_GetWeaponDef at 0x12362cd)
+#define ADDR_bg_lastWeaponIndex 0x14ce0a68 // int: the number of weapons less one (BG_GetNumWeapons at 0x12362a8)
+#define gentity_Client 0x250 // gclient_t *
+#define gentity_Health 0x2c8 // int, which CheatsOk wants above 0
+#define gclient_Weapon 0x2c0 // Weapon: the one in hand (take clears it when it takes that one)
+#define gclient_HeldWeapons 0x378 // the held weapons, each starting with its Weapon (give's ammo refill walks them)
+#define gclient_HeldWeapon_Size 0x30
+#define gclient_HeldWeapon_Count 15
+#define WeaponVariantDef_WeaponDef 0x18 // WeaponDef *; the variant's name is its first field
+#define WeaponDef_InventoryType 0x7c // int: 0 primary, 1 offhand, 3 alt-fire mode (which give refuses), 4 melee
+// -- end zm inventory
 // -- END OFFSETS

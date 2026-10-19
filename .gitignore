@@ -15,6 +15,7 @@ BO3MacFixLauncher
 *.bin
 source/t7overcharged_lua.h
 source/notices_lua.h
+source/checkpoint_lua.h
 tests/test_stream_stall_recovery
 tests/test_display_policy
 tests/test_sdl_displays

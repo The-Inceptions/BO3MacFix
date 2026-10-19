@@ -40,8 +40,9 @@ SOURCES += source/prepatch.c
 
 # the build All-around Enhancement checks for, read from its fastfile (aae_build.c)
 SOURCES += source/aae_build.c
-# a zombies checkpoint the settings page saves and resumes through AAE's starting round and points (checkpoint.c)
-SOURCES += source/checkpoint.c
+# saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
+# weapons back (zm_inventory.c)
+SOURCES += source/checkpoint.c source/zm_inventory.c
 
 # settings.ini's options for an in-game menu, the settings.ini writer and restarting (settings.c), with the
 # settings.ini reading and writing (settings_ini.c)
@@ -74,6 +75,8 @@ test: $(TEST_TARGETS)
 	for test in $(TEST_TARGETS); do ./$$test || exit 1; done
 	@# notices.lua against a made-up LUI, with any Lua 5.x
 	if command -v lua >/dev/null; then lua tests/test_notices.lua; else echo "no lua, skipping tests/test_notices.lua"; fi
+	@# checkpoint.lua (saving and resuming a zombies game) against a made-up Engine and AAE
+	if command -v lua >/dev/null; then lua tests/test_checkpoint.lua; else echo "no lua, skipping tests/test_checkpoint.lua"; fi
 
 tests/test_stream_stall_recovery: tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_stream_stall_recovery.c source/stream_stall_recovery.c
@@ -135,7 +138,7 @@ tests/test_gc_bridge: tests/test_gc_bridge.m source/gc_bridge.m source/gc_bridge
 	$(CLANG) -O1 -Wall -Wextra -Werror -Wno-unused-parameter -mmacosx-version-min=$(OSXVER) -framework Foundation \
 		-weak_framework GameController -weak_framework CoreHaptics -framework IOKit -o $@ tests/test_gc_bridge.m
 
-$(TARGET): $(SOURCES) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h
+$(TARGET): $(SOURCES) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(DEFINES) $(LDFLAGS) -o $@ $(SOURCES)
 
 # the Lua half of our T7Overcharged support, embedded as a byte array
@@ -150,7 +153,10 @@ source/settings_menu_lua.h: source/settings_menu.lua
 source/notices_lua.h: source/notices.lua
 	cd source && xxd -i notices.lua > notices_lua.h
 
+source/checkpoint_lua.h: source/checkpoint.lua
+	cd source && xxd -i checkpoint.lua > checkpoint_lua.h
+
 clean:
-	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h
+	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
 
 .PHONY: all clean test
