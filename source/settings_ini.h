@@ -2,6 +2,7 @@
 // tests/test_settings_ini.c tests it without the game.
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 
 // where the value starts if line sets name ("Name = value", spaces and tabs optional), else NULL
 const char *settings_ini_match(const char *line, const char *name);
@@ -12,6 +13,11 @@ bool settings_ini_number(const char *value, int base, int *out);
 
 // the number set for name in the file at path (by the last line with one), or fallback
 int settings_ini_read(const char *path, const char *name, int fallback, int base);
+
+// the text set for name in the file at path (by the last line with one) into out: the rest of the line without the
+// spaces around it, and without quotes around it if there are. False, leaving out alone, if no line sets it or the
+// text doesn't fit out.
+bool settings_ini_read_string(const char *path, const char *name, char *out, size_t out_size);
 
 // sets name = value in the file at path, keeping every other line as it is: the first line that sets name gets the
 // new value and any later ones go. Written to a temporary file that then replaces it, so the file is never half

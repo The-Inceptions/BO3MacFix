@@ -3,7 +3,7 @@
 TARGET = BO3MacFix.dylib
 TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
-	tests/test_players_cfg
+	tests/test_players_cfg tests/test_aae_build
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -18,7 +18,7 @@ CLANG    := clang
 CC       := $(CLANG) -isysroot $(SYSROOT) -arch $(ARCH) -mmacosx-version-min=$(OSXVER)
 
 CFLAGS  = -O1 -Wall -g -I include/ -I src/ -fvisibility=hidden
-LDFLAGS = -shared -Wl,-undefined -Wl,dynamic_lookup -Llib -ldobby
+LDFLAGS = -shared -Wl,-undefined -Wl,dynamic_lookup -Llib -ldobby -lz
 
 FRAMEWORKS = -framework CoreFoundation -framework IOKit -framework CoreGraphics -framework ImageIO
 
@@ -37,6 +37,9 @@ SOURCES += source/metalfx.m source/gpu_diag.m
 
 # the pre-patched executable (prepatch.c), the launcher builds it with BO3MacFix_BuildPrepatched
 SOURCES += source/prepatch.c
+
+# the build All-around Enhancement checks for, read from its fastfile (aae_build.c)
+SOURCES += source/aae_build.c
 
 # settings.ini's options for an in-game menu, the settings.ini writer and restarting (settings.c), with the
 # settings.ini reading and writing (settings_ini.c)
@@ -69,6 +72,12 @@ test: $(TEST_TARGETS)
 
 tests/test_stream_stall_recovery: tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_stream_stall_recovery.c source/stream_stall_recovery.c
+
+# aae_build.c against made-up Lua constants, fastfiles and caches, and the installed All-around Enhancement's
+# core_mod.ff if there is one, with the address and undefined behaviour sanitizers since it parses files
+tests/test_aae_build: tests/test_aae_build.c source/aae_build.c source/aae_build.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_aae_build.c \
+		source/aae_build.c -lz
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h
