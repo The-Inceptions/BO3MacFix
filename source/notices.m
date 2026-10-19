@@ -6,10 +6,12 @@
 // notices.lua, in the game's UI, takes them from the queue four times a second and shows each for a few seconds at
 // the top of the screen.
 //
-// PauseOnDisconnect: when a controller disconnects, notices.lua is asked to pause. It does if the game is in a match
-// that can pause (Engine.CanPauseGame: solo and offline games), the pause menu isn't open already and the last input
-// came from a controller. To pause, this posts an Escape key press to the game's own event queue, so the engine opens
-// its pause menu and pauses exactly as when the player presses Esc.
+// PauseOnDisconnect: when the controller the game reads disconnects and no other takes its place within half a second
+// (gc_bridge.m works that out: not an idle second controller, nor a DualSense going from Bluetooth to USB or back),
+// notices.lua is asked to pause. It does if the game is in a match that can pause (Engine.CanPauseGame: solo and
+// offline games), the pause menu isn't open already and the last input came from a controller. To pause, this posts
+// an Escape key press to the game's own event queue, so the engine opens its pause menu and pauses exactly as when
+// the player presses Esc.
 //
 // PauseMenuFPS: notices.lua also tells gpu_tweaks.c when the pause menu is open in a match, which works with Notices
 // and PauseOnDisconnect off too (notices.lua is loaded in every UI Lua state either way).
@@ -160,9 +162,16 @@ static void controller_connected(NSString *name, int percent, bool charging, id 
         notices_post("%s connected, battery %d%%%s", name.UTF8String, percent, charging ? " and charging" : "");
 }
 
+// forced: the test hook's made-up DualSense, which pauses whatever the last input was. A real controller only pauses
+// when it was the one the game reads, through notices_controller_lost
 static void controller_disconnected(NSString *name, bool forced) {
     notices_post("%s disconnected", name.UTF8String);
-    request_pause(forced);
+    if (forced)
+        request_pause(true);
+}
+
+void notices_controller_lost(void) {
+    request_pause(false);
 }
 
 #pragma mark - displays

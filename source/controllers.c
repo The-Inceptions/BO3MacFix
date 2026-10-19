@@ -158,6 +158,17 @@ static bool gamepads_up(void) {
     return GPad_DevicesChanged != NULL && *(void *volatile *)(base_address + ADDR_dvar_gpadEnabled) != NULL;
 }
 
+// the XInput user index (player) the game's first gamepad reads, from its port table, -1 for none
+static int game_user_index(void) {
+    int port = *(const volatile int *)(base_address + ADDR_g_gpads + 4);
+    int user_index = port >= 0 && port <= 3 ? *(const volatile int *)(base_address + ADDR_g_gpadPorts + port * 8) : -1;
+    return user_index >= 0 && user_index <= 3 ? user_index : -1;
+}
+
+int controllers_game_user_index(void) {
+    return gamepads_up() ? game_user_index() : -1;
+}
+
 // which XInput user indexes (players) the game found, and which one its first gamepad reads
 static void log_game_gamepads(void *context) {
     const volatile int *ports = (const volatile int *)(base_address + ADDR_g_gpadPorts);
@@ -169,8 +180,7 @@ static void log_game_gamepads(void *context) {
         size_t length = strlen(found);
         snprintf(found + length, sizeof(found) - length, "%s%i", count++ > 0 ? ", " : "", ports[port * 2] + 1);
     }
-    int port = *(const volatile int *)(base_address + ADDR_g_gpads + 4);
-    int reads = port >= 0 && port <= 3 ? ports[port * 2] : -1;
+    int reads = game_user_index();
     if (count == 0)
         printf("BO3MacFix: the game found no controllers\n");
     else if (reads >= 0)

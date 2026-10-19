@@ -24,6 +24,7 @@
 #include "offsets.h"
 #include "controllers.h"
 #include "gc_bridge.h"
+#include "notices.h"
 #include "prepatch.h"
 
 #define XUSER_MAX_COUNT 4
@@ -777,20 +778,44 @@ static void controller_connected(GCController *controller) {
         controllers_request_gamepad_scan("a PlayStation controller connected");
 }
 
+// PauseOnDisconnect: the controller the game reads went away a moment ago (lost_grace). It's only gone if no
+// controller has taken its place since: the same DualSense over its other connection moving down to it (USB and
+// Bluetooth), one connecting as it, or SDL putting one of its own there
+static double lost_grace = 0.5; // seconds
+
+static void check_player_lost(int user_index) {
+    os_unfair_lock_lock(&pads_lock);
+    rehome_pads(); // as the game's next read would, should it not have read since
+    bool replaced = !user_index_free(user_index);
+    os_unfair_lock_unlock(&pads_lock);
+    if (replaced) {
+        printf("GameController bridge: player %i still has a controller (the same, or one that took its place)\n",
+               user_index + 1);
+        return;
+    }
+    printf("GameController bridge: no controller took player %i's place, the game's controller is gone\n",
+           user_index + 1);
+    notices_controller_lost();
+}
+
 API_AVAILABLE(macos(11.3))
 static void controller_disconnected(GCController *controller) {
-    bool bridged = false;
+    // the player the game's first gamepad reads, from before the game can see this controller gone
+    int reads = controllers_game_user_index();
+    bool bridged = false, was_read = false;
     for (int i = 0; i < XUSER_MAX_COUNT; i++) {
         bridged_pad *pad = &pads[i];
         os_unfair_lock_lock(&pads_lock);
         bool match = pad->controller == controller;
         int user_index = pad->user_index;
+        bool found = pad->found;
         if (match)
             pad->controller = nil; // the game stops seeing it right away
         os_unfair_lock_unlock(&pads_lock);
         if (!match)
             continue;
         bridged = true;
+        was_read = was_read || (reads >= 0 && user_index == reads && found);
         controller.extendedGamepad.valueChangedHandler = nil;
         controller.motion.valueChangedHandler = nil;
         if (user_index >= 0)
@@ -805,8 +830,20 @@ static void controller_disconnected(GCController *controller) {
             }
         });
     }
-    if (!bridged)
+    if (!bridged) {
         printf("GameController bridge: %s disconnected\n", controller.vendorName.UTF8String ?: "a controller");
+        // one of SDL's (an Xbox controller, say): it can be the one the game reads unless a bridged one is there.
+        // SDL may have let go of it already
+        os_unfair_lock_lock(&pads_lock);
+        was_read = reads >= 0 && pad_for_user(reads) == NULL;
+        os_unfair_lock_unlock(&pads_lock);
+    }
+    if (was_read) {
+        dispatch_time_t when = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(lost_grace * NSEC_PER_SEC));
+        dispatch_after(when, dispatch_get_main_queue(), ^{
+            check_player_lost(reads);
+        });
+    }
     // the game notices a controller it reads going away by itself, but only gives the gamepad that read it another
     // connected controller when asked (Windows asks it on removals too)
     controllers_request_gamepad_scan(bridged ? "a PlayStation controller disconnected" : "a controller disconnected");

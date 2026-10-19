@@ -12,6 +12,10 @@ void notices_init(int notices, int pause_on_disconnect);
 void notices_set_enabled(int on);
 void notices_set_pause_on_disconnect(int on);
 
+// the controller the game reads went away and no other took its place (gc_bridge.m): with PauseOnDisconnect on, asks
+// the UI to pause (thread-safe)
+void notices_controller_lost(void);
+
 // shows text in the game (thread-safe), or only logs it while Notices is off
 void notices_post(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
