@@ -4,7 +4,7 @@ TARGET = BO3MacFix.dylib
 TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
 	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint \
-	tests/test_zm_inventory tests/test_zm_loadout
+	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -46,6 +46,8 @@ SOURCES += source/aae_build.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
 # weapons back with their camo, attachments and ammo types, and its perks (zm_inventory.c, zm_loadout.c)
 SOURCES += source/checkpoint.c source/zm_inventory.c source/zm_loadout.c
+# saving it by itself at each new round, on a background queue, and deleting the save (checkpoint_autosave.c)
+SOURCES += source/checkpoint_autosave.c
 
 # settings.ini's options for an in-game menu, the settings.ini writer and restarting (settings.c), with the
 # settings.ini reading and writing (settings_ini.c)
@@ -80,6 +82,8 @@ test: $(TEST_TARGETS)
 	if command -v lua >/dev/null; then lua tests/test_notices.lua; else echo "no lua, skipping tests/test_notices.lua"; fi
 	@# checkpoint.lua (saving and resuming a zombies game) against a made-up Engine and AAE
 	if command -v lua >/dev/null; then lua tests/test_checkpoint.lua; else echo "no lua, skipping tests/test_checkpoint.lua"; fi
+	@# AutoSave's round trigger and the Delete saved game row in checkpoint.lua
+	if command -v lua >/dev/null; then lua tests/test_autosave.lua; else echo "no lua, skipping tests/test_autosave.lua"; fi
 
 tests/test_stream_stall_recovery: tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_stream_stall_recovery.c source/stream_stall_recovery.c
@@ -150,6 +154,18 @@ tests/test_zm_inventory: tests/test_zm_inventory.c source/zm_inventory.c source/
 		source/zm_loadout.c source/zm_loadout.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -o $@ \
 		tests/test_zm_inventory.c source/zm_loadout.c
+
+# checkpoint_autosave.c (AutoSave's background writer, its rules, deleting the save, the lock) with made-up files, with
+# the address and undefined behaviour sanitizers, and again with the thread sanitizer since it's about two threads
+tests/test_checkpoint_autosave: tests/test_checkpoint_autosave.c source/checkpoint_autosave.c source/checkpoint_autosave.h \
+		source/checkpoint.c source/checkpoint.h source/zm_loadout.c source/zm_loadout.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_checkpoint_autosave.c \
+		source/checkpoint_autosave.c source/checkpoint.c source/zm_loadout.c
+
+tests/test_checkpoint_autosave_tsan: tests/test_checkpoint_autosave.c source/checkpoint_autosave.c \
+		source/checkpoint_autosave.h source/checkpoint.c source/checkpoint.h source/zm_loadout.c source/zm_loadout.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=thread -o $@ tests/test_checkpoint_autosave.c \
+		source/checkpoint_autosave.c source/checkpoint.c source/zm_loadout.c
 
 # controllers.c (when the game is asked to look for controllers, the version SDL is given) against a fake game image and
 # fake HID devices, and gc_bridge.m's player slots as the game's XInput calls see them, with stand-in controllers

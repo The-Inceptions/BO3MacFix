@@ -39,6 +39,7 @@
 #include "offsets.h"
 #include "players_cfg.h"
 #include "checkpoint.h"
+#include "checkpoint_autosave.h"
 #include "prepatch.h"
 #include "qol.h"
 #include "rawmouse.h"
@@ -987,6 +988,8 @@ __attribute__((constructor)) static void dylib_main() {
                checkpoint_apply(&checkpoint_paths, "_Default", checkpoint_commands, sizeof(checkpoint_commands))
                    ? "set up the resume for this launch (BO3MACFIX_CHECKPOINT_RESUME)"
                    : "couldn't set up the resume (BO3MACFIX_CHECKPOINT_RESUME)");
+    // saving a solo zombies game by itself at each new round (AutoSave, on by default), see checkpoint_autosave.c
+    checkpoint_autosave_set_enabled(read_int_setting_or_env("AutoSave", 1) != 0);
 
     // get the base address of the binary
     game_base_address = get_base_address();

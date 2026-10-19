@@ -104,8 +104,8 @@ end
 local chunk = assert(loadfile("source/checkpoint.lua"))
 local function load(save_after, give_test, report_after, perks_test)
     local f = { c_side() }
-    chunk(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], save_after, give_test,
-        report_after, perks_test)
+    chunk(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], save_after, give_test, report_after, nil, nil, nil,
+        f[10], f[11], f[12], f[13], perks_test)
 end
 load(nil, nil, nil, nil)
 check(BO3MacFix.ReadCheckpoint == fake.ReadCheckpoint, "the C functions are set up")

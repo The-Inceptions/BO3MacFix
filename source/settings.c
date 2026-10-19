@@ -7,7 +7,7 @@
 //   BO3MacFix.RestartPending() -> true while a setting saved this session differs from what the game started with
 //                                  and couldn't be applied without a restart
 // Some settings apply right away (live = true): the frame rate ones, the display ones, the controller ones,
-// RawMouseScale, AAEOnline and ExitFix, plus JobIdleFix, RenderIdleFix and AvoidNotch from the pre-patched executable. The rest
+// RawMouseScale, AAEOnline, ExitFix and AutoSave, plus JobIdleFix, RenderIdleFix and AvoidNotch from the pre-patched executable. The rest
 // are read once at startup, so changing them asks for a restart.
 #include <limits.h>
 #include <spawn.h>
@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "checkpoint_autosave.h"
 #include "controllers.h"
 #include "cpu_tuning.h"
 #include "display_follow.h"
@@ -98,6 +99,8 @@ static const setting_t settings[] = {
     { "FrameStats", "Frame stats in the log", "Logs the frame rate, 1% low and worst frame time to BO3MacFix/log.txt.", "Advanced", false, 4, { 0, 5, 10, 30 }, { "Off", "Every 5 s", "Every 10 s", "Every 30 s" }, 0, Live_Present },
     { "GpuDiagnostics", "GPU diagnostics in the log", "Logs the window, display mode and Metal layer whenever they change.", "Advanced", Toggle(0) },
     { "NoCodePatches", "No code patches (testing)", "Leaves the game's code exactly as shipped, without any of the fixes. Solo play only.", "Advanced", Toggle(0) },
+    // last, so the settings page shows it with the saved game's rows (checkpoint.lua)
+    { "AutoSave", "AutoSave", "Saves a solo zombies game by itself as each new round starts, like Save game. A game saved at a higher round stays unless this one resumed it.", "Saved game", Toggle_Live(1, Live_Always) },
 };
 #define Setting_Count (sizeof(settings) / sizeof(settings[0]))
 
@@ -165,6 +168,8 @@ static bool apply_live(const setting_t *t, int value) {
         notices_set_enabled(value);
     else if (strcmp(n, "PauseOnDisconnect") == 0)
         notices_set_pause_on_disconnect(value);
+    else if (strcmp(n, "AutoSave") == 0)
+        checkpoint_autosave_set_enabled(value != 0);
     else
         return false;
     return true;
