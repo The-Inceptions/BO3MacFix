@@ -376,6 +376,25 @@ polls(12)
 restore_result = "took 1, gave 1 guns (0 held already), 0 ammo types, 2 perks (0 had already), 1 failed: no weapon x_zm"
 polls(1)
 check(notices[#notices] == "Not restored: no weapon x_zm", "what failed: " .. tostring(notices[#notices]))
+-- a restore that didn't run (the player wasn't alive) says so, not "Guns back", and saves keep the saved loadout
+leave_match()
+polls(1)
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0"
+notices = {}
+polls(12)
+restore_result = "not for the local player, or it isn't alive"
+polls(1)
+check(notices[#notices] == "Saved loadout not restored: not for the local player, or it isn't alive" and
+    not string.find(table.concat(notices, "\n"), "Guns back", 1, true), "not restored: " .. tostring(notices[#notices]))
+local live = loadout
+loadout = "Guns=pistol_standard_zm:0:0:\nGunInHand=pistol_standard_zm\nPerkList="
+before = #saves
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+loadout = live
+check(#saves == before + 1 and saves[#saves].Guns == LOADOUT_GUNS, "a save after keeps the saved guns: " ..
+    tostring(saves[#saves].Guns))
 -- a game that never runs the command (paused): sent again twice, then logged
 leave_match()
 polls(1)

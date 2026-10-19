@@ -594,19 +594,30 @@ local function poll(controller)
             end
         end
         if type(result) == "string" then
-            match.restoring_at, match.restored_at, loadout_pending = nil, match.polls, nil
+            -- a restore that ran says "took ..."; one that didn't (the player not alive, or "nothing set up" at the
+            -- last try) gave nothing back, so saves keep the checkpoint's loadout, as before it's back
+            local ran = loadout_pending ~= "resume" or string.find(result, "^took ") ~= nil
+            match.restoring_at, match.restored_at = nil, match.polls
+            if ran then loadout_pending = nil end
             local _, _, raw = weapons_now()
-            log("checkpoint: loadout restored: " .. result .. "; weapons now " .. tostring(raw))
+            log("checkpoint: loadout " .. (ran and "restored: " or "not restored: ") .. result .. "; weapons now " ..
+                tostring(raw))
             local checkpoint = read_checkpoint()
             local notice = bo3macfix.CheckpointNotice or function() end
-            local guns = guns_text(checkpoint.Guns)
-            if #guns > 0 then notice("Guns back: " .. table.concat(guns, ", ")) end
-            local perks = split(checkpoint.PerkList)
-            if #perks > 0 then notice("Perks back: " .. #perks) end
-            local failed = string.match(result, "failed: (.*)$")
-            if failed ~= nil then notice("Not restored: " .. failed) end
+            if not ran then
+                notice("Saved loadout not restored: " .. result)
+            else
+                local guns = guns_text(checkpoint.Guns)
+                if #guns > 0 then notice("Guns back: " .. table.concat(guns, ", ")) end
+                local perks = split(checkpoint.PerkList)
+                if #perks > 0 then notice("Perks back: " .. #perks) end
+                local failed = string.match(result, "failed: (.*)$")
+                if failed ~= nil then notice("Not restored: " .. failed) end
+            end
         elseif match.polls > match.restoring_at + RESTORE_WAIT_POLLS then
-            match.restoring_at, loadout_pending = nil, nil
+            -- a resume's stays pending: saves keep the checkpoint's loadout rather than the starting guns
+            match.restoring_at = nil
+            if loadout_pending ~= "resume" then loadout_pending = nil end
             log("checkpoint: the saved loadout wasn't restored: the game didn't run its give command")
         end
     end
