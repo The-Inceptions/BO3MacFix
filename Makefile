@@ -87,6 +87,8 @@ all: $(TARGET)
 
 test: $(TEST_TARGETS)
 	for test in $(TEST_TARGETS); do ./$$test || exit 1; done
+	@# every setting can be overridden at env (BO3MACFIX_<NAME>)
+	sh tests/test_env_overrides.sh
 	@# notices.lua against a made-up LUI, with any Lua 5.x
 	if command -v lua >/dev/null; then lua tests/test_notices.lua; else echo "no lua, skipping tests/test_notices.lua"; fi
 	@# checkpoint.lua (saving and resuming a zombies game) against a made-up Engine and AAE

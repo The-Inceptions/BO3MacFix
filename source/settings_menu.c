@@ -198,12 +198,14 @@ static int lua_checkpoint_test_loadout(lua_State *s) {
     return 1;
 }
 
-// CheckpointNotice(text): shows text in the game, like BO3MacFix's other notices
+// CheckpointNotice(text): shows text in the game, like BO3MacFix's other notices; returns whether it's shown (false
+// with Notices off: then it's only logged)
 static int lua_checkpoint_notice(lua_State *s) {
     const char *text = hks_check_string(s, 1);
     if (text != NULL)
         notices_post("%s", text);
-    return 0;
+    hks_push_boolean(s, notices_enabled());
+    return 1;
 }
 
 // ---- AutoSave (checkpoint_autosave.c): its background writer saves to checkpoint.ini too, so the bindings above that

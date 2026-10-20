@@ -28,7 +28,8 @@ bool zm_inventory_read(char *out, size_t out_size);
 
 // lets the "give name" and "take name" lines of commands (BO3MacFix's own, as the game will run them) through the cheat
 // check, each once, for the local player, whenever the game runs it: it holds commands while it's paused. Replaces the
-// ones allowed before (none for an empty text); returns how many. The other cheat commands (noclip, god and the like)
+// ones allowed before (none for an empty text, which checkpoint.lua sends as a match starts: that also drops a shield's
+// health still waiting, see zm_inventory_new_map); returns how many. The other cheat commands (noclip, god and the like)
 // and other names still need sv_cheats.
 int zm_inventory_allow_commands(const char *commands);
 // how many of those the game hasn't run yet
@@ -53,3 +54,7 @@ bool zm_inventory_restore_result(char *out, size_t out_size);
 // control for a moment with a gun in hand other than the one the restore put there (the game's own, as the intro
 // ended): that command switches back to it, on the server thread (loadout_switch_poll). From the UI thread.
 const char *zm_inventory_switch_poll(void);
+
+// at a map change (HKAI_InitMapData, a restart too): a shield's health the last restore set up and still waits to
+// set, for the shield it gave, is dropped, so a shield held in the next game doesn't get it
+void zm_inventory_new_map(void);

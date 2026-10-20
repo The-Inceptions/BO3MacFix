@@ -43,6 +43,7 @@ LUI = { roots = { UIRootFull = { addElement = function() end } },
 
 -- ---- a made-up C side
 local store, state, weapons, weapon_reads, posts, saves, deleted, cleared = {}, 0, nil, 0, {}, {}, 0, 0
+local holding, held_left = false, 0
 local autosave_on, clock_now, delete_fails = true, 0, false
 local function c_side()
     local save = function(lines)
@@ -69,7 +70,13 @@ local function c_side()
     end
     local read_weapons = function() weapon_reads = weapon_reads + 1 return weapons end
     local weapon_commands = function(saved) return "give " .. saved .. "\n" end
-    local allow_cheats = function() end
+    -- with holding set, the game holds the give and take commands (never runs them); otherwise it runs them at once
+    local allow_cheats = function(commands)
+        if commands == nil then return held_left end
+        held_left = 0
+        if holding then for _ in string.gmatch(commands, "[^\n]+") do held_left = held_left + 1 end end
+        return held_left
+    end
     local notice = function() end
     local autosave = function(lines, note)
         if lines == nil then return autosave_on end
@@ -225,6 +232,23 @@ check(#posts == 6 and posts[6].lines.Round == "21", "then the round the game is 
 leave_match()
 check(state == 0, "the menus undid the resume")
 
+-- ---- a resumed game whose give and take commands never run: AutoSave waits for them until the next round, then
+-- gives up on them and saves that round
+store = { Round = "20", Points = "50000", Map = "zm_theater", Weapons = "ray_gun_upgraded" }
+state, holding = 1, true
+enter_match("zm_theater", 20)
+weapons = "pistol_m1911_zm:0,knife_zm:4"
+polls(30)
+check(state == 3 and held_left == 1, "the commands sent and held")
+local held_posts = #posts
+round(21)
+polls(10)
+check(#posts == held_posts + 1 and posts[#posts].lines.Round == "21" and posts[#posts].lines.Weapons == "pistol_m1911",
+    "given up on at the next round, which is saved with the guns held: " ..
+    tostring(posts[#posts] and posts[#posts].lines.Weapons))
+holding = false
+leave_match()
+
 -- ---- the Delete saved game row
 local message
 local rows = BO3MacFix.CheckpointRows(0, function(text) message = text end)
@@ -253,9 +277,10 @@ check(rows[1].text() == "None saved", "the save row shows it: " .. tostring(rows
 -- with a resume set up, the player's own options come back first
 store = { Round = "12", Points = "23450", Map = "zm_theater" }
 state, execs = 1, {}
+local cleared_before = cleared
 delete_row.run()
 delete_row.run()
-check(cleared == 2 and state == 0 and deleted == 2, "the resume undone, then deleted")
+check(cleared == cleared_before + 1 and state == 0 and deleted == 2, "the resume undone, then deleted")
 check(execs[1] == "modvar tfoption_starting_round 7", "the player's starting round set again: " .. tostring(execs[1]))
 -- a resume that can't be undone stays, and so does the save
 store = { Round = "12", Points = "23450", Map = "zm_theater" }

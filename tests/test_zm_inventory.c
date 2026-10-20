@@ -606,6 +606,11 @@ static void test_loadout(void) {
     munmap(image, Image_Size);
 }
 
+static void fake_set_shield_health(void *ent, int health) {
+    (void)ent;
+    (void)health;
+}
+
 int main(void) {
     // a game image where ADDR_g_entities_Ptr is entities_address
     base = (uint64_t)&entities_address - ADDR_g_entities_Ptr;
@@ -672,6 +677,24 @@ int main(void) {
     CHECK(zm_inventory_allowed_left() == 1);
     CHECK(let_through(player, take, NULL));
     argv1 = "bo3macfix_restore";
+
+    // a shield's health still waiting for the shield the restore gave: dropped at a map change, and as a new match
+    // starts (the empty set checkpoint.lua sends then), so a shield held in the next game within the 30 s doesn't get it
+    G_SetShieldHealth = fake_set_shield_health;
+    CHECK(op_set_shield_health(NULL, 10, 500));
+    CHECK(shield_poll(0, false) != NULL); // waiting
+    zm_inventory_new_map();
+    CHECK(shield_weapon == 0 && shield_poll(0, false) == NULL);
+    CHECK(op_set_shield_health(NULL, 10, 500));
+    zm_inventory_allow_commands("");
+    CHECK(shield_weapon == 0 && shield_poll(0, false) == NULL);
+    // a set of commands doesn't drop it
+    CHECK(op_set_shield_health(NULL, 10, 500));
+    zm_inventory_allow_commands("give ray_gun_upgraded");
+    CHECK(shield_weapon == 10 && shield_poll(0, false) != NULL);
+    zm_inventory_new_map();
+    zm_inventory_allow_commands("");
+    G_SetShieldHealth = NULL;
 
     test_loadout();
 
