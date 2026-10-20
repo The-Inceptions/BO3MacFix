@@ -505,8 +505,9 @@ static int pap_level_now(int entnum, const char *name) {
 }
 
 // AAE's repack level through its own function, tfoption.gsc's ?e843ceb2(weapon) on the player (the one its
-// Pack-a-Punch thread calls): it sets an undefined level to 1 and adds 1 to one under 5. Called until the level reads
-// back as saved, and no more once a call doesn't raise it.
+// Pack-a-Punch thread calls): it sets an undefined level to 1 and adds 1 to one under 5, or makes it 5 at once with
+// its Easter egg reward (self.?def06a03 >= 90 and tfoption_eereward). Called until the level reads back at or above
+// the saved one, and no more once a call doesn't raise it. A level above the saved one is the reward's, so it stays.
 static bool op_set_pap_level(void *context, uint64_t weapon, const char *name, int level) {
     restore_context_t *c = context;
     script_handle_t handle;
@@ -528,7 +529,7 @@ static bool op_set_pap_level(void *context, uint64_t weapon, const char *name, i
             return false;
         now = after;
     }
-    return now == level;
+    return now >= level;
 }
 
 static bool op_holds(void *context, uint64_t weapon) {
