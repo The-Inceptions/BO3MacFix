@@ -13,6 +13,8 @@
 // - MenuFPS: the same in the menus outside a match (the main menu, the lobby, the mods menu; notices.lua says when).
 // - BackgroundFPS: the same while the game isn't the active app, or is hidden or minimized (app_focus.m says when).
 //   The lowest of these limits that applies wins, see frame_limit.c.
+// - DynamicResolution: lowers the 3D scene's resolution (ResolutionPercent) in small steps while the GPU can't keep
+//   up with the display's refresh rate, and raises it again when it can, see dynres.h.
 // - MetalHUD: turns on macOS's Metal performance HUD.
 #include <math.h>
 #include <stdint.h>
@@ -32,11 +34,14 @@
 #include <objc/message.h>
 
 #include "app_focus.h"
+#include "dynres.h"
 #include "frame_limit.h"
 #include "gpu_tweaks.h"
 #include "metalfx.h"
 #include "prepatch.h"
 #include "offsets.h"
+#include "script_errors.h"
+#include "gpu_diag.h"
 
 extern uint64_t game_base_address;
 
@@ -44,6 +49,7 @@ static frame_limits_t limits; // the frame rate limits (frame_limit.h) and the s
 static SEL sel_present_after_minimum_duration;
 static int metalfx_active = 0;
 static int frame_stats_seconds = 0; // 0 when not logging frame stats
+static int frame_stats_detail = 0; // BO3MACFIX_FRAMESTATSDETAIL=1: also the script errors thrown in each window
 static atomic_uint frame_stats_session = 0; // goes up each time FrameStats is turned on from the menu
 
 static int compare_floats(const void *a, const void *b) {
@@ -86,8 +92,18 @@ static void frame_stats_tick(void) {
     int display_fps = present_display_max_fps();
     if (display_fps > 0)
         snprintf(display, sizeof(display), ", display %i Hz", display_fps);
-    printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s%s)\n",
-           frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds, display);
+    char detail[160] = "";
+    if (frame_stats_detail) {
+        uint64_t buffers;
+        double busy = gpu_diag_take_busy(&buffers);
+        int n = snprintf(detail, sizeof(detail), ", GPU busy %.2f ms a frame (%.0f%%), %.1f command buffers a frame",
+                         busy * 1000.0 / frames, busy * 100.0 / seconds, (double)buffers / frames);
+        uint32_t server_errors, client_errors;
+        if (script_errors_take_thrown(&server_errors, &client_errors) && n > 0 && n < (int)sizeof(detail))
+            snprintf(detail + n, sizeof(detail) - n, ", script errors %u server, %u client", server_errors, client_errors);
+    }
+    printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s%s)%s\n",
+           frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds, display, detail);
     frames = stored = 0;
     window_start = now;
 }
@@ -152,8 +168,173 @@ static void log_limits(int started, int stopped, int fps) {
     }
 }
 
+#pragma mark - DynamicResolution
+
+static int redirect_present(code_patch_fn checked_code_patch);
+
+// DynamicResolution: 0 off, else the lowest share of ResolutionPercent it goes down to, in percent
+static atomic_int dynres_setting = 0;
+static dynres_t dynres; // the render thread's
+// what DynamicResolution last put into r_sceneResolutionMultiplier, 0 while the dvar holds the user's own value;
+// and the user's own value then, for config.ini (gpu_tweaks_dynres_held_base)
+static atomic_int dynres_written = 0, dynres_base = 0;
+static atomic_bool dynres_reconfigure = false; // the setting changed in the menu: start again from the user's value
+// BO3MACFIX_DYNRESTEST="100,85,70" cycles through these every BO3MACFIX_DYNRESTESTSECONDS (8) instead, for testing
+static int dynres_test[8], dynres_test_count = 0, dynres_test_seconds = 8;
+
+static char *scene_multiplier_dvar(void) {
+    return *(char *volatile *)(game_base_address + ADDR_dvar_r_sceneResolutionMultiplier);
+}
+
+// sets ResolutionPercent's value and its latched value alike. With nothing latched R_CheckVidRestart has nothing to
+// apply and leaves the render targets alone; the next frame's view setup reads the value and takes render targets
+// of that size from the engine's cache (see offsets.h). The latched value goes first: if R_CheckVidRestart looks
+// between the two writes, it applies the new value itself, with one full rebuild of the render targets.
+static void scene_multiplier_set(char *dvar, int percent) {
+    *(volatile int *)(dvar + dvar_Latched) = percent;
+    *(volatile int *)(dvar + dvar_Value) = percent;
+}
+
+// the frame rate to reach: the display's refresh rate, or a lower limit (ours, or MaxFPS)
+static int dynres_target_fps(int frame_limit_fps) {
+    static void *maxfps = NULL;
+    if (maxfps == NULL)
+        maxfps = ((void *(*)(uint32_t))(game_base_address + ADDR_Dvar_FindByHash))(Hash_com_maxfps);
+    int target = present_display_max_fps();
+    if (frame_limit_fps > 0 && (target <= 0 || frame_limit_fps < target))
+        target = frame_limit_fps;
+    int max_fps = maxfps != NULL ? ((int (*)(void *))(game_base_address + ADDR_Dvar_GetInt))(maxfps) : 0;
+    if (max_fps > 0 && (target <= 0 || max_fps < target))
+        target = max_fps;
+    return target;
+}
+
+// from the render thread, for each frame
+static void dynres_tick(int frame_limit_fps) {
+    static uint64_t window_start = 0, last_present = 0, test_start = 0;
+    static int frames = 0, logging = 0, from = 0, to = 0, test_index = 0;
+    static double busy_start = 0, window_fps = 0, window_busy = 0;
+    static float after[4];
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    // the frames right after a change show what it cost: the engine allocates render targets for the new size
+    if (logging > 0 && last_present != 0) {
+        after[4 - logging] = (float)((now - last_present) / 1e6);
+        if (--logging == 0)
+            printf("dynamic resolution: %i%% -> %i%% (%.1f fps of %i, GPU busy %.0f%%), the next frames took %.1f, %.1f, "
+                   "%.1f, %.1f ms\n", from, to, window_fps, dynres_target_fps(frame_limit_fps), window_busy * 100,
+                   after[0], after[1], after[2], after[3]);
+    }
+    last_present = now;
+    char *dvar = scene_multiplier_dvar();
+    if (dvar == NULL)
+        return;
+    int current = *(volatile int *)(dvar + dvar_Value), latched = *(volatile int *)(dvar + dvar_Latched);
+    int written = atomic_load(&dynres_written), setting = atomic_load(&dynres_setting);
+    bool reconfigure = atomic_exchange(&dynres_reconfigure, false);
+    if (written != 0 && (current != written || latched != written)) {
+        // something else set ResolutionPercent (the options): that's the user's value from now on
+        printf("dynamic resolution: ResolutionPercent was set to %i, going on from there\n", latched);
+        atomic_store(&dynres_written, 0);
+        written = 0;
+        dynres.base = 0;
+    } else if (written != 0 && (reconfigure || setting == 0)) {
+        // turned off or changed in the menu: the user's value back first
+        int base = atomic_load(&dynres_base);
+        scene_multiplier_set(dvar, base);
+        atomic_store(&dynres_written, 0);
+        printf(setting == 0 ? "dynamic resolution off, back to %i%%\n" : "dynamic resolution: back to %i%% for the new setting\n", base);
+        dynres.base = 0;
+        return;
+    }
+    if (reconfigure)
+        dynres.base = 0;
+    if (written == 0 && (setting == 0 || current != latched)) // off, or a change the engine applies first
+        return;
+    if (written == 0 && dynres.base != current) {
+        dynres_reset(&dynres, current, dynres_lowest_for(current, setting));
+        atomic_store(&dynres_base, current);
+        window_start = 0;
+        printf("dynamic resolution: between %i%% and %i%%\n", dynres.lowest, dynres.base);
+    }
+    if (window_start == 0) {
+        window_start = now;
+        frames = 0;
+        busy_start = gpu_diag_busy_total();
+        return;
+    }
+    if (++frames < Dynres_Window_Frames)
+        return;
+    double seconds = (now - window_start) / 1e9, busy_total = gpu_diag_busy_total();
+    window_fps = frames / seconds;
+    window_busy = (busy_total - busy_start) / seconds;
+    window_start = now;
+    frames = 0;
+    busy_start = busy_total;
+    int percent;
+    if (dynres_test_count > 0) {
+        if (test_start == 0)
+            test_start = now;
+        if (now - test_start >= (uint64_t)dynres_test_seconds * 1000000000ULL) {
+            test_start = now;
+            test_index = (test_index + 1) % dynres_test_count;
+        }
+        percent = dynres_test[test_index];
+    } else {
+        percent = dynres_window(&dynres, window_fps, window_busy, dynres_target_fps(frame_limit_fps));
+    }
+    int value = written != 0 ? written : current;
+    if (percent == value || logging > 0)
+        return;
+    from = value;
+    to = percent;
+    logging = 4;
+    scene_multiplier_set(dvar, percent);
+    atomic_store(&dynres_written, percent == dynres.base ? 0 : percent);
+}
+
+int gpu_tweaks_dynres_held_base(void) {
+    return atomic_load(&dynres_written) != 0 ? atomic_load(&dynres_base) : 0;
+}
+
+static void dynres_read_test(void) {
+    const char *env = getenv("BO3MACFIX_DYNRESTEST");
+    for (const char *p = env; p != NULL && *p != '\0' && dynres_test_count < 8;) {
+        int percent = atoi(p);
+        if (percent >= 50 && percent <= 200)
+            dynres_test[dynres_test_count++] = percent;
+        p = strchr(p, ',');
+        if (p != NULL)
+            p++;
+    }
+    env = getenv("BO3MACFIX_DYNRESTESTSECONDS");
+    if (env != NULL && atoi(env) > 0)
+        dynres_test_seconds = atoi(env);
+}
+
+void gpu_tweaks_dynres_init(int setting, code_patch_fn checked_code_patch) {
+    const char *env = getenv("BO3MACFIX_DYNAMICRESOLUTION");
+    if (env != NULL)
+        setting = atoi(env);
+    dynres_read_test();
+    if (dynres_test_count > 0 && setting == 0)
+        setting = 50;
+    if (setting < 50 || setting > 95)
+        return;
+    if (!redirect_present(checked_code_patch)) {
+        printf("couldn't hook Aspyr's present, no DynamicResolution\n");
+        return;
+    }
+    atomic_store(&dynres_setting, setting);
+    if (dynres_test_count > 0)
+        printf("dynamic resolution: testing, %i steps every %i s\n", dynres_test_count, dynres_test_seconds);
+    else
+        printf("dynamic resolution on, down to %i%% of ResolutionPercent when the GPU can't keep up\n", setting);
+}
+
 // called instead of objc_msgSend for Aspyr's [commandBuffer presentDrawable:drawable]
 static void present_drawable(id command_buffer, SEL sel, id drawable) {
+    if (frame_stats_detail || atomic_load(&dynres_setting) != 0 || atomic_load(&dynres_written) != 0)
+        gpu_diag_watch_command_buffers(command_buffer);
     if (frame_stats_seconds > 0)
         frame_stats_tick();
     if (metalfx_active)
@@ -163,6 +344,8 @@ static void present_drawable(id command_buffer, SEL sel, id drawable) {
     int fps = frame_limit_for_frame(&limits, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), &started, &stopped);
     if (started | stopped)
         log_limits(started, stopped, fps);
+    if (atomic_load(&dynres_setting) != 0 || atomic_load(&dynres_written) != 0)
+        dynres_tick(fps);
     double min_duration = fps > 0 ? 1.0 / fps : 0;
     static unsigned int paced_frames = 0;
     if (min_duration > 0 && paced_frames++ % 120 == 0)
@@ -289,6 +472,8 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch) 
         return;
     }
     frame_stats_seconds = seconds;
+    const char *detail = getenv("BO3MACFIX_FRAMESTATSDETAIL");
+    frame_stats_detail = detail != NULL && atoi(detail) != 0;
     printf("logging frame stats every %i s\n", seconds);
 }
 
@@ -493,5 +678,17 @@ bool gpu_tweaks_set_frame_stats(int seconds) {
         atomic_fetch_add(&frame_stats_session, 1);
     frame_stats_seconds = seconds;
     printf(seconds > 0 ? "logging frame stats every %i s\n" : "not logging frame stats\n", seconds);
+    return true;
+}
+
+bool gpu_tweaks_set_dynamic_resolution(int setting) {
+    if (setting != 0 && (setting < 50 || setting > 95))
+        return false;
+    if (setting != 0 && !present_live())
+        return false;
+    atomic_store(&dynres_setting, setting);
+    // the render thread gives the user's value back and starts again from it with the new floor
+    atomic_store(&dynres_reconfigure, true);
+    printf(setting != 0 ? "dynamic resolution on, down to %i%% of ResolutionPercent\n" : "dynamic resolution off\n", setting);
     return true;
 }

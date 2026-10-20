@@ -8,6 +8,7 @@
 // and once a minute a line says how many more there were. At a map change (and at quit, in log.txt) a line for each
 // says how many weren't shown on that map. The errors themselves, and what the scripts do after them, don't change.
 #include <os/lock.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -52,6 +53,7 @@ static error_slot_t errors[Error_Slots];
 static uint64_t hidden_report[2];
 static os_unfair_lock errors_lock = OS_UNFAIR_LOCK_INIT;
 static bool quiet_on;
+static _Atomic uint32_t thrown[2]; // script errors thrown per instance (server, client), for FrameStats' detail
 
 typedef void (*longjmp_t)(void *env, int value) __attribute__((noreturn));
 typedef void (*Com_Printf_t)(const char *format, ...);
@@ -107,6 +109,7 @@ install_hook_name(Scr_ErrorInternal, void, int inst) {
         orig_Scr_ErrorInternal(inst);
         return;
     }
+    atomic_fetch_add_explicit(&thrown[inst], 1, memory_order_relaxed);
     uint8_t *var = var_pub(inst), *vm = vm_pub(inst);
     const char *message = *(const char **)(var + VarPub_ErrorMessage);
     // only the case where it prints "throwing script exception" and throws: not terminal, inside a script function
@@ -203,6 +206,12 @@ static void summarize_and_forget(bool quitting) {
                   e->hidden_map, e->message, quitting ? "before quitting" : "on the last map", e->hidden);
     }
     free(copy);
+}
+
+bool script_errors_take_thrown(uint32_t *server, uint32_t *client) {
+    *server = atomic_exchange_explicit(&thrown[0], 0, memory_order_relaxed);
+    *client = atomic_exchange_explicit(&thrown[1], 0, memory_order_relaxed);
+    return quiet_on;
 }
 
 void script_errors_new_map(void) {

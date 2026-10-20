@@ -19,6 +19,7 @@
 #include "dobby.h"
 #include "offsets.h"
 #include "engine_display.h"
+#include "gpu_tweaks.h"
 #include "notch.h"
 #include "sdl_displays.h"
 
@@ -52,6 +53,7 @@ typedef struct {
 // the engine hashes dvar names: h = 0x4b9ace2f, then h = (h ^ tolower(c)) * 0x1000193 for each character and the NUL
 #define Hash_r_fullscreen 0xbfdb056b
 #define Hash_r_mode 0x236af761
+#define Hash_r_sceneResolutionMultiplier 0xbb27457f // ResolutionPercent
 #define Hash_r_refreshRate 0x3727533b
 #define Hash_r_monitor 0x5fe4031a
 #define Hash_r_monitorCount 0x69cbe7a7
@@ -527,12 +529,29 @@ typedef struct {
 } HWProfileKey;
 _Static_assert(sizeof(HWProfileKey) == 0x18, "HWProfileKey must match the game's layout");
 
+// DynamicResolution changes ResolutionPercent's dvar while the game runs: the profile (what config.ini and the options
+// get) keeps the user's own value
+static void keep_resolution_percent(void) {
+    int base = gpu_tweaks_dynres_held_base();
+    if (base <= 0)
+        return;
+    const HWProfileKey *keys = (const HWProfileKey *)(game_base_address + ADDR_HWProfile_Keys);
+    for (int i = 0; i < HWProfile_Count; i++) {
+        if (keys[i].dvar_hash == Hash_r_sceneResolutionMultiplier) {
+            char *value = (char *)(game_base_address + ADDR_HWProfile_Values) + (size_t)i * HWProfile_Value_Size;
+            snprintf(value, HWProfile_Value_Size, "%d", base);
+            return;
+        }
+    }
+}
+
 // At quit the engine copies the dvars into the hardware profile here, then writes it to config.ini. If the window still
 // has the size the launch fitted it to (not one the user resized it to or picked in the options), save the size
 // config.ini had instead. Only at quit: the options read the profile too, and must see the window's real size. Only
 // windowed, as the launch fit was: fullscreen, WindowSize is the resolution the game runs at.
 install_hook_name(SyncHardwareProfileWithDvars, void, bool make_latched_current) {
     orig_SyncHardwareProfileWithDvars(make_latched_current);
+    keep_resolution_percent();
     int width = 0, height = 0;
     if (__builtin_return_address(0) != (void *)(game_base_address + ADDR_HWProfile_QuitSyncReturn) ||
         !atomic_load(&fit_kept) || !find_dvars() || Dvar_GetInt(dvars.fullscreen) != 0 ||

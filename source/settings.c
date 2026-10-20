@@ -77,6 +77,7 @@ static const setting_t settings[] = {
     { "PauseMenuFPS", "Pause menu frame limit", "Limits the frame rate while the pause menu is open in a match, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 30, Live_Present },
     { "MenuFPS", "Menu frame limit", "Limits the frame rate in the menus outside a match (main menu, lobby, mods), to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 40, Live_Present },
     { "BackgroundFPS", "Background frame limit", "Limits the frame rate while the game isn't the active app, or is hidden or minimized, to save power.", "Graphics", false, 4, { 0, 15, 30, 60 }, { "Off", "15", "30", "60" }, 30, Live_Present },
+    { "DynamicResolution", "Dynamic resolution", "Lowers the 3D scene's resolution a little while the GPU can't keep up with the refresh rate (down to this share of Render Resolution), and raises it again when it can.", "Graphics", false, 4, { 0, 85, 75, 70 }, { "Off", "Down to 85%", "Down to 75%", "Down to 70%" }, 0, Live_Present },
     { "MetalFXUpscale", "MetalFX upscaling", "Upscales with MetalFX when the game runs below the screen's resolution. \"Panel resolution\" is for scaled monitor modes.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "On", "On, panel resolution" }, 0, Live_Never },
     { "MetalHUD", "Metal performance HUD", "Shows macOS's Metal HUD with the frame rate and GPU time.", "Graphics", Toggle(0) },
     { "DisplayFollow", "Follow display changes", "Moves the game when displays are plugged in or unplugged, and adapts its resolution and refresh rate to the new display.", "Display", Toggle_Live(1, Live_Always) },
@@ -151,6 +152,8 @@ static bool apply_live(const setting_t *t, int value) {
         return gpu_tweaks_set_background_fps(value);
     if (strcmp(n, "FrameStats") == 0)
         return gpu_tweaks_set_frame_stats(value);
+    if (strcmp(n, "DynamicResolution") == 0)
+        return gpu_tweaks_set_dynamic_resolution(value);
     if (strcmp(n, "JobIdleFix") == 0)
         return cpu_tuning_set_wait_fix(Wait_Fix_Job, value);
     if (strcmp(n, "RenderIdleFix") == 0)

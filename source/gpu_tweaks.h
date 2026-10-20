@@ -43,6 +43,14 @@ void gpu_tweaks_ui_gone(void);
 // up, 10 to 240 (0 = off)
 void gpu_tweaks_background_fps_init(int fps, code_patch_fn checked_code_patch);
 
+// setting: DynamicResolution, the lowest share of ResolutionPercent to go down to while the GPU can't keep up with the
+// display's refresh rate, 50 to 95 (0 = off), see dynres.h
+void gpu_tweaks_dynres_init(int setting, code_patch_fn checked_code_patch);
+
+// the user's ResolutionPercent while DynamicResolution holds the dvar at another value, else 0: what config.ini
+// gets (engine_display.c's SyncHardwareProfileWithDvars hook)
+int gpu_tweaks_dynres_held_base(void);
+
 // turns on macOS's Metal performance HUD (FPS and GPU time) when enabled
 void gpu_tweaks_metal_hud_init(int enabled);
 
@@ -57,5 +65,6 @@ bool gpu_tweaks_set_pause_menu_fps(int fps);
 bool gpu_tweaks_set_menu_fps(int fps);
 bool gpu_tweaks_set_background_fps(int fps);
 bool gpu_tweaks_set_frame_stats(int seconds);
+bool gpu_tweaks_set_dynamic_resolution(int setting);
 
 #endif

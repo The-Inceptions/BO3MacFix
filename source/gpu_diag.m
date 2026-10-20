@@ -5,8 +5,12 @@
 // SDL_VIDEO_MAC_FULLSCREEN_SPACES to 0 (0x100100dea) and only asks SDL for FULLSCREEN_DESKTOP (0x1000edc4e), so SDL never
 // captures the displays, switches their mode or uses a fullscreen Space.
 #import <AppKit/AppKit.h>
+#import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include <math.h>
+#include <objc/runtime.h>
+#include <os/lock.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "gpu_diag.h"
@@ -100,4 +104,65 @@ void gpu_diag_init(int enabled) {
         }];
     }
     printf("GPU diagnostics on, logging how frames get to the screen\n");
+}
+
+// FrameStats' detail (BO3MACFIX_FRAMESTATSDETAIL=1): how long the GPU was busy with the game's command buffers. Every
+// committed command buffer gets a completed handler that adds its GPU time, less any overlap with the ones before it,
+// so the total is the time the GPU spent on at least one of the game's command buffers.
+static os_unfair_lock busy_lock = OS_UNFAIR_LOCK_INIT;
+static double busy_seconds = 0, busy_last_end = 0, busy_total = 0; // busy_total is never reset (DynamicResolution)
+static uint64_t busy_buffers = 0;
+static IMP orig_commit = NULL;
+
+// GPUStartTime and GPUEndTime need macOS 10.15, gpu_diag_watch_command_buffers checks before it swizzles
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunguarded-availability-new"
+static void commit_new(id self, SEL sel) {
+    [(id<MTLCommandBuffer>)self addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+        CFTimeInterval start = buffer.GPUStartTime, end = buffer.GPUEndTime;
+        if (start <= 0 || end <= start)
+            return;
+        os_unfair_lock_lock(&busy_lock);
+        if (start < busy_last_end)
+            start = busy_last_end;
+        if (end > start) {
+            busy_seconds += end - start;
+            busy_total += end - start;
+        }
+        if (end > busy_last_end)
+            busy_last_end = end;
+        busy_buffers++;
+        os_unfair_lock_unlock(&busy_lock);
+    }];
+    ((void (*)(id, SEL))orig_commit)(self, sel);
+}
+#pragma clang diagnostic pop
+
+void gpu_diag_watch_command_buffers(void *command_buffer) {
+    static atomic_flag watching = ATOMIC_FLAG_INIT;
+    if (command_buffer == NULL || atomic_flag_test_and_set(&watching))
+        return;
+    if (!@available(macOS 10.15, *))
+        return;
+    Method commit = class_getInstanceMethod(object_getClass((id)command_buffer), @selector(commit));
+    if (commit != NULL)
+        orig_commit = method_setImplementation(commit, (IMP)commit_new);
+    printf("frame stats: timing the GPU's work (%s)\n", commit != NULL ? class_getName(object_getClass((id)command_buffer)) : "not found");
+}
+
+double gpu_diag_take_busy(uint64_t *buffers) {
+    os_unfair_lock_lock(&busy_lock);
+    double seconds = busy_seconds;
+    *buffers = busy_buffers;
+    busy_seconds = 0;
+    busy_buffers = 0;
+    os_unfair_lock_unlock(&busy_lock);
+    return seconds;
+}
+
+double gpu_diag_busy_total(void) {
+    os_unfair_lock_lock(&busy_lock);
+    double seconds = busy_total;
+    os_unfair_lock_unlock(&busy_lock);
+    return seconds;
 }
