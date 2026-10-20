@@ -11,6 +11,8 @@ void notices_init(int notices, int pause_on_disconnect);
 // the settings page changed them
 void notices_set_enabled(int on);
 void notices_set_pause_on_disconnect(int on);
+// whether Notices is on, so notices_post shows its text and doesn't only log it
+bool notices_enabled(void);
 
 // the controller the game reads went away and no other took its place (gc_bridge.m): with PauseOnDisconnect on, asks
 // the UI to pause (thread-safe)

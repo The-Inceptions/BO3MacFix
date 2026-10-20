@@ -115,6 +115,10 @@ void notices_set_enabled(int on) {
     }
 }
 
+bool notices_enabled(void) {
+    return atomic_load(&notices_on);
+}
+
 void notices_set_pause_on_disconnect(int on) {
     atomic_store(&pause_on, on != 0);
 }

@@ -675,7 +675,13 @@ local function quick_save(controller, source, key)
                 quick_armed = { time = now }
                 local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and " on " .. map_name(checkpoint.Map) or ""
                 log("checkpoint: quick save asks again before replacing the game saved at round " .. kept)
-                notice("Saved game is round " .. kept .. map .. ": " .. again .. " again to replace it")
+                -- the question is only logged with Notices off: a second press then can't have seen it, so it
+                -- doesn't replace the deeper game (the settings page's Save game row still does)
+                if notice("Saved game is round " .. kept .. map .. ": " .. again .. " again to replace it") == false then
+                    quick_armed = nil
+                    log("checkpoint: quick save doesn't replace a game saved at a higher round with Notices off " ..
+                        "(the settings page's Save game row does)")
+                end
                 return
             end
         end

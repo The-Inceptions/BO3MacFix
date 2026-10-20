@@ -53,7 +53,8 @@ local function read_fn()
     return table.concat(lines, "\n")
 end
 local function resume_fn() return state end
-local function notice_fn(text) table.insert(notices, text) end
+local notices_on = true
+local function notice_fn(text) table.insert(notices, text) return notices_on end
 -- CheckpointTakeQuickSave: one request a call, as the C side's slot
 local function take_fn()
     local request = table.remove(requests, 1)
@@ -171,6 +172,23 @@ check(#saves == 7 and store.Round == "3" and last == "Game saved: round 3, 2,340
 -- and the next press, the save no longer deeper, saves at once
 last = press()
 check(#saves == 8, "then at once")
+
+-- with Notices off the question is only logged: a second press can't have seen it, so it doesn't replace the deeper game
+store = { Map = "zm_der_riese", Round = "38", Points = "105660", Saved = "1000" }
+notices_on, logs = false, {}
+clock_now = 300
+press()
+clock_now = 302
+press()
+check(#saves == 8 and store.Round == "38", "Notices off: two presses don't replace it")
+check(string.find(table.concat(logs, "\n"), "doesn't replace a game saved at a higher round with Notices off", 1, true)
+    ~= nil, "and the log says why")
+-- a save that replaces nothing deeper still saves
+store = {}
+press()
+check(#saves == 9, "Notices off, nothing deeper: saved")
+notices_on = true
+saves[#saves] = nil -- (the counts below are without it)
 
 -- ---- L3 + R3: only in the pause menu
 store = {}
