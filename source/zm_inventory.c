@@ -39,6 +39,18 @@ static uint64_t entities(void) {
     return base != 0 && safe_read(base + ADDR_g_entities_Ptr, &address, sizeof(address)) ? address : 0;
 }
 
+// whether this Mac runs the game's server (a solo game, or one it hosts): the sv_running dvar, read through safe_read.
+// Without it g_entities and the server's script VM are what the last game here left (a match hosted elsewhere), so
+// nothing is read from them, and the game's own functions aren't called on them.
+static bool server_running(void) {
+    uint64_t dvar = 0;
+    uint32_t type = 0;
+    uint8_t value = 0;
+    return base != 0 && safe_read(base + ADDR_sv_running, &dvar, sizeof(dvar)) &&
+           safe_read(dvar + dvar_Type, &type, sizeof(type)) && type == 1 &&
+           safe_read(dvar + dvar_Value, &value, sizeof(value)) && value != 0;
+}
+
 // a name at text, if it's a weapon name (letters, digits and '_')
 static bool read_name(uint64_t text, char *name, size_t name_size) {
     // a byte at a time, so the end of the name's page doesn't matter
@@ -85,6 +97,8 @@ bool zm_inventory_read(char *out, size_t out_size) {
     if (out_size == 0)
         return false;
     out[0] = '\0';
+    if (!server_running())
+        return false;
     uint64_t first = entities(), client = 0, current = 0;
     if (first == 0 || !safe_read(first + gentity_Client, &client, sizeof(client)) || client == 0 ||
         !safe_read(client + gclient_Weapon, &current, sizeof(current)))
@@ -177,6 +191,9 @@ static void (*BG_SetAmmoStock)(void *ps, uint64_t weapon, int amount);
 static int (*BG_GetClipSize)(uint64_t weapon);
 static int (*BG_WeaponIsClipOnly)(uint64_t weapon);
 static int (*BG_GetMaxAmmo)(void *ps, uint64_t weapon, uint64_t arg);
+static void *(*Dvar_FindByHash)(uint32_t hash);
+static int (*Dvar_GetInt)(const void *dvar);
+
 
 // the server script VM, read through safe_read
 static loadout_vm_t server_vm(void) {
@@ -224,7 +241,8 @@ static bool holds(uint64_t client, uint64_t weapon) {
 // a held weapon's clip and stock, as GetWeaponAmmoClip and GetWeaponAmmoStock read them (read-only game functions,
 // called once the weapon and the player state have read back)
 static bool read_ammo(uint64_t client, uint64_t weapon, int *clip, int *stock) {
-    if (BG_GetAmmoInClip == NULL || BG_GetAmmoStock == NULL || BG_WeaponIsClipOnly == NULL || !holds(client, weapon))
+    if (BG_GetAmmoInClip == NULL || BG_GetAmmoStock == NULL || BG_WeaponIsClipOnly == NULL || !server_running() ||
+        !holds(client, weapon))
         return false;
     *clip = BG_GetAmmoInClip((void *)client, weapon);
     *stock = BG_WeaponIsClipOnly(weapon) ? 0 : BG_GetAmmoStock((void *)client, weapon);
@@ -255,6 +273,8 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
     loadout_clear(out);
     if (note_size > 0)
         note[0] = '\0';
+    if (!server_running())
+        return false;
     uint64_t first = entities(), client = 0, current = 0;
     if (first == 0 || !safe_read(first + gentity_Client, &client, sizeof(client)) || client == 0 ||
         !safe_read(client + gclient_Weapon, &current, sizeof(current)))
@@ -450,6 +470,11 @@ static int pap_level_now(int entnum, const char *name) {
 static bool op_set_pap_level(void *context, uint64_t weapon, const char *name, int level) {
     restore_context_t *c = context;
     script_handle_t handle;
+    // not with AAE's Repack-a-Punch option off now (a dvar it has once its options are read; a game without it
+    // has no such function either)
+    void *option = Dvar_FindByHash != NULL ? Dvar_FindByHash(loadout_script_hash("tfoption_dpap")) : NULL;
+    if (option != NULL && Dvar_GetInt(option) != 1)
+        return false;
     if (!script_function_hashed(&handle, "scripts/zm/tfoption", loadout_script_hash("tfoption"), Aae_PapLevelUp))
         return false;
     int client_num = 0;
@@ -693,6 +718,8 @@ void zm_inventory_init(uint64_t game_base) {
     BG_GetClipSize = (void *)(base + ADDR_BG_GetClipSize);
     BG_WeaponIsClipOnly = (void *)(base + ADDR_BG_WeaponIsClipOnly);
     BG_GetMaxAmmo = (void *)(base + ADDR_BG_GetMaxAmmo);
+    Dvar_FindByHash = (void *)(base + ADDR_Dvar_FindByHash);
+    Dvar_GetInt = (void *)(base + ADDR_Dvar_GetInt);
 }
 
 // at start-up, before the game's threads run: the pre-patched copy has a slot for it, so that only stores a pointer.
