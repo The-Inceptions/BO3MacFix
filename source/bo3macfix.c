@@ -1061,7 +1061,7 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_Lua_GetBuildIntField((void *)(game_base_address + ADDR_Lua_GetBuildIntField));
     install_hook_Lua_GetBuildStringField((void *)(game_base_address + ADDR_Lua_GetBuildStringField));
     install_hook_Lua_Exec((void *)(game_base_address + ADDR_Lua_Exec));
-    if (read_int_setting_or_env("SkipIntro", 1))
+    if (read_int_setting_or_env("SkipIntro", 0))
         install_hook_CL_PlayLogoMovies((void *)(game_base_address + ADDR_CL_PlayLogoMovies));
     //install_hook_SDL_GameControllerInitMappings((void *)(game_base_address + ADDR_SDL_GameControllerInitMappings));
 
