@@ -106,8 +106,9 @@ check(toast.alpha == 0 and toast.animation == "fade_out", "it fades at 4 s")
 tick(2)
 check(toast_on(full) == nil, "and is gone after the fade")
 
--- a warning (a lasting notice): shown for 8 s, and wide enough for its long text
-table.insert(queue, { "Mod warning: can't load Windows DLL TabletLocationSelector.dll, the game might be unstable", 8 })
+-- a warning (a lasting notice): shown for 8 s, and wide enough for its text when that's long (a long DLL name)
+table.insert(queue, { "Mod warning: can't load Windows DLL ui_uieditor_widgets_Tablet_TabletLocationSelector.dll, " ..
+    "the game might be unstable", 8 })
 tick()
 toast, text = toast_on(full)
 check(text ~= nil and string.find(text, "Mod warning", 1, true) == 1, "the warning is shown")

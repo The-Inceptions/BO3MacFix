@@ -14,9 +14,9 @@ local tell_pause_menu = bo3macfix.PauseMenuOpen or function() end
 local clock = bo3macfix.NoticeClock -- seconds
 
 local POLL_MS, SHOW, FADE = 250, 4.0, 0.5
--- in the UI's 1280x720 space: centred, below the MacBook's camera housing; wider for a long text (about 10 units a
--- character at this height), up to most of the screen
-local WIDTH, MAX_WIDTH, CHAR_WIDTH, TOP, HEIGHT = 640, 1200, 10, 34, 34
+-- in the UI's 1280x720 space: centred, below the MacBook's camera housing; wider for a long text (about 5 units a
+-- character at this height, measured live; 6 leaves a margin), up to most of the screen
+local WIDTH, MAX_WIDTH, CHAR_WIDTH, TOP, HEIGHT = 640, 1200, 6, 34, 34
 
 local function root_name(element)
     for name, root in pairs(LUI.roots) do
