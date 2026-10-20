@@ -164,7 +164,7 @@ check(saved.Equipment == "frag_grenade,knife", "the rest: " .. tostring(saved.Eq
 check(saved.Held == "weapon_raygun (Pack-a-Punched)", "the weapon in hand: " .. tostring(saved.Held))
 check(saved.Character == "Richtofen", "the character on Kino: " .. tostring(saved.Character))
 check(saved.Stats == "kills 812, downs 1, revives 3, headshots 240", "the scoreboard but the score: " .. tostring(saved.Stats))
-check(string.find(message, "Saved Round 12, 23,450 points, zm_theater", 1, true) ~= nil, "the message: " .. tostring(message))
+check(string.find(message, "Saved Round 12, 23,450 points, Kino der Toten", 1, true) ~= nil, "the message: " .. tostring(message))
 check(string.find(save_row.description(), "ray gun (Pack-a-Punched)", 1, true) ~= nil, "the description lists the guns: " ..
     tostring(save_row.description()))
 check(string.find(save_row.description(), "3 perks", 1, true) ~= nil, "and the perks")

@@ -24,6 +24,7 @@
 #include "offsets.h"
 #include "controllers.h"
 #include "gc_bridge.h"
+#include "quick_save.h"
 #include "notices.h"
 #include "prepatch.h"
 
@@ -368,6 +369,8 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
                     state->Gamepad.sThumbRX = add_stick(state->Gamepad.sThumbRX, pad->gyro[0]);
                     state->Gamepad.sThumbRY = add_stick(state->Gamepad.sThumbRY, pad->gyro[1]);
                 }
+                // L3 + R3 held in the pause menu is a quick save (quick_save.m)
+                quick_save_pad(user_index, state->Gamepad.wButtons);
             } else {
                 memset(state, 0, sizeof(*state));
             }
@@ -376,7 +379,11 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
         }
         os_unfair_lock_unlock(&pads_lock);
     }
-    return orig_ASL_XInputGetState(user_index, state);
+    uint32_t result = orig_ASL_XInputGetState(user_index, state);
+    // a controller SDL reads (Aspyr's XInput) can quick save too
+    if (enabled && result == ERROR_SUCCESS && state != NULL)
+        quick_save_pad(user_index, state->Gamepad.wButtons);
+    return result;
 }
 
 #pragma mark - rumble

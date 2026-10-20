@@ -19,9 +19,11 @@
 -- seconds of a match only set the round it starts at (10). Then zm_inventory.c's full loadout: reading it, setting
 -- the checkpoint's up to be given back and what that did, setting a test one up; and its test switch: give these perks
 -- first (a PerkList line). Then the gun in hand after a restore made during a map's intro (zm_inventory_switch_poll).
+-- Then the quick save's request (quick_save.m: the QuickSave key, or L3 + R3 held in the pause menu) and the saved
+-- game's Saved time as text ("3 h ago").
 local save_fn, read_fn, apply_fn, clear_fn, resume_fn, weapons_fn, weapon_commands_fn, allow_cheats_fn, notice_fn,
     save_after, give_test, report_after, autosave_fn, delete_fn, autosave_start, loadout_fn, restore_fn,
-    restore_result_fn, test_loadout_fn, perks_test, restore_switch_fn = ...
+    restore_result_fn, test_loadout_fn, perks_test, restore_switch_fn, quick_save_fn, saved_when_fn = ...
 local bo3macfix = BO3MacFix
 if bo3macfix == nil or read_fn == nil then return end
 bo3macfix.SaveCheckpoint, bo3macfix.ReadCheckpoint, bo3macfix.ApplyCheckpoint = save_fn, read_fn, apply_fn
@@ -31,6 +33,7 @@ bo3macfix.CheckpointNotice = notice_fn
 bo3macfix.CheckpointLoadout, bo3macfix.CheckpointRestoreLoadout = loadout_fn, restore_fn
 bo3macfix.CheckpointRestoreResult, bo3macfix.CheckpointTestLoadout = restore_result_fn, test_loadout_fn
 bo3macfix.CheckpointRestoreSwitch = restore_switch_fn
+bo3macfix.CheckpointTakeQuickSave, bo3macfix.CheckpointSavedWhen = quick_save_fn, saved_when_fn
 local log = bo3macfix.Log or function() end
 
 local POLL_MS = 500
@@ -99,6 +102,18 @@ local function number_text(value)
     if digits == nil then return text end
     digits = string.reverse((string.gsub(string.reverse(digits), "(%d%d%d)", "%1,")))
     return sign .. (string.gsub(digits, "^,", ""))
+end
+
+-- the stock zombies maps' names; another map's is made from its own ("zm_der_riese" as "Der Riese")
+local MAP_NAMES = { zm_prototype = "Nacht der Untoten", zm_asylum = "Verruckt", zm_sumpf = "Shi No Numa",
+    zm_factory = "The Giant", zm_theater = "Kino der Toten", zm_cosmodrome = "Ascension", zm_temple = "Shangri-La",
+    zm_moon = "Moon", zm_tomb = "Origins", zm_zod = "Shadows of Evil", zm_castle = "Der Eisendrache",
+    zm_island = "Zetsubou No Shima", zm_stalingrad = "Gorod Krovi", zm_genesis = "Revelations" }
+local function map_name(map)
+    if map == nil or map == "" then return "" end
+    if MAP_NAMES[map] ~= nil then return MAP_NAMES[map] end
+    local name = string.gsub(string.gsub(map, "^zm_", ""), "_", " ")
+    return (string.gsub(name, "(%a)([%w']*)", function(first, rest) return string.upper(first) .. rest end))
 end
 
 -- one line of text for checkpoint.ini
@@ -283,6 +298,18 @@ local function collect(controller)
     return table.concat(lines, "\n"), seen
 end
 
+-- why this game isn't solo, nil if it is: split screen, a recording played back, or more than one client in the game's
+-- lobby (a game started with +map may have no lobby, and only a clear answer counts); and the lobby's count, for the log
+local function not_solo()
+    local lobby = Enum ~= nil and Enum.LobbyType ~= nil and Enum.LobbyType.LOBBY_TYPE_GAME or nil
+    local clients = lobby ~= nil and tonumber(call(Engine.GetLobbyClientCount, lobby)) or nil
+    local count = tostring(clients) .. " in the game's lobby"
+    if call(Engine.IsSplitscreen) == true then return "this one is split screen", count end
+    if call(Engine.IsDemoPlaying) == true then return "this one is a recording", count end
+    if clients ~= nil and clients > 1 then return "this one has " .. count, count end
+    return nil, count
+end
+
 -- why a save now (a quit, the settings page's row, the test switch; AutoSave has its own rules) would write a lower
 -- round over the checkpoint, nil if it wouldn't: a resumed game whose HUD isn't at the round it resumes yet (its
 -- intro, the HUD's round not moved yet, often with its loadout's restore still pending)
@@ -314,10 +341,32 @@ local function save(controller, why)
     return bo3macfix.SaveCheckpoint(lines)
 end
 
+-- the settings page's Save game row and the quick save (the QuickSave key, or L3 + R3 in the pause menu): saves this
+-- game through save(), so with its rule for a resumed game short of its saved round and checkpoint.ini's lock (the
+-- locked SaveCheckpoint). True once saved; else false and why not: "menus" (not in a match), "not_zombies", "not_solo"
+-- (with what makes it so), "short" (with save()'s reason), "unread" (no round and points) or "unwritten".
+local function save_game(controller, why)
+    if not in_match() then return false, "menus" end
+    if string.sub(current_map(), 1, 3) ~= "zm_" then return false, "not_zombies" end
+    local not_solo_why = not_solo()
+    if not_solo_why ~= nil then return false, "not_solo", not_solo_why end
+    local saved, short = save(controller, why)
+    if short ~= nil then return false, "short", short end
+    if saved == nil then return false, "unread" end
+    if not saved then return false, "unwritten" end
+    return true
+end
+
 local function summary(checkpoint)
     if checkpoint.Round == nil then return "None saved" end
-    local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and ", " .. checkpoint.Map or ""
+    local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and ", " .. map_name(checkpoint.Map) or ""
     return "Round " .. checkpoint.Round .. ", " .. number_text(checkpoint.Points) .. " points" .. map
+end
+
+-- when the checkpoint was saved, as "3 h ago", or nil
+local function saved_when(checkpoint)
+    local when = checkpoint.Saved ~= nil and call(bo3macfix.CheckpointSavedWhen, checkpoint.Saved) or nil
+    return type(when) == "string" and when ~= "" and when or nil
 end
 
 local function current_options()
@@ -368,12 +417,14 @@ function bo3macfix.CheckpointRows(controller, message)
         return #parts > 0 and table.concat(parts, ";  ") or "Saved without perks, guns or scoreboard."
     end
     save_row.run = function()
-        if not in_match() then return message("Open this page during a zombies game to save it.") end
-        local saved, short = save(controller, "settings page")
-        if short ~= nil then return message("Not saved: " .. short .. ", so the saved game stays.") end
-        if saved == nil then return message("Couldn't read this game's round and points.") end
-        if not saved then return message("Couldn't save BO3MacFix/checkpoint.ini.") end
-        message("Saved " .. summary(read_checkpoint()) .. ".")
+        local saved, problem, detail = save_game(controller, "settings page")
+        if saved then return message("Saved " .. summary(read_checkpoint()) .. ".") end
+        message(({ menus = "Open this page during a zombies game to save it.",
+            not_zombies = "Save game is for zombies games.",
+            not_solo = "Save game is for solo games, and " .. tostring(detail) .. ".",
+            short = "Not saved: " .. tostring(detail) .. ", so the saved game stays.",
+            unread = "Couldn't read this game's round and points.",
+            unwritten = "Couldn't save BO3MacFix/checkpoint.ini." })[problem] or "Not saved.")
     end
     local resume = { kind = "action", category = "Saved game", label = "Resume saved game", live = true,
         description = "Next game: the saved round and points, then your perks and guns back, with their camo, " ..
@@ -385,7 +436,10 @@ function bo3macfix.CheckpointRows(controller, message)
             return (state == 1 and "Next game: round " or "This game: round ") .. checkpoint.AppliedRound
         end
         if state ~= 0 then return "On" end
-        return "Off"
+        -- what it would resume, and when that was saved
+        if checkpoint.Round == nil then return "Off" end
+        local when = saved_when(checkpoint)
+        return "Off (round " .. checkpoint.Round .. (when ~= nil and ", saved " .. when or "") .. ")"
     end
     resume.run = function()
         if bo3macfix.CheckpointResume(0) ~= 0 then
@@ -401,7 +455,8 @@ function bo3macfix.CheckpointRows(controller, message)
         local commands = bo3macfix.ApplyCheckpoint(bo3macfix.CheckpointPreset())
         if commands == nil then return message("Couldn't set up the resume (see BO3MacFix/log.txt).") end
         run_commands(controller, commands)
-        local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and " Start " .. checkpoint.Map .. " to pick it up." or ""
+        local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and " Start " .. map_name(checkpoint.Map) ..
+            " to pick it up." or ""
         message("The next game resumes " .. summary(checkpoint) .. "." .. map)
     end
     -- pressed twice within 5 seconds (by the notices' clock, when there is one)
@@ -410,7 +465,16 @@ function bo3macfix.CheckpointRows(controller, message)
             "In a match, AutoSave saves again at the next round." }
     local armed = nil
     local function clock() return tonumber(call(bo3macfix.NoticeClock)) end
-    delete.text = function() return armed ~= nil and "Press again to delete" or "" end
+    delete.text = function()
+        if armed ~= nil then return "Press again to delete" end
+        -- what it would delete: the map, and when it was saved
+        local checkpoint = read_checkpoint()
+        if checkpoint.Round == nil then return "" end
+        local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and map_name(checkpoint.Map) or nil
+        local when = saved_when(checkpoint)
+        if map ~= nil and when ~= nil then return map .. ", " .. when end
+        return map or when or ""
+    end
     delete.run = function()
         local checkpoint = read_checkpoint()
         if checkpoint.Round == nil then
@@ -519,18 +583,6 @@ local AUTOSAVE_START_POLLS = math.floor((tonumber(autosave_start) or 10) * 1000 
 local AUTOSAVE_SETTLE_POLLS = 4
 local AUTOSAVE_AFTER_GIVE_POLLS = 10 -- a resumed game's weapons arrive a moment after the give commands
 
--- why this game isn't solo, nil if it is: split screen, a recording played back, or more than one client in the game's
--- lobby (a game started with +map may have no lobby, and only a clear answer counts); and the lobby's count, for the log
-local function not_solo()
-    local lobby = Enum ~= nil and Enum.LobbyType ~= nil and Enum.LobbyType.LOBBY_TYPE_GAME or nil
-    local clients = lobby ~= nil and tonumber(call(Engine.GetLobbyClientCount, lobby)) or nil
-    local count = tostring(clients) .. " in the game's lobby"
-    if call(Engine.IsSplitscreen) == true then return "this one is split screen", count end
-    if call(Engine.IsDemoPlaying) == true then return "this one is a recording", count end
-    if clients ~= nil and clients > 1 then return "this one has " .. count, count end
-    return nil, count
-end
-
 local function autosave_tick(controller, round, state)
     if autosave_fn == nil then return end
     local auto = match.autosave
@@ -568,7 +620,77 @@ local function autosave_tick(controller, round, state)
     autosave_fn(lines, tostring(seen) .. ", " .. players)
 end
 
+-- ---- Quick save: the QuickSave key (F5) in a match, or L3 + R3 held for a second while the pause menu is open
+-- (quick_save.m), saves like the settings page's Save game row (save_game, so with the same checks and lock) and says
+-- how it went in a notice. Replacing a game saved at a higher round that this one didn't resume takes a second press
+-- within 5 seconds, since one key is easy to hit by mistake; the page's row, three menus deep, doesn't ask.
+local QUICK_CONFIRM_SECONDS = 5
+local QUICK_REASONS = { menus = "start a solo zombies game first", not_zombies = "quick save is for zombies games",
+    unread = "couldn't read this game's round and points", unwritten = "couldn't write BO3MacFix/checkpoint.ini" }
+local quick_armed = nil -- a first press over a deeper saved game: { time } by the notices' clock
+local start_menu = nil  -- the pause menu (StartMenu_Main) made last
+
+-- whether a menu is on one of LUI's roots, so open
+local function on_root(element)
+    if type(element) ~= "table" or type(element.getParent) ~= "function" or LUI == nil or LUI.roots == nil then
+        return false
+    end
+    local top, parent = element, element:getParent()
+    while parent ~= nil do
+        top = parent
+        parent = type(parent.getParent) == "function" and parent:getParent() or nil
+    end
+    for _, root in pairs(LUI.roots) do
+        if root == top then return true end
+    end
+    return false
+end
+
+-- source: "key" (key: its name) or "pad"
+local function quick_save(controller, source, key)
+    local notice = bo3macfix.CheckpointNotice or function() end
+    -- the controller's only counts in the pause menu: L3 and R3 are sprint and stance in play
+    if source == "pad" and not (in_match() and on_root(start_menu)) then
+        log("checkpoint: quick save (L3 + R3) left alone outside the pause menu")
+        return
+    end
+    local again = source == "pad" and "hold L3 + R3" or ("press " .. tostring(key or "the key"))
+    if in_match() and string.sub(current_map(), 1, 3) == "zm_" then
+        local checkpoint = read_checkpoint()
+        local kept = tonumber(checkpoint.Round)
+        local played = tonumber(model_value(Engine.GetModelForController(controller), "gameScore.roundsPlayed"))
+        -- the HUD's round, as a save keeps it: one less than roundsPlayed (see collect)
+        local round = played ~= nil and played - 1 or nil
+        if kept ~= nil and round ~= nil and kept > round and (call(bo3macfix.CheckpointResume, 0) or 0) < 2 then
+            local now = tonumber(call(bo3macfix.NoticeClock))
+            if quick_armed == nil or (now ~= nil and quick_armed.time ~= nil and now - quick_armed.time > QUICK_CONFIRM_SECONDS) then
+                quick_armed = { time = now }
+                local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and " on " .. map_name(checkpoint.Map) or ""
+                log("checkpoint: quick save asks again before replacing the game saved at round " .. kept)
+                notice("Saved game is round " .. kept .. map .. ": " .. again .. " again to replace it")
+                return
+            end
+        end
+    end
+    quick_armed = nil
+    local saved, problem, detail = save_game(controller, "quick save")
+    if saved then
+        local checkpoint = read_checkpoint()
+        notice("Game saved: round " .. tostring(checkpoint.Round) .. ", " .. number_text(checkpoint.Points) .. " points")
+        return
+    end
+    local why = QUICK_REASONS[problem] or tostring(detail)
+    if problem == "not_solo" then why = "quick save is for solo games, and " .. tostring(detail) end
+    log("checkpoint: quick save didn't save: " .. why)
+    notice("Not saved: " .. why)
+end
+
 local function poll(controller)
+    local take_quick = bo3macfix.CheckpointTakeQuickSave
+    if take_quick ~= nil then
+        local ok, source, key = pcall(take_quick)
+        if ok and source ~= nil then quick_save(controller, source, key) end
+    end
     if not in_match() then
         match, loadout_pending = nil, nil
         -- back in the menus after a resumed game: the player's own AAE options again (which ends the resume, so
@@ -749,6 +871,8 @@ end
 function bo3macfix.CheckpointMenuCreated(name, menu, kind)
     start_timer()
     watch_overlays()
+    -- the quick save's L3 + R3 counts while it's open
+    if name == "StartMenu_Main" and kind == nil then start_menu = menu end
     -- the report test switch also logs what a match makes, to tell which menu or overlay a popup is
     if report_after ~= nil and in_match() then log("checkpoint test: " .. (kind or "menu") .. " " .. tostring(name)) end
     -- quitting a match saves it, unless that would replace a game saved at a higher round that this one didn't resume

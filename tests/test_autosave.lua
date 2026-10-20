@@ -238,7 +238,7 @@ store = { Round = "12", Points = "23450", Map = "zm_theater" }
 clock_now = 100
 delete_row.run()
 check(deleted == 0, "the first press only asks")
-check(string.find(message, "Press again to delete Round 12, 23,450 points, zm_theater", 1, true) ~= nil,
+check(string.find(message, "Press again to delete Round 12, 23,450 points, Kino der Toten", 1, true) ~= nil,
     "what it would delete: " .. tostring(message))
 check(delete_row.text() == "Press again to delete", "the row says so: " .. tostring(delete_row.text()))
 clock_now = 106

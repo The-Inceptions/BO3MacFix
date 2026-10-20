@@ -1,8 +1,8 @@
 -- BO3MacFix's on-screen notices and PauseOnDisconnect, the UI half of notices.m, whether the pause menu is open in a
--- match for PauseMenuFPS, and whether the game is in the menus outside a match for MenuFPS. The first menu made in each UI Lua state loads this. A timer then looks four times a
--- second for a notice to show (one at a time, each for four seconds at the top of the screen), for a request to pause
--- because a controller disconnected, and at the pause menu. The argument says to log every menu made
--- (BO3MACFIX_NOTICESDEBUG=1).
+-- match for PauseMenuFPS, and whether the game is in the menus outside a match for MenuFPS. The first menu made in each
+-- UI Lua state loads this. A timer then looks four times a second for a notice to show (one at a time, each for four
+-- seconds at the top of the screen, a warning for eight), for a request to pause because a controller disconnected,
+-- and at the pause menu. The argument says to log every menu made (BO3MACFIX_NOTICESDEBUG=1).
 local debug_menus, menus_open = ...
 local bo3macfix = BO3MacFix
 if bo3macfix == nil or bo3macfix.TakeNotice == nil or LUI == nil or LUI.roots == nil or LUI.UITimer == nil then
@@ -15,8 +15,9 @@ local tell_menus = menus_open or function() end
 local clock = bo3macfix.NoticeClock -- seconds
 
 local POLL_MS, SHOW, FADE = 250, 4.0, 0.5
--- in the UI's 1280x720 space: centred, below the MacBook's camera housing
-local WIDTH, TOP, HEIGHT = 640, 34, 34
+-- in the UI's 1280x720 space: centred, below the MacBook's camera housing; wider for a long text (about 5 units a
+-- character at this height, measured live; 6 leaves a margin), up to most of the screen
+local WIDTH, MAX_WIDTH, CHAR_WIDTH, TOP, HEIGHT = 640, 1200, 6, 34, 34
 
 local function root_name(element)
     for name, root in pairs(LUI.roots) do
@@ -43,6 +44,8 @@ local function ui_root()
 end
 
 local toast, toast_text, toast_shown, fading = nil, nil, 0, false
+-- how long the toast shows: SHOW, or what TakeNotice said for a lasting one (a warning)
+local toast_seconds = SHOW
 
 local function close_toast()
     local old = toast
@@ -50,12 +53,13 @@ local function close_toast()
     if old ~= nil then old:close() end
 end
 
-local function show(text)
+local function show(text, seconds)
     close_toast()
     local root = ui_root()
     if root == nil then return end
     local box = LUI.UIElement.new()
-    box:setLeftRight(false, false, -WIDTH / 2, WIDTH / 2)
+    local width = math.max(WIDTH, math.min(MAX_WIDTH, #text * CHAR_WIDTH + 48))
+    box:setLeftRight(false, false, -width / 2, width / 2)
     box:setTopBottom(true, false, TOP, TOP + HEIGHT)
     local back = LUI.UIImage.new()
     back:setLeftRight(true, true, 0, 0)
@@ -78,6 +82,7 @@ local function show(text)
     -- added last, so it's drawn over everything already on the root
     root:addElement(box)
     toast, toast_text, toast_shown, fading = box, text, clock(), false
+    toast_seconds = seconds or SHOW
 end
 
 local function fade_out()
@@ -177,7 +182,7 @@ local function poll()
             if toast ~= nil and not fading then
                 -- it went on after the toast: put the toast back on top, keeping its time
                 local shown = toast_shown
-                show(toast_text)
+                show(toast_text, toast_seconds)
                 toast_shown = shown
                 log_order("toast put back on top")
             end
@@ -185,16 +190,16 @@ local function poll()
     end
     if toast ~= nil then
         local age = clock() - toast_shown
-        if age >= SHOW + FADE then
+        if age >= toast_seconds + FADE then
             close_toast()
-        elseif age >= SHOW and not fading and not pcall(fade_out) then
+        elseif age >= toast_seconds and not fading and not pcall(fade_out) then
             close_toast()
         end
     end
     if toast == nil then
-        local text = take_notice()
+        local text, seconds = take_notice()
         if text ~= nil then
-            local ok, err = pcall(show, text)
+            local ok, err = pcall(show, text, tonumber(seconds))
             if ok then
                 log("notices: showing " .. text .. " on " .. tostring(root_name(ui_root())))
                 log_order("toast shown")

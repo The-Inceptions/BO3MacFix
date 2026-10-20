@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include "../source/checkpoint.h"
 
@@ -507,6 +508,50 @@ static void test_weapon_commands(void) {
     CHECK(checkpoint_weapon_commands("ray_gun_upgraded", "", small, sizeof(small)) == -1);
 }
 
+// the settings page's "3 h ago" for the checkpoint's Saved
+static void test_saved_when(void) {
+    char out[32];
+    // a fixed time zone, so the dates below don't depend on the machine's
+    setenv("TZ", "America/New_York", 1);
+    tzset();
+    const long now = 1792423531; // Mon Oct 19 2026, 11:25:31 EDT
+    checkpoint_saved_when("1792423531", now, out, sizeof(out));
+    CHECK(strcmp(out, "just now") == 0);
+    checkpoint_saved_when("1792423472", now, out, sizeof(out)); // 59 s
+    CHECK(strcmp(out, "just now") == 0);
+    checkpoint_saved_when("1792423471", now, out, sizeof(out)); // 60 s
+    CHECK(strcmp(out, "1 min ago") == 0);
+    checkpoint_saved_when("1792420000", now, out, sizeof(out)); // 58 min 51 s
+    CHECK(strcmp(out, "58 min ago") == 0);
+    checkpoint_saved_when("1792419931", now, out, sizeof(out)); // 1 h
+    CHECK(strcmp(out, "1 h ago") == 0);
+    checkpoint_saved_when("1792337132", now, out, sizeof(out)); // 23 h 59 min 59 s
+    CHECK(strcmp(out, "23 h ago") == 0);
+    checkpoint_saved_when("1792337131", now, out, sizeof(out)); // a day: Oct 18
+    CHECK(strcmp(out, "Oct 18") == 0);
+    checkpoint_saved_when("1767225600", now, out, sizeof(out)); // Jan 1 2026, 00:00 UTC: Dec 31 2025 in New York
+    CHECK(strcmp(out, "Dec 31 2025") == 0);
+    checkpoint_saved_when("1767243600", now, out, sizeof(out)); // Jan 1 2026, 00:00 EST
+    CHECK(strcmp(out, "Jan 1") == 0);
+    // a few seconds ahead (clocks) is now; further ahead, or not a number, is nothing
+    checkpoint_saved_when("1792423560", now, out, sizeof(out));
+    CHECK(strcmp(out, "just now") == 0);
+    checkpoint_saved_when("1792423600", now, out, sizeof(out));
+    CHECK(strcmp(out, "") == 0);
+    checkpoint_saved_when("12ab", now, out, sizeof(out));
+    CHECK(strcmp(out, "") == 0);
+    checkpoint_saved_when("", now, out, sizeof(out));
+    CHECK(strcmp(out, "") == 0);
+    checkpoint_saved_when(NULL, now, out, sizeof(out));
+    CHECK(strcmp(out, "") == 0);
+    checkpoint_saved_when("-5", now, out, sizeof(out));
+    CHECK(strcmp(out, "") == 0);
+    // a small buffer is cut, not overrun
+    char tiny[4];
+    checkpoint_saved_when("1792420000", now, tiny, sizeof(tiny));
+    CHECK(strcmp(tiny, "58 ") == 0);
+}
+
 int main(void) {
     if (mkdtemp(root) == NULL) {
         printf("FAIL: couldn't make a temporary folder\n");
@@ -526,6 +571,7 @@ int main(void) {
     test_perks();
     test_weapon_commands();
     test_loadout();
+    test_saved_when();
 
     unlink(checkpoint_path);
     unlink(mutations);

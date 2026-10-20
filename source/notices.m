@@ -24,6 +24,7 @@
 //   com.bo3macfix.test.battery     the made-up DualSense's battery is now VALUE percent (VALUE + 1000: and charging)
 //   com.bo3macfix.test.escape      posts Escape, what PauseOnDisconnect does
 //   com.bo3macfix.test.cmdq        does what the app menu's Cmd+Q item does, saying first what that is
+//   com.bo3macfix.test.modwarning  shows the warning for a mod's Windows DLL (bo3macfix.c), for a made-up Test.dll
 #import <AppKit/AppKit.h>
 #import <GameController/GameController.h>
 #include <notify.h>
@@ -42,6 +43,7 @@
 #include "notices_lua.h"
 
 #define Max_Notice_Age 20.0    // seconds a notice waits for the UI (while a map loads, say) before it's dropped
+#define Lasting_Show 8         // seconds a lasting notice (a warning) shows, twice the others
 #define Max_Pause_Age 5.0      // seconds a pause request waits
 #define Startup_Quiet 15.0     // controllers macOS finds while the game starts aren't news
 #define Startup_Display_Quiet 30.0 // nor the display the window first goes to
@@ -60,19 +62,39 @@ static double now(void) {
     return (double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
 }
 
-void notices_post(const char *format, ...) {
+__attribute__((format(printf, 2, 0))) static void post(bool lasting, const char *format, va_list args) {
     char text[Notice_Text_Max];
-    va_list args;
-    va_start(args, format);
     vsnprintf(text, sizeof(text), format, args);
-    va_end(args);
     bool on = atomic_load(&notices_on);
     printf("BO3MacFix: notice: %s%s\n", text, on ? "" : " (not shown, Notices is off)");
     if (!on)
         return;
     os_unfair_lock_lock(&lock);
-    notice_queue_push(&queue, text, now());
+    if (lasting)
+        notice_queue_push_lasting(&queue, text, now());
+    else
+        notice_queue_push(&queue, text, now());
     os_unfair_lock_unlock(&lock);
+}
+
+void notices_post(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    post(false, format, args);
+    va_end(args);
+}
+
+void notices_post_lasting(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    post(true, format, args);
+    va_end(args);
+}
+
+void notices_mod_warning(const char *file, const char *func) {
+    printf("BO3MacFix: Mod Warning: the mod you loaded tried to open a Windows DLL file (%s: %s). The game might work "
+           "fine, but it might be unstable.\n", file, func);
+    notices_post_lasting("Mod warning: can't load Windows DLL %s, the game might be unstable", file);
 }
 
 static void request_pause(bool forced) {
@@ -239,17 +261,22 @@ static void press_escape(const char *why) {
 
 #pragma mark - Lua
 
-// TakeNotice() -> the next notice's text, or nil
+// TakeNotice() -> the next notice's text and, for a lasting one (a warning), how many seconds to show it; or nil
 static int lua_take_notice(lua_State *s) {
     char text[Notice_Text_Max];
+    bool lasting = false;
     os_unfair_lock_lock(&lock);
-    bool taken = notice_queue_pop(&queue, now(), Max_Notice_Age, text, sizeof(text));
+    bool taken = notice_queue_pop(&queue, now(), Max_Notice_Age, text, sizeof(text), &lasting);
     os_unfair_lock_unlock(&lock);
-    if (taken)
-        hks_push_string(s, text);
-    else
+    if (!taken) {
         hks_push_nil(s);
-    return 1;
+        return 1;
+    }
+    hks_push_string(s, text);
+    if (!lasting)
+        return 1;
+    hks_push_number(s, Lasting_Show);
+    return 2;
 }
 
 // TakePauseRequest() -> nil, or whether to pause whatever the last input was
@@ -423,7 +450,10 @@ static void setup_tests(void) {
         else
             [NSApp terminate:nil];
     });
-    printf("notices tests: test hooks on (com.bo3macfix.test.notice, controller, battery, escape, cmdq)\n");
+    on_test("com.bo3macfix.test.modwarning", ^(uint64_t value) {
+        notices_mod_warning("Test.dll", "init");
+    });
+    printf("notices tests: test hooks on (com.bo3macfix.test.notice, controller, battery, escape, cmdq, modwarning)\n");
 }
 
 static void setup(bool tests) {

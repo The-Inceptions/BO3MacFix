@@ -7,7 +7,7 @@
 //   BO3MacFix.RestartPending() -> true while a setting saved this session differs from what the game started with
 //                                  and couldn't be applied without a restart
 // Some settings apply right away (live = true): the frame rate ones, the display ones, the controller ones,
-// RawMouseScale, AAEOnline, ExitFix and AutoSave, plus JobIdleFix, RenderIdleFix and AvoidNotch from the pre-patched executable. The rest
+// RawMouseScale, AAEOnline, ExitFix, AutoSave, QuickSave and ModWarningDialog, plus JobIdleFix, RenderIdleFix and AvoidNotch from the pre-patched executable. The rest
 // are read once at startup, so changing them asks for a restart.
 #include <limits.h>
 #include <spawn.h>
@@ -26,6 +26,7 @@
 #include "offsets.h"
 #include "prepatch.h"
 #include "qol.h"
+#include "quick_save.h"
 #include "rawmouse.h"
 #include "settings.h"
 #include "settings_ini.h"
@@ -102,7 +103,9 @@ static const setting_t settings[] = {
     { "FrameStats", "Frame stats in the log", "Logs the frame rate, 1% low and worst frame time to BO3MacFix/log.txt.", "Advanced", false, 4, { 0, 5, 10, 30 }, { "Off", "Every 5 s", "Every 10 s", "Every 30 s" }, 0, Live_Present },
     { "GpuDiagnostics", "GPU diagnostics in the log", "Logs the window, display mode and Metal layer whenever they change.", "Advanced", Toggle(0) },
     { "NoCodePatches", "No code patches (testing)", "Leaves the game's code exactly as shipped, without any of the fixes. Solo play only.", "Advanced", Toggle(0) },
-    // last, so the settings page shows it with the saved game's rows (checkpoint.lua)
+    { "ModWarningDialog", "Mod warning as a dialog", "Warns about a mod's Windows DLL in a dialog that stops the game until it's closed, instead of an on-screen notice.", "Advanced", Toggle_Live(0, Live_Always) },
+    // last, so the settings page shows them with the saved game's rows (checkpoint.lua)
+    { "QuickSave", "Quick save key", "Saves a solo zombies game like Save game: this key, or L3 + R3 held for a second in the pause menu. A game saved at a higher round takes two presses.", "Saved game", false, 6, { 0, 96, 97, 98, 100, 101 }, { "Off", "F5", "F6", "F7", "F8", "F9" }, 96, Live_Always },
     { "AutoSave", "AutoSave", "Saves a solo zombies game by itself as each new round starts, like Save game. A game saved at a higher round stays unless this one resumed it.", "Saved game", Toggle_Live(1, Live_Always) },
 };
 #define Setting_Count (sizeof(settings) / sizeof(settings[0]))
@@ -177,6 +180,10 @@ static bool apply_live(const setting_t *t, int value) {
         notices_set_pause_on_disconnect(value);
     else if (strcmp(n, "AutoSave") == 0)
         checkpoint_autosave_set_enabled(value != 0);
+    else if (strcmp(n, "QuickSave") == 0)
+        quick_save_set_key(value);
+    else if (strcmp(n, "ModWarningDialog") == 0)
+        ; // read when a mod's DLL doesn't load (bo3macfix.c)
     else
         return false;
     return true;

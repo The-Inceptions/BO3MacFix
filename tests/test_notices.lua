@@ -12,7 +12,7 @@ end
 
 local function element()
     local e = { children = {}, alpha = 1 }
-    function e:setLeftRight() end
+    function e:setLeftRight(left_anchor, right_anchor, left, right) self.width = right - left end
     function e:setTopBottom() end
     function e:setRGB() end
     function e:setAlignment() end
@@ -46,7 +46,12 @@ local state = { in_game = true, can_pause = true, gamepad = true }
 BO3MacFix = {
     NoticeLog = function(text) table.insert(logs, text) end,
     NoticeClock = function() return now end,
-    TakeNotice = function() return table.remove(queue, 1) end,
+    -- a { text, seconds } entry is a lasting notice (a warning)
+    TakeNotice = function()
+        local item = table.remove(queue, 1)
+        if type(item) == "table" then return item[1], item[2] end
+        return item
+    end,
     TakePauseRequest = function() local r = pause_request pause_request = nil return r end,
     PauseGame = function() pauses = pauses + 1 end,
     PauseMenuOpen = function(open) table.insert(told, open) end,
@@ -101,6 +106,31 @@ tick(1)
 check(toast.alpha == 0 and toast.animation == "fade_out", "it fades at 4 s")
 tick(2)
 check(toast_on(full) == nil, "and is gone after the fade")
+
+-- a warning (a lasting notice): shown for 8 s, and wide enough for its text when that's long (a long DLL name)
+table.insert(queue, { "Mod warning: can't load Windows DLL ui_uieditor_widgets_Tablet_TabletLocationSelector.dll, " ..
+    "the game might be unstable", 8 })
+tick()
+toast, text = toast_on(full)
+check(text ~= nil and string.find(text, "Mod warning", 1, true) == 1, "the warning is shown")
+check(toast ~= nil and toast.width ~= nil and toast.width > 640 and toast.width <= 1200, "wider for its text: " ..
+    tostring(toast and toast.width))
+tick(16)
+check(toast.alpha == 1, "still shown at 4 s")
+tick(15)
+check(toast.alpha == 1, "and just before 8 s")
+tick(1)
+check(toast.alpha == 0 and toast.animation == "fade_out", "it fades at 8 s")
+tick(2)
+check(toast_on(full) == nil, "and is gone after the fade")
+-- the next one is a plain notice again: 4 s, the usual width
+table.insert(queue, "short")
+tick()
+toast = toast_on(full)
+check(toast ~= nil and toast.width == 640, "a short text keeps the usual width: " .. tostring(toast and toast.width))
+tick(16)
+check(toast.alpha == 0, "and shows 4 s")
+tick(2)
 
 -- two at once: one after the other
 table.insert(queue, "first")
