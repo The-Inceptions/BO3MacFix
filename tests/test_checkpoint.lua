@@ -358,6 +358,54 @@ check(string.find(notices[#notices] or "", "Guns back: ray gun (Pack-a-Punched),
 leave_match()
 polls(1)
 
+-- nor while a menu opened from the pause menu has taken its place on the root (Options): the game is still paused
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+pause_menu = { getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+polls(13)
+local options = { getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Options", options)
+pause_menu.getParent = function() return nil end
+polls(1200)
+check(state == 3 and allowed == "take pistol_m1911\ngive ray_gun_upgraded\n" and
+    not string.find(table.concat(notices, "\n"), "not given back", 1, true), "kept for ten minutes in Options")
+-- back to the pause menu, a new one, then closed: the game runs them
+options.getParent = function() return nil end
+pause_menu = { getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+polls(600)
+check(not string.find(table.concat(notices, "\n"), "not given back", 1, true), "and five more in the pause menu")
+pause_menu.getParent = function() return nil end
+held_commands = false
+weapons = "ray_gun_upgraded_zm:0,pistol_burst_zm:0,frag_grenade_zm:1,knife_zm:4"
+polls(7)
+check(string.find(notices[#notices] or "", "Guns back: ray gun (Pack-a-Punched), pistol burst", 1, true) ~= nil,
+    "then run after Options: " .. tostring(notices[#notices]))
+leave_match()
+polls(1)
+
+-- once the pause is over, a menu made then doesn't hold the count, even when the pause came before the commands
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+pause_menu = { getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+polls(2)
+pause_menu.getParent = function() return nil end
+polls(2)
+BO3MacFix.CheckpointMenuCreated("SomeHudMenu", { getParent = function() return root end })
+polls(9)
+BO3MacFix.CheckpointMenuCreated("SomeHudMenu", { getParent = function() return root end })
+polls(600)
+check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true) ~= nil and allowed == "",
+    "a menu made unpaused doesn't stop the five minutes: " .. tostring(notices[#notices]))
+leave_match()
+polls(1)
+
 -- a resume that can't be undone (a file that can't be written) says so and stays on, rather than saying it's off
 resume_row.run()
 clear_fails, logs = true, {}
