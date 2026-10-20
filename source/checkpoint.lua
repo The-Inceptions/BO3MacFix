@@ -588,7 +588,7 @@ local AUTOSAVE_SETTLE_POLLS = 4
 local AUTOSAVE_AFTER_GIVE_POLLS = 10 -- a resumed game's weapons arrive a moment after the give commands
 -- give and take commands for the saved guns that still haven't run at the next round, or after this long out of the
 -- pause menu, are given up on (a paused game holds them, but runs them as soon as it's unpaused). The round is what
--- matters for AutoSave; the time is long, as a menu opened from the pause menu might not count as the pause menu.
+-- matters for AutoSave. A menu opened from the pause menu counts as paused while it's open (game_paused).
 local GUNS_GIVE_UP_POLLS = math.floor(300 * 1000 / POLL_MS)
 local GUNS_ROUND_GIVE_UP_POLLS = 4 -- out of the pause menu since they were sent, before a new round gives up on them
 
@@ -638,6 +638,9 @@ local QUICK_REASONS = { menus = "start a solo zombies game first", not_zombies =
     unread = "couldn't read this game's round and points", unwritten = "couldn't write BO3MacFix/checkpoint.ini" }
 local quick_armed = nil -- a first press over a deeper saved game: { time } by the notices' clock
 local start_menu = nil  -- the pause menu (StartMenu_Main) made last
+-- menus made while the pause menu was open (Options, say), and whether it has been: one it opens might take its place
+-- on the root, and the game stays paused until the last of them has gone
+local pause_held, pause_seen = {}, false
 
 -- whether a menu is on one of LUI's roots, so open
 local function on_root(element)
@@ -652,6 +655,21 @@ local function on_root(element)
     for _, root in pairs(LUI.roots) do
         if root == top then return true end
     end
+    return false
+end
+
+-- whether the game is paused: the pause menu is on a root, or a menu made while it was open still is
+local function game_paused()
+    if on_root(start_menu) then
+        pause_seen = true
+        return true
+    end
+    if pause_seen then
+        for menu in pairs(pause_held) do
+            if on_root(menu) then return true end
+        end
+    end
+    pause_held, pause_seen = {}, false
     return false
 end
 
@@ -708,6 +726,7 @@ local function poll(controller)
     end
     if not in_match() then
         match, loadout_pending, guns_pending = nil, nil, nil
+        pause_held, pause_seen = {}, false
         -- back in the menus after a resumed game: the player's own AAE options again (which ends the resume, so
         -- this happens once)
         if bo3macfix.CheckpointResume(0) >= 2 then clear_resume(controller) end
@@ -717,6 +736,8 @@ local function poll(controller)
         match = new_match()
         call(bo3macfix.CheckpointAllowCheats, "") -- none left from an earlier match
     end
+    -- on every poll, so a pause that has ended doesn't hold the menus made after it
+    local paused = game_paused()
     -- the match's HUD is up once it has a round
     local played = tonumber(model_value(Engine.GetModelForController(controller), "gameScore.roundsPlayed"))
     if played == nil then return end
@@ -747,10 +768,10 @@ local function poll(controller)
         end
     end
     -- a command the game never runs would keep AutoSave off, and the saves on the saved guns, for the rest of the
-    -- match: none of them is let through any more at the next round, or after five minutes out of the pause menu
+    -- match: none of them is let through any more at the next round, or after five minutes unpaused
     if match.given_at ~= nil and match.ran_at == nil then
         match.given_played = match.given_played or played
-        if not on_root(start_menu) then match.unpaused_polls = (match.unpaused_polls or 0) + 1 end
+        if not paused then match.unpaused_polls = (match.unpaused_polls or 0) + 1 end
         local unpaused = match.unpaused_polls or 0
         if (played ~= match.given_played and unpaused >= GUNS_ROUND_GIVE_UP_POLLS) or unpaused >= GUNS_GIVE_UP_POLLS then
             local left = tonumber(call(bo3macfix.CheckpointAllowCheats)) or 0
@@ -915,7 +936,11 @@ function bo3macfix.CheckpointMenuCreated(name, menu, kind)
     start_timer()
     watch_overlays()
     -- the quick save's L3 + R3 counts while it's open
-    if name == "StartMenu_Main" and kind == nil then start_menu = menu end
+    if name == "StartMenu_Main" and kind == nil then
+        start_menu, pause_seen = menu, true
+    elseif kind == nil and (pause_seen or on_root(start_menu)) then
+        pause_held[menu] = true -- the give-up's time doesn't count while it's open, as the game is still paused
+    end
     -- the report test switch also logs what a match makes, to tell which menu or overlay a popup is
     if report_after ~= nil and in_match() then log("checkpoint test: " .. (kind or "menu") .. " " .. tostring(name)) end
     -- quitting a match saves it, unless that would replace a game saved at a higher round that this one didn't resume
