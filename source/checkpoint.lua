@@ -181,6 +181,9 @@ end
 -- "resume" from when a resumed game's give command for its loadout runs until the game says what it did ("test" for
 -- the test switch's): the player holds the starting guns meanwhile
 local loadout_pending = nil
+-- true from when a resumed game sends the give and take commands for its saved guns (an older save, without a Guns
+-- line) until the game has run them: it holds them while it's paused (the pause menu open), the starting guns in hand
+local guns_pending = nil
 
 local function perk_names(ids)
     local names, wanted = {}, {}
@@ -257,7 +260,7 @@ local function collect(controller)
     if type(loadout) ~= "string" then loadout = nil end
     -- a resumed game whose saved guns aren't back yet holds the starting ones, or none that can be read: a save then
     -- keeps the saved guns and perks (quitting at once would otherwise swap them for the starting pistol)
-    if call(bo3macfix.CheckpointResume, 0) == 2 or loadout_pending == "resume" then
+    if call(bo3macfix.CheckpointResume, 0) == 2 or loadout_pending == "resume" or guns_pending then
         local checkpoint = read_checkpoint()
         if checkpoint.Map == map and ((checkpoint.Weapons ~= nil and checkpoint.Weapons ~= "") or has_loadout(checkpoint)) then
             primaries, others = split(checkpoint.Weapons), split(checkpoint.Equipment)
@@ -566,12 +569,11 @@ local function give_weapons(controller, checkpoint)
             table.concat(primaries, ",") .. ")")
         return
     end
-    local count = 0
-    for _ in string.gmatch(commands, "[^\n]+") do count = count + 1 end
     log("checkpoint: giving the saved weapons back: " .. string.gsub(commands, "\n", "; "))
-    bo3macfix.CheckpointAllowCheats(count)
+    -- each one gets past the cheat check once, whenever the game runs it
+    bo3macfix.CheckpointAllowCheats(commands)
     run_commands(controller, commands)
-    match.given_at = match.polls
+    match.given_at, guns_pending = match.polls, true
 end
 
 -- ---- AutoSave: each new round of a solo zombies game saves it by itself
@@ -600,7 +602,7 @@ local function autosave_tick(controller, round, state)
     auto.settled = auto.settled + 1
     -- not while a resumed game is getting its weapons back from the saved game
     if auto.settled < AUTOSAVE_SETTLE_POLLS or state == 2 or match.restoring_at ~= nil or
-        (match.given_at ~= nil and match.polls < match.given_at + AUTOSAVE_AFTER_GIVE_POLLS) or
+        (match.given_at ~= nil and (match.ran_at == nil or match.polls < match.ran_at + AUTOSAVE_AFTER_GIVE_POLLS)) or
         (match.restored_at ~= nil and match.polls < match.restored_at + AUTOSAVE_AFTER_GIVE_POLLS) then
         return
     end
@@ -692,13 +694,16 @@ local function poll(controller)
         if ok and source ~= nil then quick_save(controller, source, key) end
     end
     if not in_match() then
-        match, loadout_pending = nil, nil
+        match, loadout_pending, guns_pending = nil, nil, nil
         -- back in the menus after a resumed game: the player's own AAE options again (which ends the resume, so
         -- this happens once)
         if bo3macfix.CheckpointResume(0) >= 2 then clear_resume(controller) end
         return
     end
-    if match == nil then match = new_match() end
+    if match == nil then
+        match = new_match()
+        call(bo3macfix.CheckpointAllowCheats, "") -- none left from an earlier match
+    end
     -- the match's HUD is up once it has a round
     local played = tonumber(model_value(Engine.GetModelForController(controller), "gameScore.roundsPlayed"))
     if played == nil then return end
@@ -719,7 +724,16 @@ local function poll(controller)
             give_weapons(controller, checkpoint)
         end
     end
-    if match.given_at ~= nil and match.polls == match.given_at + 6 then
+    -- the give and take commands have run once none is left to let through (a paused game holds them), and what the
+    -- player has then is told a moment later
+    if match.given_at ~= nil and match.ran_at == nil and (tonumber(call(bo3macfix.CheckpointAllowCheats)) or 0) == 0 then
+        match.ran_at, guns_pending = match.polls, nil
+        if match.polls > match.given_at + 2 then
+            log("checkpoint: the game ran the give and take commands " ..
+                tostring((match.polls - match.given_at) * POLL_MS / 1000) .. " s after they were sent (paused?)")
+        end
+    end
+    if match.ran_at ~= nil and match.polls == match.ran_at + 6 then
         local primaries, _, raw = weapons_now()
         log("checkpoint: weapons now " .. tostring(raw))
         local notice = bo3macfix.CheckpointNotice or function() end
@@ -808,10 +822,8 @@ local function poll(controller)
         match.gave_test = true
         local commands = bo3macfix.CheckpointWeaponCommands(give_test, "")
         if commands ~= nil and commands ~= "" then
-            local count = 0
-            for _ in string.gmatch(commands, "[^\n]+") do count = count + 1 end
             log("checkpoint test: " .. string.gsub(commands, "\n", "; "))
-            bo3macfix.CheckpointAllowCheats(count)
+            bo3macfix.CheckpointAllowCheats(commands)
             run_commands(controller, commands)
         end
     end

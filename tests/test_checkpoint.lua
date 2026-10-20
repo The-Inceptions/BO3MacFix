@@ -36,6 +36,7 @@ LUI = { roots = { UIRootFull = root }, UITimer = { newElementTimer = function(ms
 
 -- ---- a made-up checkpoint.c and zm_inventory.c
 local store, state, weapons, notices, saves, plans, allowed, cleared_with = {}, 0, nil, {}, {}, {}, nil, nil
+local held_commands, allowed_left = false, 0
 local clear_fails = false -- checkpoint.ini or AAE's mutations file can't be read or written
 local SAVED = { "Map", "Round", "Points", "Perks", "Weapons", "Equipment", "Held", "Character", "Stats", "Guns",
     "GunInHand", "PerkList" }
@@ -79,7 +80,13 @@ BO3MacFix = {
         table.insert(plans, { saved = saved, held = held })
         return "take pistol_m1911\ngive ray_gun_upgraded\n"
     end,
-    CheckpointAllowCheats = function(count) allowed = count end,
+    -- the commands to let through; with no argument, how many the game hasn't run yet: all while it holds them (paused)
+    CheckpointAllowCheats = function(commands)
+        if commands == nil then return held_commands and allowed_left or 0 end
+        allowed, allowed_left = commands, 0
+        for _ in string.gmatch(commands, "[^\n]+") do allowed_left = allowed_left + 1 end
+        return allowed_left
+    end,
     CheckpointNotice = function(text) table.insert(notices, text) end,
     CheckpointLoadout = function() return loadout end,
     CheckpointRestoreLoadout = function()
@@ -216,7 +223,7 @@ polls(4)
 check(#plans == 1, "the weapons planned once")
 check(plans[1] and plans[1].saved == "ray_gun_upgraded,pistol_burst" and plans[1].held == "pistol_m1911",
     "saved and held primaries: " .. tostring(plans[1] and plans[1].held))
-check(allowed == 2, "two commands let through: " .. tostring(allowed))
+check(allowed == "take pistol_m1911\ngive ray_gun_upgraded\n", "the two commands let through: " .. tostring(allowed))
 check(execs[1] == "take pistol_m1911" and execs[2] == "give ray_gun_upgraded", "run: " .. tostring(execs[1]))
 check(state == 3, "weapons given")
 weapons = "ray_gun_upgraded_zm:0,pistol_burst_zm:0,frag_grenade_zm:1,knife_zm:4"
@@ -269,6 +276,32 @@ check(#saves == before + 2 and saves[#saves].Weapons == "ray_gun_upgraded,pistol
 leave_match()
 polls(1)
 check(state == 0, "cleared after that game")
+
+-- the pause menu open as the resume sends the give and take commands: the game holds them (live on Kino: run 15 s
+-- later, after the pause), so the guns are told once it has run them, and a save meanwhile keeps the saved guns
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+polls(13)
+check(state == 3 and execs[1] == "take pistol_m1911" and allowed == "take pistol_m1911\ngive ray_gun_upgraded\n",
+    "sent: " .. tostring(execs[1]))
+polls(30)
+check(not string.find(table.concat(notices, "\n"), "Guns back", 1, true), "no Guns back while the game holds them: " ..
+    tostring(notices[#notices]))
+local held_saves = #saves
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == held_saves + 1 and saves[#saves].Weapons == "ray_gun_upgraded,pistol_burst",
+    "a save meanwhile keeps the saved guns: " .. tostring(saves[#saves].Weapons))
+-- unpaused: the game runs them
+held_commands = false
+weapons = "ray_gun_upgraded_zm:0,pistol_burst_zm:0,frag_grenade_zm:1,knife_zm:4"
+polls(7)
+check(string.find(notices[#notices] or "", "Guns back: ray gun (Pack-a-Punched), pistol burst", 1, true) ~= nil,
+    "told once they're back: " .. tostring(notices[#notices]))
+check(string.find(table.concat(logs, "\n"), "s after they were sent (paused?)", 1, true) ~= nil, "and logged")
+leave_match()
+polls(1)
 
 -- a resume that can't be undone (a file that can't be written) says so and stays on, rather than saying it's off
 resume_row.run()

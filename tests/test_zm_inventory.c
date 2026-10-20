@@ -617,39 +617,61 @@ int main(void) {
     set_health(0, 100);
     set_health(1, 100);
 
+    SV_Cmd_ArgvBuffer = fake_argv;
     // nothing allowed: the game's answer
-    CHECK(!let_through(player, give));
+    argv1 = "pistol_m1911";
+    CHECK(!let_through(player, take, NULL));
 
-    // two allowed: give and take get through, nothing else does or uses them up
-    zm_inventory_allow_cheats(2);
-    CHECK(!let_through(player, god));
-    CHECK(!let_through(other, give)); // another player in a game hosted here
-    CHECK(!let_through(NULL, give));
-    set_health(0, 0);
-    CHECK(!let_through(player, give)); // dead, as the game's check wants too
-    set_health(0, 100);
-    CHECK(atomic_load(&allowed) == 2);
-    CHECK(let_through(player, take));
-    CHECK(let_through(player, give));
-    CHECK(!let_through(player, give)); // both used
-    CHECK(atomic_load(&allowed) == 0);
+    // a resume's two commands: each gets through once, with its own verb and name; nothing else does or uses them up
+    CHECK(zm_inventory_allow_commands("take pistol_m1911\ngive ray_gun_upgraded\n") == 2);
+    CHECK(!let_through(player, god, NULL));
+    CHECK(!let_through(other, take, NULL)); // another player in a game hosted here
+    CHECK(!let_through(NULL, take, NULL));
+    CHECK(!let_through(player, give, NULL)); // "give pistol_m1911" wasn't sent
+    argv1 = "ray_gun";
+    CHECK(!let_through(player, give, NULL)); // nor another name
+    CHECK(zm_inventory_allowed_left() == 2);
+    argv1 = "pistol_m1911";
+    CHECK(let_through(player, take, NULL));
+    CHECK(!let_through(player, take, NULL)); // once
+    CHECK(zm_inventory_allowed_left() == 1);
+    // the game ran the give 15 s after it was sent, held while paused (live: the pause menu open as the resume sent
+    // its commands): it still gets through, where the 10 s allowance had run out and the game refused both
+    allowed_at -= 15000;
+    argv1 = "ray_gun_upgraded";
+    long long held = 0;
+    CHECK(let_through(player, give, &held) && held >= 15000);
+    CHECK(zm_inventory_allowed_left() == 0);
+    CHECK(!let_through(player, give, NULL)); // both used
 
     // the hook itself, called from here rather than from give or take: the game's own check, allowance or not
-    zm_inventory_allow_cheats(1);
+    zm_inventory_allow_commands("give ray_gun_upgraded");
     game_checks = 0;
     CHECK(fake_CheatsOk(player) == 0 && game_checks == 1);
-    CHECK(atomic_load(&allowed) == 1);
+    CHECK(zm_inventory_allowed_left() == 1);
 
-    // only for a while
-    atomic_store(&allowed_until, now_ms() - 1);
-    CHECK(!let_through(player, give));
+    // run while the player isn't alive: refused, as the game's own check wants, and used up (the game ran it)
+    set_health(0, 0);
+    CHECK(!let_through(player, give, NULL));
+    CHECK(zm_inventory_allowed_left() == 0);
+    set_health(0, 100);
 
-    // no g_entities to compare with: nothing gets through
-    zm_inventory_allow_cheats(1);
+    // a new set replaces the last, an empty one leaves none, and only "give name" and "take name" lines count
+    CHECK(zm_inventory_allow_commands("give ray_gun_upgraded\ngive pistol_burst") == 2);
+    CHECK(zm_inventory_allow_commands("take pistol_m1911\nnoclip\ngive a b\n\ngive \n") == 1);
+    CHECK(!let_through(player, give, NULL));
+    CHECK(zm_inventory_allow_commands("") == 0 && zm_inventory_allowed_left() == 0);
+    argv1 = "pistol_m1911";
+    CHECK(!let_through(player, take, NULL));
+
+    // no g_entities to compare with: nothing gets through or is used up
+    zm_inventory_allow_commands("take pistol_m1911");
     entities_address = 0;
-    CHECK(!let_through(player, give));
+    CHECK(!let_through(player, take, NULL));
     entities_address = (uint64_t)g_entities;
-    CHECK(let_through(player, give));
+    CHECK(zm_inventory_allowed_left() == 1);
+    CHECK(let_through(player, take, NULL));
+    argv1 = "bo3macfix_restore";
 
     test_loadout();
 
