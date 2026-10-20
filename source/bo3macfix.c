@@ -922,6 +922,17 @@ install_hook_name(Lua_GetBuildIntField, int, lua_State *s) {
     return orig_Lua_GetBuildIntField(s);
 }
 
+// SkipIntro: the logo movies at start-up (BO3_Global_Logo_LogoSequence, then AspyrLogo, about 31 s, while the title
+// screen is ready about 12 s in) don't start. The function returns before starting them, as it does itself when
+// ui_playLogoMovie is 0, which is its default when the command line has a map or connect.
+install_hook_name(CL_PlayLogoMovies, void, void) {
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        printf("BO3MacFix: skipping the intro movies (SkipIntro)\n");
+    }
+}
+
 install_hook_name(Lua_GetBuildStringField, int, lua_State *s) {
     float field;
     bool build_time = hks_number_arg(s, 1, &field) && (int)field == BUILD_STRINGFIELD_BUILD_TIME;
@@ -1048,6 +1059,8 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_Lua_GetBuildIntField((void *)(game_base_address + ADDR_Lua_GetBuildIntField));
     install_hook_Lua_GetBuildStringField((void *)(game_base_address + ADDR_Lua_GetBuildStringField));
     install_hook_Lua_Exec((void *)(game_base_address + ADDR_Lua_Exec));
+    if (read_int_setting_or_env("SkipIntro", 1))
+        install_hook_CL_PlayLogoMovies((void *)(game_base_address + ADDR_CL_PlayLogoMovies));
     //install_hook_SDL_GameControllerInitMappings((void *)(game_base_address + ADDR_SDL_GameControllerInitMappings));
 
     // set up functions that we later call

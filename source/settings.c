@@ -98,6 +98,7 @@ static const setting_t settings[] = {
     { "RawMouse", "Raw mouse input", "Aims with raw mouse movement instead of macOS's accelerated movement.", "Mouse", Toggle(0) },
     { "RawMouseScale", "Raw mouse speed", "The speed of raw mouse aiming, in percent.", "Mouse", false, 7, { 25, 50, 75, 100, 150, 200, 300 }, { "25%", "50%", "75%", "100%", "150%", "200%", "300%" }, 100, Live_Always },
     { "ExitFix", "Quit without crashing", "Quits without the crash (and crash report) every quit used to end in.", "Game", Toggle_Live(1, Live_Always) },
+    { "SkipIntro", "Skip intro movies", "Starts without the Black Ops III and Aspyr logo movies, so the title screen comes up about 20 seconds sooner.", "Game", Toggle(1) },
     { "AudioFollowsDefault", "Audio follows output device", "Moves the game's sound to the new output device, for example when AirPods connect.", "Game", Toggle(1) },
     { "Notices", "On-screen notices", "Shows a short notice when a controller connects or disconnects or its battery runs low, and when the game moves to another display.", "Game", Toggle_Live(1, Live_Always) },
     { "AAEOnline", "AAE online notes", "Lets All-around Enhancement show its version notes and weather (GitHub and wttr.in only).", "Game", Toggle_Live(0, Live_Always) },
