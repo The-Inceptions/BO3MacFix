@@ -40,7 +40,12 @@ local clear_fails = false -- checkpoint.ini or AAE's mutations file can't be rea
 local SAVED = { "Map", "Round", "Points", "Perks", "Weapons", "Equipment", "Held", "Character", "Stats", "Guns",
     "GunInHand", "PerkList" }
 local loadout, restore_plans, restore_result, test_loadouts = nil, 0, nil, {}
+local switch_answers, switch_calls = {}, 0 -- CheckpointRestoreSwitch's answers, one a call, then nil
 BO3MacFix = {
+    CheckpointRestoreSwitch = function()
+        switch_calls = switch_calls + 1
+        return table.remove(switch_answers, 1)
+    end,
     Log = function(text) table.insert(logs, text) end,
     ReadCheckpoint = function()
         local lines = {}
@@ -99,13 +104,14 @@ BO3MacFix = { Log = fake.Log }
 local function c_side()
     return fake.SaveCheckpoint, fake.ReadCheckpoint, fake.ApplyCheckpoint, fake.ClearCheckpoint, fake.CheckpointResume,
         fake.CheckpointWeapons, fake.CheckpointWeaponCommands, fake.CheckpointAllowCheats, fake.CheckpointNotice,
-        fake.CheckpointLoadout, fake.CheckpointRestoreLoadout, fake.CheckpointRestoreResult, fake.CheckpointTestLoadout
+        fake.CheckpointLoadout, fake.CheckpointRestoreLoadout, fake.CheckpointRestoreResult, fake.CheckpointTestLoadout,
+        fake.CheckpointRestoreSwitch
 end
 local chunk = assert(loadfile("source/checkpoint.lua"))
 local function load(save_after, give_test, report_after, perks_test)
     local f = { c_side() }
     chunk(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], save_after, give_test, report_after, nil, nil, nil,
-        f[10], f[11], f[12], f[13], perks_test)
+        f[10], f[11], f[12], f[13], perks_test, f[14])
 end
 load(nil, nil, nil, nil)
 check(BO3MacFix.ReadCheckpoint == fake.ReadCheckpoint, "the C functions are set up")
@@ -391,6 +397,8 @@ polls(2)
 check(#notices == said, "nothing said before the game answers")
 restore_result = "took 1, gave 2 guns (0 held already), 1 ammo types, 2 perks (0 had already), 0 failed"
 weapons = "ar_standard_upgraded_zm+reflex+extclip:0,ray_gun_upgraded_zm:0,frag_grenade_zm:1,knife_zm:4"
+-- after the restore: watching ("") while the intro has the player, then the switch back, then nothing more (nil)
+switch_answers, switch_calls = { "", "", "give bo3macfix_switch", "" }, 0
 polls(1)
 check(string.find(notices[#notices - 1] or "", "Guns back: ar standard (Pack-a-Punched, 2 attachments, Dead Wire), " ..
     "ray gun (Pack-a-Punched)", 1, true) ~= nil, "the guns back: " .. tostring(notices[#notices - 1]))
@@ -399,6 +407,11 @@ logged = table.concat(logs, "\n")
 check(string.find(logged, "loadout restored: took 1, gave 2 guns", 1, true) ~= nil, "logged")
 polls(10)
 check(restore_plans == 1, "only once")
+local switched = 0
+for _, line in ipairs(execs) do if line == "give bo3macfix_switch" then switched = switched + 1 end end
+check(switched == 1 and switch_calls == 5, "the switch back's command run once, then no more polls: " .. switched ..
+    ", " .. switch_calls)
+check(string.find(table.concat(logs, "\n"), "switching back to the saved gun in hand", 1, true) ~= nil, "logged")
 -- something that couldn't be restored is said
 leave_match()
 polls(1)
