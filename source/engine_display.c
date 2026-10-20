@@ -473,10 +473,14 @@ install_hook_name(R_CheckVidRestart, void, void) {
     // leaves fullscreen and comes back, and a window's WM_SIZE can rewrite r_mode meanwhile).
     bool note = *(volatile bool *)(game_base_address + ADDR_R_VidRestartPending) &&
         !*(volatile bool *)(game_base_address + ADDR_R_RestoreFullscreen) && find_dvars();
-    int fullscreen = note ? Dvar_GetInt(dvars.fullscreen) : 0;
-    if (note)
-        atomic_store(&fit_kept, false); // the options' size, if they set one, is the user's
+    int fullscreen = note ? Dvar_GetInt(dvars.fullscreen) : 0, mode_width = 0, mode_height = 0;
+    bool mode_known = note && current_mode(&mode_width, &mode_height);
     orig_R_CheckVidRestart();
+    // a window size or fullscreen the options applied is the user's. Their other video settings (anti-aliasing, the
+    // refresh rate, ...) restart too, but leave the window the size the launch fitted it to.
+    if (note && (!mode_known || !current_mode(&width, &height) || width != mode_width || height != mode_height ||
+                 Dvar_GetInt(dvars.fullscreen) != fullscreen))
+        atomic_store(&fit_kept, false);
     if (note && fullscreen != 0 && Dvar_GetInt(dvars.fullscreen) == fullscreen && current_mode(&width, &height))
         display_follow_note_choice(width, height, (int)lroundf(Dvar_GetFloat(dvars.refresh)));
 }
@@ -525,13 +529,14 @@ _Static_assert(sizeof(HWProfileKey) == 0x18, "HWProfileKey must match the game's
 
 // At quit the engine copies the dvars into the hardware profile here, then writes it to config.ini. If the window still
 // has the size the launch fitted it to (not one the user resized it to or picked in the options), save the size
-// config.ini had instead. Only at quit: the options read the profile too, and must see the window's real size.
+// config.ini had instead. Only at quit: the options read the profile too, and must see the window's real size. Only
+// windowed, as the launch fit was: fullscreen, WindowSize is the resolution the game runs at.
 install_hook_name(SyncHardwareProfileWithDvars, void, bool make_latched_current) {
     orig_SyncHardwareProfileWithDvars(make_latched_current);
     int width = 0, height = 0;
     if (__builtin_return_address(0) != (void *)(game_base_address + ADDR_HWProfile_QuitSyncReturn) ||
-        !atomic_load(&fit_kept) || !find_dvars() || !current_mode(&width, &height) || width != fitted_width ||
-        height != fitted_height)
+        !atomic_load(&fit_kept) || !find_dvars() || Dvar_GetInt(dvars.fullscreen) != 0 ||
+        !current_mode(&width, &height) || width != fitted_width || height != fitted_height)
         return;
     const HWProfileKey *keys = (const HWProfileKey *)(game_base_address + ADDR_HWProfile_Keys);
     for (int i = 0; i < HWProfile_Count; i++) {

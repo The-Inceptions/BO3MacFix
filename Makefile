@@ -147,21 +147,21 @@ tests/test_checkpoint: tests/test_checkpoint.c source/checkpoint.c source/checkp
 
 # zm_loadout.c (a loadout's names and checkpoint.ini text, reading the script VM's variables, restoring) against a
 # made-up memory image and made-up game calls, with the sanitizers since it's all offsets and parsing
-tests/test_zm_loadout: tests/test_zm_loadout.c source/zm_loadout.c source/zm_loadout.h
+tests/test_zm_loadout: tests/test_zm_loadout.c source/zm_loadout.c source/zm_loadout.h tests/fake_vm.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_zm_loadout.c \
+		source/zm_loadout.c
+
+# aae_cheats.c's decision and its reads of the game's command and mod name, against made-up memory (the test
+# includes the source itself)
+tests/test_aae_cheats: tests/test_aae_cheats.c source/aae_cheats.c source/aae_cheats.h source/offsets.h \
+		source/dobby.h source/zm_loadout.c source/zm_loadout.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_aae_cheats.c \
 		source/zm_loadout.c
 
 # zm_inventory.c's pass through the game's cheat check for BO3MacFix's give and take commands, against a made-up
 # g_entities (the test includes the source)
-# aae_cheats.c's decision and its reads of the game's command and mod name, against made-up memory (the test
-# includes the source itself)
-tests/test_aae_cheats: tests/test_aae_cheats.c source/aae_cheats.c source/aae_cheats.h source/offsets.h \
-		source/zm_loadout.c source/zm_loadout.h
-	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_aae_cheats.c \
-		source/zm_loadout.c
-
 tests/test_zm_inventory: tests/test_zm_inventory.c source/zm_inventory.c source/zm_inventory.h source/offsets.h \
-		source/zm_loadout.c source/zm_loadout.h
+		source/dobby.h source/zm_loadout.c source/zm_loadout.h tests/fake_vm.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -o $@ \
 		tests/test_zm_inventory.c source/zm_loadout.c
 
