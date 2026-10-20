@@ -303,6 +303,61 @@ check(string.find(table.concat(logs, "\n"), "s after they were sent (paused?)", 
 leave_match()
 polls(1)
 
+-- commands the game never runs: given up on at the next round, so AutoSave and the saves have the guns held again
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+polls(13)
+check(state == 3 and allowed == "take pistol_m1911\ngive ray_gun_upgraded\n", "sent again: " .. tostring(allowed))
+polls(40)
+check(not string.find(table.concat(notices, "\n"), "not given back", 1, true), "waited for them within the round")
+models["controller0.gameScore.roundsPlayed"] = 14
+polls(1)
+check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true) ~= nil,
+    "given up on at the next round: " .. tostring(notices[#notices]))
+check(allowed == "", "and not let through any more: " .. tostring(allowed))
+check(string.find(table.concat(logs, "\n"), "gave up on the saved guns: 2 of the give and take commands", 1, true) ~= nil,
+    "logged: " .. tostring(logs[#logs]))
+local gave_up_saves = #saves
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == gave_up_saves + 1 and saves[#saves].Weapons == "pistol_m1911",
+    "a save then has the guns held: " .. tostring(saves[#saves].Weapons))
+leave_match()
+polls(1)
+
+-- or after two minutes out of the pause menu, with no new round
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+polls(13 + 220)
+check(not string.find(table.concat(notices, "\n"), "not given back", 1, true), "still waiting under two minutes")
+polls(20)
+check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true) ~= nil and allowed == "",
+    "given up on after two minutes: " .. tostring(notices[#notices]))
+leave_match()
+polls(1)
+
+-- but not while the pause menu is open, however long: they still run once it's closed
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+local pause_menu = { getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+polls(13 + 600)
+check(state == 3 and allowed == "take pistol_m1911\ngive ray_gun_upgraded\n" and
+    not string.find(table.concat(notices, "\n"), "not given back", 1, true), "kept while paused for five minutes")
+pause_menu.getParent = function() return nil end
+held_commands = false
+weapons = "ray_gun_upgraded_zm:0,pistol_burst_zm:0,frag_grenade_zm:1,knife_zm:4"
+polls(7)
+check(string.find(notices[#notices] or "", "Guns back: ray gun (Pack-a-Punched), pistol burst", 1, true) ~= nil,
+    "then run: " .. tostring(notices[#notices]))
+leave_match()
+polls(1)
+
 -- a resume that can't be undone (a file that can't be written) says so and stays on, rather than saying it's off
 resume_row.run()
 clear_fails, logs = true, {}

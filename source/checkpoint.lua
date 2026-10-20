@@ -182,7 +182,8 @@ end
 -- the test switch's): the player holds the starting guns meanwhile
 local loadout_pending = nil
 -- true from when a resumed game sends the give and take commands for its saved guns (an older save, without a Guns
--- line) until the game has run them: it holds them while it's paused (the pause menu open), the starting guns in hand
+-- line) until the game has run them: it holds them while it's paused (the pause menu open), the starting guns in hand.
+-- Ones that still haven't run at the next round, or after two minutes out of the pause menu, are given up on (poll).
 local guns_pending = nil
 
 local function perk_names(ids)
@@ -585,6 +586,10 @@ end
 local AUTOSAVE_START_POLLS = math.floor((tonumber(autosave_start) or 10) * 1000 / POLL_MS)
 local AUTOSAVE_SETTLE_POLLS = 4
 local AUTOSAVE_AFTER_GIVE_POLLS = 10 -- a resumed game's weapons arrive a moment after the give commands
+-- give and take commands for the saved guns that still haven't run at the next round, or after this long out of the
+-- pause menu, are given up on (a paused game holds them, but runs them as soon as it's unpaused)
+local GUNS_GIVE_UP_POLLS = math.floor(120 * 1000 / POLL_MS)
+local GUNS_ROUND_GIVE_UP_POLLS = 4 -- out of the pause menu since they were sent, before a new round gives up on them
 
 local function autosave_tick(controller, round, state)
     if autosave_fn == nil then return end
@@ -732,6 +737,23 @@ local function poll(controller)
         if match.polls > match.given_at + 2 then
             log("checkpoint: the game ran the give and take commands " ..
                 tostring((match.polls - match.given_at) * POLL_MS / 1000) .. " s after they were sent (paused?)")
+        end
+    end
+    -- a command the game never runs would keep AutoSave off, and the saves on the saved guns, for the rest of the
+    -- match: none of them is let through any more at the next round, or after two minutes out of the pause menu
+    if match.given_at ~= nil and match.ran_at == nil then
+        match.given_played = match.given_played or played
+        if not on_root(start_menu) then match.unpaused_polls = (match.unpaused_polls or 0) + 1 end
+        local unpaused = match.unpaused_polls or 0
+        if (played ~= match.given_played and unpaused >= GUNS_ROUND_GIVE_UP_POLLS) or unpaused >= GUNS_GIVE_UP_POLLS then
+            local left = tonumber(call(bo3macfix.CheckpointAllowCheats)) or 0
+            call(bo3macfix.CheckpointAllowCheats, "")
+            log("checkpoint: gave up on the saved guns: " .. tostring(left) .. " of the give and take commands hadn't " ..
+                "run " .. tostring((match.polls - match.given_at) * POLL_MS / 1000) .. " s after they were sent" ..
+                (played ~= match.given_played and " (a new round)" or ""))
+            local notice = bo3macfix.CheckpointNotice or function() end
+            notice("Saved guns not given back: the game didn't run the commands")
+            match.given_at, guns_pending = nil, nil
         end
     end
     if match.ran_at ~= nil and match.polls == match.ran_at + 6 then
