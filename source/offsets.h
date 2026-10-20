@@ -82,6 +82,7 @@
 #define ADDR_scrJmpBufs 0x14444360 // jmp_buf (0x94 bytes) per call depth, 0x2594 bytes per script instance, where script errors longjmp to - name is a guess
 #define ADDR_scrJmpBufDepth 0x14448e88 // int[2] - the current one of those per script instance - name is a guess
 #define ADDR_scrVmPub 0x14450ef0 // scrVmPub_t[2] (server, client), 0xa048 bytes each: function_count at +0x10, VariableValue *top at +0x20, debugCode at +0x28, abort_on_error at +0x2a, terminal_error at +0x2b, unsigned int outparamcount at +0x38
+#define ADDR_scrVmPos 0x14464ff0 // 0x70 bytes per script instance, const char *pos at +0: the running script's code position, which VM_ExecuteInternal (0x11a0beb) and each opcode handler it calls (given its address) advance in place; after a throw its catch (0x11a0d09) puts back the faulting instruction's start for the report, and Scr_ErrorInternal's terminal path reports it as it is - name is a guess
 #define ADDR_cgArray 0x145b9fd0 // cg_t * - the local clients' cg_t, 0x342a80 bytes each: refdef view origin at +0x131dc8, view angles at +0x2d8930 (GetCamPosByLocalClientNum / GetCamAnglesByLocalClientNum)
 #define ADDR_Prepatch_Header 0x1964080 // pre-patched executable: header and stubs, in __TEXT's padding after __eh_frame
 #define ADDR_Prepatch_CodeEnd 0x1965000 // end of that padding
