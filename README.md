@@ -49,6 +49,7 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `PauseOnDisconnect` | 0 | Opens the pause menu when the controller you're playing with disconnects mid-match (a Bluetooth dropout, a flat battery), in games that can pause: solo and offline. With `ControllerBridge`. |
 | `RawMouse` | 0 | Experimental: aims with raw mouse counts instead of macOS's accelerated movement. `RawMouseScale` (percent) sets the speed. |
 | `AAEOnline` | 0 | Lets All-around Enhancement fetch its version notes and weather (HTTPS GET only, to raw.githubusercontent.com and wttr.in). |
+| `AAEBankFix` | 1 | Keeps cheats (`sv_cheats`) off as a map starts with All-around Enhancement loaded, so its bank, weapon locker and saved bank balance load. The game turns cheats on for any map started with a mod, and AAE's bank checks before AAE turns them off again. `devmap`, AAE's own `elmg_cheats` and other mods keep the game's behaviour. Applies after a restart. |
 | `ExitFix` | 1 | Quits without the crash (and crash report) Aspyr's shutdown causes every time. |
 | `AudioFollowsDefault` | 1 | Moves the game's audio to the new default output device, e.g. when AirPods connect or disconnect. |
 | `Notices` | 1 | Shows a short notice at the top of the screen when a controller connects or disconnects (with its battery level), when its battery gets low (20, 10 and 5 %), and when the game moves to another display. The controller ones need `ControllerBridge`. |

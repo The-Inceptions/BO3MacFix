@@ -23,6 +23,7 @@
 #include <IOKit/hid/IOHIDDevice.h>
 
 #include "aae_build.h"
+#include "aae_cheats.h"
 #include "bo3macnative.h"
 #include "codhavoktypes.h"
 #include "cpu_tuning.h"
@@ -1011,6 +1012,9 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_HKAI_InitMapData((void *)(game_base_address + ADDR_HKAI_InitMapData));
     // the cheat check give and take make, which lets a resumed zombies game get its weapons back (zm_inventory.c)
     zm_inventory_install_hook();
+    // a map started with All-around Enhancement keeps cheats off, so its bank and weapon locker load (AAEBankFix, on
+    // by default), see aae_cheats.c
+    aae_cheats_install(game_base_address, read_int_setting_or_env("AAEBankFix", 1) != 0);
     install_hook_load_workshop_texture((void *)(game_base_address + ADDR_load_workshop_texture));
     install_hook_Live_SystemInfo((void *)(game_base_address + ADDR_Live_SystemInfo));
     install_hook_someLoggingFunction((void *)(game_base_address + ADDR_someLoggingFunction));

@@ -96,6 +96,7 @@ static const setting_t settings[] = {
     { "AudioFollowsDefault", "Audio follows output device", "Moves the game's sound to the new output device, for example when AirPods connect.", "Game", Toggle(1) },
     { "Notices", "On-screen notices", "Shows a short notice when a controller connects or disconnects or its battery runs low, and when the game moves to another display.", "Game", Toggle_Live(1, Live_Always) },
     { "AAEOnline", "AAE online notes", "Lets All-around Enhancement show its version notes and weather (GitHub and wttr.in only).", "Game", Toggle_Live(0, Live_Always) },
+    { "AAEBankFix", "AAE bank and locker", "Keeps cheats off as a map starts with All-around Enhancement (not with devmap or its own elmg_cheats), so its bank and weapon locker load.", "Game", Toggle(1) },
     { "FrameStats", "Frame stats in the log", "Logs the frame rate, 1% low and worst frame time to BO3MacFix/log.txt.", "Advanced", false, 4, { 0, 5, 10, 30 }, { "Off", "Every 5 s", "Every 10 s", "Every 30 s" }, 0, Live_Present },
     { "GpuDiagnostics", "GPU diagnostics in the log", "Logs the window, display mode and Metal layer whenever they change.", "Advanced", Toggle(0) },
     { "NoCodePatches", "No code patches (testing)", "Leaves the game's code exactly as shipped, without any of the fixes. Solo play only.", "Advanced", Toggle(0) },

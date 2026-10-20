@@ -184,6 +184,12 @@
 #define ADDR_CheatsOk_From_Give 0xf42c4a
 #define ADDR_CheatsOk_From_Take 0xf43182
 #define ADDR_g_entities_Ptr 0x1966be8 // holds g_entities' address (gentity_t, 0x4f8 bytes each; CheatsOk divides by it)
+// a map started with a mod loaded and sv_cheats (aae_cheats.c): the map and devmap command (at 0x140f243) does
+// "if (a mod is loaded) Dvar_SetBool(sv_cheats, 1)" just before it spawns the server, for both commands alike
+#define ADDR_Dvar_SetBool 0xfa2d49 // func - void (dvar_t *dvar, bool value)
+#define ADDR_Map_f_SetCheatsReturn 0x140f46b // where that Dvar_SetBool(sv_cheats, 1) (the call at 0x140f466) returns to
+#define ADDR_cmd_args 0x125dc3c0 // the console command's arguments: int nesting at 0, int argc[8] at 0x64, char **argv[8] at 0x88
+#define ADDR_Mods_LoadedName 0x30878dc // char[0x20]: the loaded mod's folder name ("" without one), "ModLoad start: %s"
 #define ADDR_bg_weaponVariantDefs 0x14ce0a70 // WeaponVariantDef *[], by weapon index (BG_GetWeaponDef at 0x12362cd)
 #define ADDR_bg_lastWeaponIndex 0x14ce0a68 // int: the number of weapons less one (BG_GetNumWeapons at 0x12362a8)
 #define gentity_Size 0x4f8
