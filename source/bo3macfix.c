@@ -1120,7 +1120,8 @@ __attribute__((constructor)) static void dylib_main() {
     gc_bridge_init(game_base_address, read_int_setting("ControllerBridge", 0), read_hex_setting("LightbarColor", -1));
 
     // DualSense/DualShock 4 mappings for SDL, and PlayStation button prompts (0 = auto, 1 = Xbox, 2 = PlayStation)
-    controllers_init(game_base_address, read_int_setting("ControllerMappings", 1), read_int_setting("ButtonPrompts", 0));
+    controllers_init(game_base_address, read_int_setting_or_env("ControllerMappings", 1),
+                     read_int_setting_or_env("ButtonPrompts", 0));
 
     // thread QoS and job worker waiting fixes (see cpu_tuning.c), each can be turned off in settings.ini
     cpu_tuning_init(game_base_address, read_int_setting("ThreadQoS", 1), read_int_setting("JobIdleFix", 1),
@@ -1165,7 +1166,7 @@ __attribute__((constructor)) static void dylib_main() {
     quick_save_init(read_int_setting_or_env("QuickSave", 96));
 
     // aiming with the mouse's raw movement instead of macOS's accelerated one (RawMouse, off by default)
-    rawmouse_init(game_base_address, read_int_setting("RawMouse", 0), read_int_setting("RawMouseScale", 100));
+    rawmouse_init(game_base_address, read_int_setting("RawMouse", 0), read_int_setting_or_env("RawMouseScale", 100));
 
     // the build All-around Enhancement checks the game against, read from its fastfile on a background thread (with
     // the Steam library's workshop folder next to the game's), unless AAEChangelist / AAEBuildTime set it
