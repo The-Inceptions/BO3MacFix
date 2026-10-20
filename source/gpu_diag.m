@@ -145,8 +145,12 @@ void gpu_diag_watch_command_buffers(void *command_buffer) {
     if (!@available(macOS 10.15, *))
         return;
     Method commit = class_getInstanceMethod(object_getClass((id)command_buffer), @selector(commit));
-    if (commit != NULL)
-        orig_commit = method_setImplementation(commit, (IMP)commit_new);
+    // the original first: the game's other threads commit too, and can reach commit_new before method_setImplementation
+    // returns, which would call a NULL original
+    if (commit != NULL) {
+        orig_commit = method_getImplementation(commit);
+        method_setImplementation(commit, (IMP)commit_new);
+    }
     printf("frame stats: timing the GPU's work (%s)\n", commit != NULL ? class_getName(object_getClass((id)command_buffer)) : "not found");
 }
 

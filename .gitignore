@@ -38,3 +38,4 @@ tests/test_aae_cheats
 tests/test_script_errors
 tests/test_quick_save
 tests/test_dynres
+tests/test_gpu_diag

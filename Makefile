@@ -5,7 +5,7 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
 	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint \
 	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan \
-	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres
+	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -203,6 +203,12 @@ tests/test_checkpoint_autosave_tsan: tests/test_checkpoint_autosave.c source/che
 tests/test_controllers: tests/test_controllers.c source/controllers.c source/controllers.h source/offsets.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -Wno-unused-parameter -mmacosx-version-min=$(OSXVER) \
 		-framework CoreFoundation -framework IOKit -o $@ tests/test_controllers.c
+
+# gpu_diag.m's command buffer timing (FrameStats detail, DynamicResolution): the commit swizzle, with a stand-in command
+# buffer class and another thread committing while it goes in
+tests/test_gpu_diag: tests/test_gpu_diag.m source/gpu_diag.m source/gpu_diag.h source/metalfx.h
+	$(CLANG) -O1 -Wall -Wextra -Werror -Wno-unused-parameter -mmacosx-version-min=$(OSXVER) -framework AppKit \
+		-framework Metal -framework QuartzCore -o $@ tests/test_gpu_diag.m
 
 tests/test_gc_bridge: tests/test_gc_bridge.m source/gc_bridge.m source/gc_bridge.h source/controllers.h source/offsets.h
 	$(CLANG) -O1 -Wall -Wextra -Werror -Wno-unused-parameter -mmacosx-version-min=$(OSXVER) -framework Foundation \
