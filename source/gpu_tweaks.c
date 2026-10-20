@@ -37,6 +37,8 @@
 #include "metalfx.h"
 #include "prepatch.h"
 #include "offsets.h"
+#include "script_errors.h"
+#include "gpu_diag.h"
 
 extern uint64_t game_base_address;
 
@@ -44,6 +46,7 @@ static frame_limits_t limits; // the frame rate limits (frame_limit.h) and the s
 static SEL sel_present_after_minimum_duration;
 static int metalfx_active = 0;
 static int frame_stats_seconds = 0; // 0 when not logging frame stats
+static int frame_stats_detail = 0; // BO3MACFIX_FRAMESTATSDETAIL=1: also the script errors thrown in each window
 static atomic_uint frame_stats_session = 0; // goes up each time FrameStats is turned on from the menu
 
 static int compare_floats(const void *a, const void *b) {
@@ -86,8 +89,18 @@ static void frame_stats_tick(void) {
     int display_fps = present_display_max_fps();
     if (display_fps > 0)
         snprintf(display, sizeof(display), ", display %i Hz", display_fps);
-    printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s%s)\n",
-           frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds, display);
+    char detail[160] = "";
+    if (frame_stats_detail) {
+        uint64_t buffers;
+        double busy = gpu_diag_take_busy(&buffers);
+        int n = snprintf(detail, sizeof(detail), ", GPU busy %.2f ms a frame (%.0f%%), %.1f command buffers a frame",
+                         busy * 1000.0 / frames, busy * 100.0 / seconds, (double)buffers / frames);
+        uint32_t server_errors, client_errors;
+        if (script_errors_take_thrown(&server_errors, &client_errors) && n > 0 && n < (int)sizeof(detail))
+            snprintf(detail + n, sizeof(detail) - n, ", script errors %u server, %u client", server_errors, client_errors);
+    }
+    printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s%s)%s\n",
+           frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds, display, detail);
     frames = stored = 0;
     window_start = now;
 }
@@ -154,6 +167,8 @@ static void log_limits(int started, int stopped, int fps) {
 
 // called instead of objc_msgSend for Aspyr's [commandBuffer presentDrawable:drawable]
 static void present_drawable(id command_buffer, SEL sel, id drawable) {
+    if (frame_stats_detail)
+        gpu_diag_watch_command_buffers(command_buffer);
     if (frame_stats_seconds > 0)
         frame_stats_tick();
     if (metalfx_active)
@@ -289,6 +304,8 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch) 
         return;
     }
     frame_stats_seconds = seconds;
+    const char *detail = getenv("BO3MACFIX_FRAMESTATSDETAIL");
+    frame_stats_detail = detail != NULL && atoi(detail) != 0;
     printf("logging frame stats every %i s\n", seconds);
 }
 
