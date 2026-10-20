@@ -1136,6 +1136,8 @@ __attribute__((constructor)) static void dylib_main() {
     // MetalFX upscaling when the game runs below the screen's resolution (MetalFXUpscale: 0 off, 1 on, 2 on at the
     // panel's own resolution in scaled monitor modes), see metalfx.m
     gpu_tweaks_metalfx_init(read_int_setting("MetalFXUpscale", 0), checked_code_patch);
+    // DynamicResolution: lowers ResolutionPercent in steps while the GPU can't keep up, down to this share of it
+    gpu_tweaks_dynres_init(read_int_setting("DynamicResolution", 0), checked_code_patch);
 
     // log the frame rate every FrameStats seconds (0 = off), see gpu_tweaks.c
     gpu_tweaks_frame_stats_init(read_int_setting("FrameStats", 0), checked_code_patch);

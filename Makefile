@@ -5,7 +5,7 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
 	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint \
 	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan \
-	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save
+	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -33,6 +33,8 @@ SOURCES += source/players_cfg.c
 # which frame rate limit applies to a frame, and the pause menu's and the menus' state for PauseMenuFPS and MenuFPS
 # (frame_limit.c), and whether the game is in the background for BackgroundFPS (app_focus.m)
 SOURCES += source/frame_limit.c source/app_focus.m
+# DynamicResolution's controller (dynres.c), plain C like frame_limit.c
+SOURCES += source/dynres.c
 # PlayStation controllers through macOS's GameController framework (gc_bridge.m), weak-linked because it needs macOS 11.3
 SOURCES += source/gc_bridge.m
 FRAMEWORKS += -framework Foundation -weak_framework GameController -weak_framework CoreHaptics
@@ -134,6 +136,9 @@ tests/test_prepatch: tests/test_prepatch.c source/prepatch.c source/prepatch.h s
 
 # the notices' queue and low battery levels (notice_queue.c) are plain C too
 # quick_save_rules.c: when L3 + R3 count as held, and the request waiting for checkpoint.lua
+tests/test_dynres: tests/test_dynres.c source/dynres.c source/dynres.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_dynres.c source/dynres.c
+
 tests/test_quick_save: tests/test_quick_save.c source/quick_save_rules.c source/quick_save_rules.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_quick_save.c source/quick_save_rules.c
 

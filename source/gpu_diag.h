@@ -7,3 +7,5 @@ void gpu_diag_init(int enabled);
 // command_buffer's commit is swizzled once), and gives the time the GPU was busy since the last call, and how many
 void gpu_diag_watch_command_buffers(void *command_buffer);
 double gpu_diag_take_busy(uint64_t *buffers);
+// the GPU's busy time in seconds since the watch started, never reset (for DynamicResolution, which takes differences)
+double gpu_diag_busy_total(void);

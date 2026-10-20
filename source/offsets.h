@@ -161,6 +161,12 @@
 #define ADDR_IID_IDXGIDevice 0x104c9a88 // GUID - filled at startup (0x1000cb900)
 #define ADDR_IID_IDXGIAdapter 0x104c9a78 // GUID - filled at startup (0x1000cb900)
 #define ADDR_dvar_r_fullscreen 0x159ad088 // dvar_t * - FullScreenMode, NULL until the dvar is registered
+// ResolutionPercent: int 50-200, LATCH (Dvar_RegisterInt at 0x101333f57). Each frame the view setup (0x100fbce5d) reads its
+// current value and asks 0x100e8d843 for render targets of that share of the view's size: an LRU cache of 8 sets that
+// allocates a set on a miss and frees sets 1-7 after 11 frames unused. A latched value instead makes R_CheckVidRestart
+// (0x100dce192) apply it and rebuild every render target (R_ResizeBackBuffer).
+#define ADDR_dvar_r_sceneResolutionMultiplier 0x159adce8 // dvar_t * - hash 0xbb27457f, NULL until registered
+#define Hash_com_maxfps 0x29b732e8 // MaxFPS
 #define ADDR_dvar_r_fullscreenLast 0x159ad090 // dvar_t * - int 0-2, r_fullscreen's value before it last changed from non-zero (hash 0x847596d0, name unknown)
 #define ADDR_R_RestoreFullscreen 0x113c0df4 // bool - fullscreen was left on deactivate (alt-tab) and comes back on activate
 // -- end engine_display
@@ -242,6 +248,7 @@
 #define ADDR_sv_running 0x118df7f0 // dvar_t *: sv_running (hash 0xefd7ca2e; Dvar_RegisterBool at 0xe77008, default off), on while this Mac runs the game's server (solo or host)
 #define dvar_Type 0x1c // uint32_t in dvar_t: 1 for a bool (Dvar_GetInt at 0xfa0252)
 #define dvar_Value 0x28 // the current value: a bool's is a byte
+#define dvar_Latched 0x40 // the latched value: values are 24 bytes (Dvar_HasLatchedValue at 0x100f9fdfa compares +0x28 with +0x40, Dvar_MakeLatchedValueCurrent at 0x100fa0bef sets +0x40)
 // whether the player has control (the gun in hand after a restore made during a map's intro, zm_inventory.c)
 #define gentity_TagInfo 0x3e8 // pointer, not NULL while linked to another entity (G_EntUnlink at 0x10fdb07 returns without one; Unlink 0x13eaf65)
 #define gentity_LinkFlags 0x2a9 // uint8_t: IsLinkedTo (0x1011845f2) wants 0x10 before it looks further (logged only)

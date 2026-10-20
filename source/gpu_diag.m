@@ -110,7 +110,7 @@ void gpu_diag_init(int enabled) {
 // committed command buffer gets a completed handler that adds its GPU time, less any overlap with the ones before it,
 // so the total is the time the GPU spent on at least one of the game's command buffers.
 static os_unfair_lock busy_lock = OS_UNFAIR_LOCK_INIT;
-static double busy_seconds = 0, busy_last_end = 0;
+static double busy_seconds = 0, busy_last_end = 0, busy_total = 0; // busy_total is never reset (DynamicResolution)
 static uint64_t busy_buffers = 0;
 static IMP orig_commit = NULL;
 
@@ -125,8 +125,10 @@ static void commit_new(id self, SEL sel) {
         os_unfair_lock_lock(&busy_lock);
         if (start < busy_last_end)
             start = busy_last_end;
-        if (end > start)
+        if (end > start) {
             busy_seconds += end - start;
+            busy_total += end - start;
+        }
         if (end > busy_last_end)
             busy_last_end = end;
         busy_buffers++;
@@ -154,6 +156,13 @@ double gpu_diag_take_busy(uint64_t *buffers) {
     *buffers = busy_buffers;
     busy_seconds = 0;
     busy_buffers = 0;
+    os_unfair_lock_unlock(&busy_lock);
+    return seconds;
+}
+
+double gpu_diag_busy_total(void) {
+    os_unfair_lock_lock(&busy_lock);
+    double seconds = busy_total;
     os_unfair_lock_unlock(&busy_lock);
     return seconds;
 }
