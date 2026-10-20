@@ -213,6 +213,7 @@ static int move_sdl_off(bridged_pad *pad, int user_index) {
     volatile uint64_t *dest = (volatile uint64_t *)(base_address + ADDR_ASL_XInputSlots + to * 24);
     const uint8_t *controller = (const uint8_t *)(uintptr_t)from[0];
     bool moved = controller != NULL && dest[0] == 0;
+    uint16_t vendor = 0, product = 0;
     if (moved) {
         dest[1] = from[1];
         dest[2] = from[2];
@@ -220,6 +221,9 @@ static int move_sdl_off(bridged_pad *pad, int user_index) {
         from[0] = 0;
         from[1] = 0;
         from[2] = 0;
+        // its IDs for the log while Aspyr can't close it: after the unlock it may be freed
+        memcpy(&vendor, controller + 0x10, sizeof(vendor));
+        memcpy(&product, controller + 0x14, sizeof(product));
     }
     pthread_mutex_unlock(asl_mutex());
     // SDL let go of it meanwhile (the index is free again), or Aspyr filled the free one (look again next time)
@@ -227,9 +231,6 @@ static int move_sdl_off(bridged_pad *pad, int user_index) {
         return controller == NULL ? 1 : -1;
     sdl_seen[user_index] = NULL;
     sdl_seen[to] = controller;
-    uint16_t vendor, product;
-    memcpy(&vendor, controller + 0x10, sizeof(vendor));
-    memcpy(&product, controller + 0x14, sizeof(product));
     printf("GameController bridge: SDL put a controller (%04x:%04x) on player %i, the %s's, moved it to player %i\n",
            vendor, product, user_index + 1, pad->kind, to + 1);
     controllers_request_gamepad_scan("an SDL controller moved to a free player");
