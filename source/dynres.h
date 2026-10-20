@@ -11,7 +11,8 @@
 
 #define Dynres_Window_Frames 30 // frames per window (0.25 s at 120 fps): one decision per window
 #define Dynres_Step 5           // percentage points per step
-#define Dynres_Missed 0.97      // a window misses the target below 97% of its frame rate (116 fps at 120)
+#define Dynres_Missed 0.95      // a window misses the target below 95% of its frame rate (114 fps at 120: two late
+                                // frames in 30, one is often a hitch that a lower resolution wouldn't prevent)
 #define Dynres_GPU_Bound 0.90   // and is GPU-bound when the GPU was busy 90% of its time or more
 #define Dynres_Headroom 0.88    // a step up fits when the GPU would be busy less than 88% of the frame time
 #define Dynres_Hold_Down 2      // windows after a change before it lowers again (the GPU time settles)
