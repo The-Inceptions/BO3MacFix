@@ -271,7 +271,8 @@ local function collect(controller)
                     (checkpoint.PapLevels ~= nil and ("\nPapLevels=" .. checkpoint.PapLevels) or "") ..
                     (checkpoint.Items ~= nil and ("\nItems=" .. checkpoint.Items) or "") ..
                     (checkpoint.GunAmmo ~= nil and ("\nGunAmmo=" .. checkpoint.GunAmmo) or "") ..
-                    (checkpoint.HeroPower ~= nil and ("\nHeroPower=" .. checkpoint.HeroPower) or "")
+                    (checkpoint.HeroPower ~= nil and ("\nHeroPower=" .. checkpoint.HeroPower) or "") ..
+                    (checkpoint.ShieldHealth ~= nil and ("\nShieldHealth=" .. checkpoint.ShieldHealth) or "")
                 perks = split(checkpoint.Perks)
             else
                 -- an older save without them stays one: the loadout read now is the starting guns', and a Guns line
@@ -795,7 +796,8 @@ local function poll(controller)
         if type(command) ~= "string" then
             match.switch_watch = nil
         elseif command ~= "" then
-            log("checkpoint: switching back to the saved gun in hand")
+            log(string.find(command, "bo3macfix_shield", 1, true) ~= nil and "checkpoint: setting the shield's health back"
+                or "checkpoint: switching back to the saved gun in hand")
             run_commands(controller, command)
         end
     end

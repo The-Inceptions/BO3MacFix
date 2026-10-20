@@ -266,5 +266,19 @@
 #define ADDR_G_GadgetPowerSet 0xe2b079 // func - void (gclient_t *, gadget *, Weapon, int time, float power): clamps to the gadget's most, GadgetPowerSet's - name is a guess
 #define ADDR_level_Time 0x10975324 // int, the time GadgetPowerSet passes (level_locals + 0x64e4) - name is a guess
 #define scrVarPub_LevelId 0x2c // uint32_t in scrVarPub (ADDR_scrVarPub, 0x78 bytes per instance): the level object's id, as GetLevel's opcode handler (0x12768de) and LevelEvalFieldVariable's (0x1277291) read it (+0x24, which handler 0x127685c pushes, is another object: live, it had no pap_lvup)
+// the shield's health: the engine keeps it per client in the server's BG state, the bgs_t its server code reaches
+// through a thread-local pointer (set to level_bgs at 0xdc20b2), clamped to 0..the shield's start hit points.
+// DamageRiotShield (0xdb15db -> 0x13d42bc) lowers it (0x1387fe2); the player's "weaponhealth" field (setter 0x10e7937)
+// sets it through G_SetShieldHealth; giving the shield puts it at full (0x13d4290, from 0x12d2351)
+#define ADDR_level_bgs 0x10992850 // bgs_t, the server's - name is a guess
+#define bgs_ShieldHealth 0x920 // int: client 0's shield health; clients are bgs_Client_Size apart (0x1387ecf, 0x1387f45)
+#define bgs_Client_Size 0xed0
+#define gclient_ClientNum 0x0 // int, the player state's first field: the client number the shield functions are passed
+#define WeaponDef_Type 0x6c // int: 8 for a shield, what the engine looks for among the held weapons (0x13d4308)
+#define WeaponType_Shield 8
+#define WeaponDef_StartHitPoints 0x864 // int: a shield's full health (weaponstarthitpoints), the clamp's top
+#define ADDR_G_SetShieldHealth 0x13d4567 // func - void (gentity_t *, int health): the first held shield's health, clamped, then its damage model (0x13d4393) - name is a guess
+#define ADDR_BG_GetShieldHealth 0x1387ecf // func - int (int, int client_num, Weapon): through the thread-local bgs; the start hit points without one - name is a guess
+#define ADDR_BG_ThreadBgs 0x12ddff8 // func - bgs_t **(void): this thread's bgs pointer (thread-local) - name is a guess
 // -- end zm inventory
 // -- END OFFSETS

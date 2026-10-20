@@ -318,6 +318,12 @@ static bool g_set_hero_power(void *context, uint64_t weapon, int power) {
     return !game->fail_ammo;
 }
 
+static bool g_set_shield_health(void *context, uint64_t weapon, int health) {
+    game_t *game = context;
+    call(game, "shield %" PRIx64 " %d", weapon, health);
+    return !game->fail_ammo;
+}
+
 static int g_primaries(void *context, uint64_t *out, int max) {
     game_t *game = context;
     int count = 0;
@@ -372,7 +378,7 @@ static const char *restore(game_t *game, const char *guns, const char *in_hand, 
     if (!loadout_parse(guns, in_hand, perks, &saved))
         return "(malformed)";
     loadout_ops_t ops = { game, g_weapon_for_name, g_primaries, g_take,      g_give,
-                          g_acquire_aat, g_has_perk, g_give_perk, g_switch_to, NULL, NULL, NULL, NULL, NULL };
+                          g_acquire_aat, g_has_perk, g_give_perk, g_switch_to, NULL, NULL, NULL, NULL, NULL, NULL };
     game->calls[0] = '\0';
     memcpy(game->now, game->held, sizeof(game->now));
     game->now_count = game->held_count;
@@ -389,9 +395,10 @@ static const char *restore_full(game_t *game, const char *guns, const char *perk
         return "(malformed)";
     loadout_ops_t ops = { game,          g_weapon_for_name, g_primaries, g_take,      g_give,
                           g_acquire_aat, g_has_perk,        g_give_perk, g_switch_to, g_set_pap_level,
-                          g_holds,       g_give_item,       g_set_ammo,  g_set_hero_power };
+                          g_holds,       g_give_item,       g_set_ammo,  g_set_hero_power, g_set_shield_health };
     if (!new_ops)
-        ops.set_pap_level = NULL, ops.holds = NULL, ops.give_item = NULL, ops.set_ammo = NULL, ops.set_hero_power = NULL;
+        ops.set_pap_level = NULL, ops.holds = NULL, ops.give_item = NULL, ops.set_ammo = NULL, ops.set_hero_power = NULL,
+        ops.set_shield_health = NULL;
     game->calls[0] = '\0';
     memcpy(game->now, game->held, sizeof(game->now));
     game->now_count = game->held_count;
@@ -669,7 +676,7 @@ static void test_hero_power(void) {
           loadout_parse_items("hero_annihilator::", &saved) && loadout_parse_hero_power("hero_annihilator:40", &saved));
     loadout_ops_t ops = { &game,         g_weapon_for_name, g_primaries, g_take,      g_give,
                           g_acquire_aat, g_has_perk,        g_give_perk, g_switch_to, g_set_pap_level,
-                          g_holds,       g_give_item,       g_set_ammo,  g_set_hero_power };
+                          g_holds,       g_give_item,       g_set_ammo,  g_set_hero_power, g_set_shield_health };
     loadout_restore(&saved, &ops, &result);
     CHECK(strstr(game.calls, "item 64; power 64 40; ") != NULL && result.hero_power == 1 && result.failed == 0);
     char text[512];
@@ -686,6 +693,67 @@ static void test_hero_power(void) {
     loadout_restore(&saved, &ops, &result);
     CHECK(result.hero_power == 0 && strstr(game.calls, "power") == NULL &&
           strstr(result.failures, "no charge for hero_annihilator"));
+}
+
+// the shield's health: ShieldHealth's text, and set after the shield's give (the op waits for it to be held)
+static void test_shield_health(void) {
+    loadout_t loadout;
+    loadout_clear(&loadout);
+    char out[256];
+    CHECK(loadout_format_shield_health(&loadout, out, sizeof(out)) && out[0] == '\0'); // none
+    CHECK(loadout_parse_shield_health(NULL, &loadout) && loadout_parse_shield_health("", &loadout) &&
+          !loadout.have_shield_health);
+    CHECK(loadout_parse_shield_health("zod_riotshield:740", &loadout) && loadout.have_shield_health &&
+          loadout.shield_health == 740 && strcmp(loadout.shield_name, "zod_riotshield") == 0);
+    CHECK(loadout_format_shield_health(&loadout, out, sizeof(out)) && strcmp(out, "zod_riotshield:740") == 0);
+    CHECK(loadout_parse_shield_health("tomb_shield:0", &loadout) && loadout.shield_health == 0 &&
+          strcmp(loadout.shield_name, "tomb_shield") == 0);
+    CHECK(loadout_parse_shield_health("zod_riotshield_upgraded:100000", &loadout) && loadout.shield_health == 100000);
+    // malformed, or not a shield: refused, and what was there stays
+    const char *bad[] = { "zod_riotshield", "zod_riotshield:", "zod_riotshield:-1", "zod_riotshield:100001",
+                          "zod_riotshield:7x", "ray_gun_upgraded:40", "zod riotshield:40", ":40", "hero_annihilator:40" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        CHECK(!loadout_parse_shield_health(bad[i], &loadout) && loadout.shield_health == 100000);
+    loadout.shield_health = -1;
+    CHECK(!loadout_format_shield_health(&loadout, out, sizeof(out)) && out[0] == '\0');
+    CHECK(loadout_is_shield("zod_riotshield") && loadout_is_shield("tomb_shield") && loadout_is_shield("aae_shield") &&
+          !loadout_is_shield("ray_gun") && !loadout_is_shield("hero_annihilator"));
+    // set after the items (the shield given first, through the scripts), and told when it can't be
+    game_t game;
+    memset(&game, 0, sizeof(game));
+    game.held[0] = pistol;
+    game.held_count = 1;
+    loadout_result_t result;
+    loadout_t saved;
+    CHECK(loadout_parse("ray_gun_upgraded_zm:0:0:", NULL, "", &saved) &&
+          loadout_parse_items("zod_riotshield::", &saved) && loadout_parse_shield_health("zod_riotshield:740", &saved));
+    loadout_ops_t ops = { &game,         g_weapon_for_name, g_primaries, g_take,      g_give,
+                          g_acquire_aat, g_has_perk,        g_give_perk, g_switch_to, g_set_pap_level,
+                          g_holds,       g_give_item,       g_set_ammo,  g_set_hero_power, g_set_shield_health };
+    loadout_restore(&saved, &ops, &result);
+    CHECK(strstr(game.calls, "item 63; shield 63 740; ") != NULL && result.shield_health == 1 && result.failed == 0);
+    char text[512];
+    loadout_result_text(&result, text, sizeof(text));
+    CHECK(strstr(text, "shield's health, ") != NULL && strncmp(text, "took ", 5) == 0 && strstr(text, "0 failed") != NULL);
+    // an older game without the op, or a shield the game doesn't have
+    memset(&game, 0, sizeof(game));
+    ops.set_shield_health = NULL;
+    loadout_restore(&saved, &ops, &result);
+    CHECK(result.shield_health == 0 && result.failed == 1 && strstr(result.failures, "no health for zod_riotshield"));
+    ops.set_shield_health = g_set_shield_health;
+    CHECK(loadout_parse_shield_health("tomb_shield:5", &saved));
+    memset(&game, 0, sizeof(game));
+    loadout_restore(&saved, &ops, &result);
+    CHECK(result.shield_health == 0 && strstr(game.calls, "shield ") == NULL &&
+          strstr(result.failures, "no health for tomb_shield"));
+    // a save without ShieldHealth (every older one) sets nothing
+    CHECK(loadout_parse("ray_gun_upgraded_zm:0:0:", NULL, "", &saved) && loadout_parse_items("zod_riotshield::", &saved));
+    memset(&game, 0, sizeof(game));
+    loadout_restore(&saved, &ops, &result);
+    CHECK(!saved.have_shield_health && result.shield_health == 0 && strstr(game.calls, "shield ") == NULL &&
+          result.failed == 0);
+    loadout_result_text(&result, text, sizeof(text));
+    CHECK(strstr(text, "shield's health") == NULL);
 }
 
 // the gun in hand after a restore made during a map's intro (loadout_switch_*)
@@ -750,6 +818,7 @@ int main(void) {
     test_items_text();
     test_switch();
     test_hero_power();
+    test_shield_health();
     if (failures == 0)
         printf("test_zm_loadout: all passed\n");
     return failures == 0 ? 0 : 1;

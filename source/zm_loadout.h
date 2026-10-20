@@ -50,6 +50,11 @@ typedef struct {
     bool have_hero_power;
     char hero_name[Loadout_Name_Size]; // an item's name
     int hero_power;
+    // the shield's health: its hit points (0 to its full health, the weapon's start hit points), which the engine keeps
+    // and its damage lowers
+    bool have_shield_health;
+    char shield_name[Loadout_Name_Size]; // an item's name
+    int shield_health;
 } loadout_t;
 
 void loadout_clear(loadout_t *loadout);
@@ -132,6 +137,8 @@ typedef struct {
     bool (*give_item)(void *context, uint64_t weapon); // zm_weapons::weapon_give, the scripts' own give
     bool (*set_ammo)(void *context, uint64_t weapon, int clip, int stock);
     bool (*set_hero_power)(void *context, uint64_t weapon, int power); // the GadgetPowerSet builtin's code
+    // the shield's health, set through the engine's own setter once the shield is held (a moment after its give)
+    bool (*set_shield_health)(void *context, uint64_t weapon, int health);
 } loadout_ops_t;
 
 typedef struct {
@@ -140,6 +147,7 @@ typedef struct {
     int pap_levels, items, items_had, ammo;
     int given_back; // guns an item's give took (to make room for a shield), given back
     int hero_power; // 1 if the hero weapon's charge came back
+    int shield_health; // 1 if the shield's health is set, or will be once the shield is held
 } loadout_result_t;
 
 // turns the player's loadout into saved: takes the held primaries that aren't saved, gives each saved gun that isn't
@@ -215,6 +223,13 @@ bool loadout_is_hero_weapon(const char *name);
 bool loadout_format_hero_power(const loadout_t *loadout, char *out, size_t out_size);
 // loadout's hero power from a HeroPower value (NULL or empty for none); false, leaving it as it was, if malformed
 bool loadout_parse_hero_power(const char *value, loadout_t *loadout);
+// whether an item is a shield (zod_riotshield, tomb_shield, AAE's aae_shield)
+bool loadout_is_shield(const char *name);
+#define Loadout_Max_Shield_Health 100000
+// checkpoint.ini's "ShieldHealth = name:health" (name: the shield's, as Items has it; health: hit points), "" for none
+bool loadout_format_shield_health(const loadout_t *loadout, char *out, size_t out_size);
+// loadout's shield health from a ShieldHealth value (NULL or empty for none); false, leaving it as it was, if malformed
+bool loadout_parse_shield_health(const char *value, loadout_t *loadout);
 // for the test switch BO3MACFIX_CHECKPOINT_PAP_DEBUG: entity's guid variable and level.pap_lvup's first entries as
 // the VM has them
 void loadout_vm_describe_pap(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size);

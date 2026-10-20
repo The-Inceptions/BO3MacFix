@@ -459,6 +459,21 @@ static void test_loadout(void) {
     CHECK(checkpoint_loadout(&paths, &loadout) && !loadout.have_hero_power);
     checkpoint_read(&paths, text, sizeof(text));
     CHECK(strstr(text, "HeroPower") == NULL);
+    // the shield's health, the same way
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\nItems=zod_riotshield::\n"
+                                  "ShieldHealth=zod_riotshield:740\n", 12));
+    CHECK(checkpoint_loadout(&paths, &loadout) && loadout.have_shield_health && loadout.shield_health == 740 &&
+          strcmp(loadout.shield_name, "zod_riotshield") == 0);
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "ShieldHealth=zod_riotshield:740\n") != NULL);
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\nShieldHealth=ray_gun:40\n", 13));
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\nShieldHealth=zod_riotshield:x\n",
+                           13));
+    CHECK(checkpoint_loadout(&paths, &loadout) && loadout.shield_health == 740); // the refused saves changed nothing
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\n", 14));
+    CHECK(checkpoint_loadout(&paths, &loadout) && !loadout.have_shield_health);
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "ShieldHealth") == NULL);
     CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nPerks=juggernaut\n", 3)); // as the test below expects
     // the longest a Guns line gets: four guns with eight attachments each fit in a value
     char long_guns[1024] = "";

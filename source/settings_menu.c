@@ -121,11 +121,11 @@ static int lua_checkpoint_allow_cheats(lua_State *s) {
 }
 
 // CheckpointLoadout(): the local player's full loadout as "Guns=...\nGunInHand=...\nPerkList=..." lines (zm_loadout.h),
-// then PapLevels, Items, GunAmmo and HeroPower lines when there are any,
+// then PapLevels, Items, GunAmmo, HeroPower and ShieldHealth lines when there are any,
 // nil without a game hosted here
 static int lua_checkpoint_loadout(lua_State *s) {
     static loadout_t loadout;
-    static char guns[1024], perks[1024], pap[1024], items[1024], ammo[1024], hero[256], lines[5800];
+    static char guns[1024], perks[1024], pap[1024], items[1024], ammo[1024], hero[256], shield[256], lines[6100];
     char note[256];
     if (!zm_inventory_read_loadout(&loadout, note, sizeof(note))) {
         hks_push_nil(s);
@@ -136,15 +136,16 @@ static int lua_checkpoint_loadout(lua_State *s) {
     if (!loadout_format_guns(&loadout, guns, sizeof(guns)) || !loadout_format_perks(&loadout, perks, sizeof(perks)) ||
         !loadout_format_pap_levels(&loadout, pap, sizeof(pap)) || !loadout_format_items(&loadout, items, sizeof(items)) ||
         !loadout_format_gun_ammo(&loadout, ammo, sizeof(ammo)) ||
-        !loadout_format_hero_power(&loadout, hero, sizeof(hero))) {
+        !loadout_format_hero_power(&loadout, hero, sizeof(hero)) ||
+        !loadout_format_shield_health(&loadout, shield, sizeof(shield))) {
         printf("BO3MacFix: checkpoint: the loadout doesn't fit in checkpoint.ini\n");
         hks_push_nil(s);
         return 1;
     }
-    snprintf(lines, sizeof(lines), "Guns=%s\nGunInHand=%s\nPerkList=%s%s%s%s%s%s%s%s%s", guns,
+    snprintf(lines, sizeof(lines), "Guns=%s\nGunInHand=%s\nPerkList=%s%s%s%s%s%s%s%s%s%s%s", guns,
              loadout.held >= 0 ? loadout.guns[loadout.held].name : "", perks, pap[0] != '\0' ? "\nPapLevels=" : "", pap,
              items[0] != '\0' ? "\nItems=" : "", items, ammo[0] != '\0' ? "\nGunAmmo=" : "", ammo,
-             hero[0] != '\0' ? "\nHeroPower=" : "", hero);
+             hero[0] != '\0' ? "\nHeroPower=" : "", hero, shield[0] != '\0' ? "\nShieldHealth=" : "", shield);
     hks_push_string(s, lines);
     return 1;
 }
