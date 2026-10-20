@@ -9,8 +9,6 @@
 #include <unistd.h>
 #include "checkpoint_autosave.h"
 
-#define Read_Size 16384 // checkpoint_read's lines: up to 32 entries of a key and a 255-character value
-
 static pthread_mutex_t checkpoint_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
 
 static atomic_bool enabled = true;
@@ -74,7 +72,7 @@ bool checkpoint_autosave_enabled(void) {
 
 // saves lines unless the rules say otherwise; holding the checkpoint lock
 static autosave_outcome_t save(const checkpoint_paths_t *paths, const char *lines, long *round, long *kept) {
-    static char saved[Read_Size];
+    static char saved[Checkpoint_Read_Size];
     *round = 0;
     *kept = 0;
     if (!line_number(lines, "Round", round))

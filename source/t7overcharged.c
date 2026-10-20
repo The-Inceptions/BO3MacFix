@@ -2,6 +2,7 @@
 // a Windows DLL that workshop mods such as All-around Enhancement load through Lua.
 #include <errno.h>
 #include <os/lock.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -257,7 +258,8 @@ typedef enum {
 static const char *const native_names[Native_Count] = { "getvieworigin", "getviewang", "startweaponanim", "playanim",
                                                         "anim_event" };
 static uint32_t native_hashes[Native_Count];
-static bool native_logged[Native_Count];
+// both script VMs' threads log through it, so a native is logged once
+static atomic_bool native_logged[Native_Count];
 
 // names scripts asked hash() for, so a native we don't have can be logged by name
 #define Hashed_Names 32
@@ -330,8 +332,9 @@ static bool call_native(int inst, uint32_t hash) {
         const uint8_t *cg = no_op ? NULL : local_client_cg(inst);
         if (!no_op && cg == NULL)
             return false;
-        if (!native_logged[native]) {
-            native_logged[native] = true;
+        // a plain load once it's logged; the exchange makes only one thread log it
+        if (!atomic_load_explicit(&native_logged[native], memory_order_relaxed) &&
+            !atomic_exchange_explicit(&native_logged[native], true, memory_order_relaxed)) {
             printf("T7Overcharged: scripts use %s%s\n", native_names[native],
                    no_op ? " (no weapon animations here, they get 0)" : "");
         }

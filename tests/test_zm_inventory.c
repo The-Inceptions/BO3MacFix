@@ -83,6 +83,7 @@ static int code_acquire, code_give_perk, code_build_kit, code_default, code_weap
 static uint32_t vm_paps; // level.pap_lvup
 static int pap_level;    // the ray gun's, as AAE's function raises it
 static bool pap_stuck;   // the function doesn't raise it (a name AAE keys differently)
+static bool pap_reward;  // AAE's Easter egg reward: a level 1 to 4 goes to 5 at once
 static bool acquire_missing; // the scripts have no aat::acquire (a mod without AATs)
 static const void *default_code = &code_default;
 
@@ -269,7 +270,7 @@ static unsigned int fake_exec(void *ent, int count, script_handle_t handle) {
         // AAE: level.pap_lvup[self.guid + rootweapon.name], undefined to 1, then up by one to 5
         note("pap_lvup %llx", (unsigned long long)Param(0).value);
         if (!pap_stuck)
-            pap_level = pap_level < 5 ? pap_level + 1 : 5;
+            pap_level = pap_level < 5 ? (pap_reward && pap_level >= 1 ? 5 : pap_level + 1) : 5;
         fake_vm_child(&vm, vm_paps, fake_vm_string(&vm, "12345ray_gun_upgraded_zm"), 3, (uint64_t)pap_level, 7);
     } else {
         note("exec %s", handle.name);
@@ -578,6 +579,21 @@ static void test_loadout(void) {
     CHECK(strstr(calls, "pap_lvup a5; pap_lvup a5; clip") != NULL && strstr(result, "1 repack levels") != NULL &&
           pap_level == 5);
     dpap_defined = false;
+    // with AAE's Easter egg reward, a gun saved at 3 goes 1, then 5: that's given, and AAE isn't called again
+    vm_paps = fake_vm_array_field(&vm, level, "pap_lvup");
+    pap_level = 0;
+    pap_reward = true;
+    CHECK(loadout_parse_pap_levels("ray_gun_upgraded_zm:3", &loadout));
+    zm_inventory_set_restore(&loadout);
+    result = restore_now(player_entity);
+    CHECK(strncmp(calls, "pap_lvup a5; pap_lvup a5; clip", strlen("pap_lvup a5; pap_lvup a5; clip")) == 0 &&
+          strstr(result, "1 repack levels") != NULL && strstr(result, "0 failed") != NULL && pap_level == 5);
+    // and a gun above its saved level already (5, saved 3) isn't called on, nor told as failed
+    zm_inventory_set_restore(&loadout);
+    result = restore_now(player_entity);
+    CHECK(strstr(calls, "pap_lvup") == NULL && strstr(result, "1 repack levels") != NULL &&
+          strstr(result, "0 failed") != NULL && pap_level == 5);
+    pap_reward = false;
 
     // the command itself: only "give bo3macfix_restore", from give's cheat check
     uint64_t give = base + ADDR_CheatsOk_From_Give, take = base + ADDR_CheatsOk_From_Take;

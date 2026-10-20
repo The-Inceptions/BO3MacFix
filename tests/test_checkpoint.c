@@ -1,5 +1,6 @@
 // Tests for checkpoint.c: AAE's custom mutations lines, saving a game, setting up its resume (round, points, perks)
 // and undoing it, and the commands that give its weapons back, with made-up files in a temporary folder.
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -134,6 +135,119 @@ static void test_save(void) {
     CHECK(checkpoint_save(&paths, "Round=24\nPoints=100\n", 1760000100));
     checkpoint_read(&paths, text, sizeof(text));
     CHECK(strstr(text, "Round=24\n") != NULL && strstr(text, "Map=") == NULL && strstr(text, "Weapons=") == NULL);
+}
+
+// what's printed to stdout between capture_start and capture_end
+static char capture_path[1100];
+static int stdout_copy = -1;
+static void capture_start(void) {
+    fflush(stdout);
+    stdout_copy = dup(1);
+    int file = open(capture_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    dup2(file, 1);
+    close(file);
+}
+static char *capture_end(void) {
+    fflush(stdout);
+    dup2(stdout_copy, 1);
+    close(stdout_copy);
+    const char *text = read_text(capture_path);
+    unlink(capture_path);
+    return strdup(text != NULL ? text : "");
+}
+
+// a checkpoint.ini with count entries: a set-up resume's (InUse, Applied, AppliedPreset, the options' Applied and
+// Previous values), the saved game's, then made-up ones (a newer BO3MacFix's keys)
+static void write_store(int count) {
+    static const char *const resume[] = { "InUse = 1",       "Applied = 1",       "AppliedPreset = _Default",
+                                          "AppliedRound = 38", "PreviousRound = 1", "AppliedPoints = 500",
+                                          "PreviousPoints = ", "AppliedPerkaholic = 1", "PreviousPerkaholic = 0",
+                                          "AppliedQuickRevive = 1", "PreviousQuickRevive = 0", "Saved = 1",
+                                          "Round = 38",       "Points = 500",      "Held = Ray Gun" };
+    static char text[65536];
+    size_t used = 0;
+    for (int i = 0; i < count; i++) {
+        if (i < (int)(sizeof(resume) / sizeof(resume[0])))
+            used += (size_t)snprintf(text + used, sizeof(text) - used, "%s\n", resume[i]);
+        else
+            used += (size_t)snprintf(text + used, sizeof(text) - used, "Newer%c%c = %d\n", 'a' + i / 26, 'a' + i % 26, i);
+    }
+    write_text(checkpoint_path, text);
+}
+
+// checkpoint.ini's room: 28 keys in use (a save's 16 and Saved, a resume's 11), more for later; a save that needs one
+// more than it holds is refused and logged, the file as it was
+static void test_store_room(void) {
+    snprintf(capture_path, sizeof(capture_path), "%s/stdout.txt", root);
+    const char *full_save = "Map=zm_theater\nRound=39\nPoints=600\nPerks=juggernaut\nWeapons=ray_gun_upgraded\n"
+                            "Equipment=frag_grenade\nHeld=Ray Gun\nCharacter=Dempsey\nStats=Kills 9\n"
+                            "Guns=ray_gun_upgraded:0:0:\nGunInHand=ray_gun_upgraded\nPerkList=specialty_armorvest\n"
+                            "PapLevels=ray_gun_upgraded:3\nItems=frag_grenade:2:0\nGunAmmo=ray_gun_upgraded:7:44\n"
+                            "HeroPower=hero_annihilator:40\n";
+    // a resumed game's save with every key, and 8 entries from a newer version: all of them stay
+    write_store(15 + 8);
+    CHECK(checkpoint_save(&paths, full_save, 2));
+    char text[Checkpoint_Read_Size];
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "Applied=1\n") != NULL && strstr(text, "PreviousRound=1\n") != NULL &&
+          strstr(text, "AppliedPreset=_Default\n") != NULL && strstr(text, "HeroPower=hero_annihilator:40\n") != NULL &&
+          strstr(text, "Round=39\n") != NULL && strstr(text, "Saved=2\n") != NULL);
+    CHECK(checkpoint_resume_state(&paths) == Checkpoint_Resume_In_Use);
+    int entries = 0;
+    for (const char *line = text; (line = strchr(line, '\n')) != NULL; line++)
+        entries++;
+    CHECK(entries == 15 + 8 + 13); // Held was there already; the save's other 13 are new
+    // full: a save that needs one more entry isn't saved, and says why
+    write_store(Checkpoint_Max_Entries);
+    char *before = strdup(read_text(checkpoint_path));
+    capture_start();
+    bool saved = checkpoint_save(&paths, "Map=zm_theater\nRound=39\nPoints=600\nHeld=Ray Gun\n", 3);
+    char *log = capture_end();
+    CHECK(!saved);
+    CHECK(strcmp(read_text(checkpoint_path), before) == 0);
+    CHECK(strstr(log, "checkpoint.ini has no room for Map (it holds 64 entries), so it isn't changed") != NULL);
+    free(log);
+    // the keys a save doesn't have go first, so one that drops Held has room for Map
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=39\nPoints=600\n", 4));
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "Map=zm_theater\n") != NULL && strstr(text, "Held=") == NULL &&
+          strstr(text, "Applied=1\n") != NULL && strstr(text, "Saved=4\n") != NULL);
+    // a file with more entries than that (a newer version's) isn't replaced either: it may have a resume set up
+    write_store(Checkpoint_Max_Entries + 1);
+    free(before);
+    before = strdup(read_text(checkpoint_path));
+    capture_start();
+    saved = checkpoint_save(&paths, full_save, 5);
+    log = capture_end();
+    CHECK(!saved && strcmp(read_text(checkpoint_path), before) == 0 && strstr(log, "checkpoint.ini has more entries than the 64 it holds, so it isn't changed") != NULL);
+    // and its readers just don't read it, without a word
+    char state_text[64];
+    capture_start();
+    checkpoint_resume_t state = checkpoint_resume_state(&paths);
+    checkpoint_read(&paths, state_text, sizeof(state_text));
+    free(log);
+    log = capture_end();
+    CHECK(state == Checkpoint_No_Resume && state_text[0] == '\0' && log[0] == '\0');
+    free(log);
+    // nor does the resume's InUse go in when there's no room for it
+    write_store(Checkpoint_Max_Entries);
+    char *full = calloc(1, 65536);
+    strcpy(full, read_text(checkpoint_path));
+    char *in_use = strstr(full, "InUse = 1\n");
+    CHECK(in_use != NULL);
+    memmove(in_use, in_use + strlen("InUse = 1\n"), strlen(in_use + strlen("InUse = 1\n")) + 1);
+    strcat(full, "Newerzz = 1\n"); // full again, without InUse
+    write_text(checkpoint_path, full);
+    free(before);
+    before = strdup(read_text(checkpoint_path));
+    capture_start();
+    saved = checkpoint_mark_in_use(&paths);
+    log = capture_end();
+    CHECK(!saved && strcmp(read_text(checkpoint_path), before) == 0 && strstr(log, "no room for InUse") != NULL);
+    free(log);
+    free(before);
+    free(full);
+    unlink(checkpoint_path);
 }
 
 static const char *user_mutations = "modvar tfoption_max_ammo 1\n"
@@ -407,6 +521,7 @@ int main(void) {
     test_cfg_value();
     test_cfg_set();
     test_save();
+    test_store_room();
     test_apply_and_clear();
     test_perks();
     test_weapon_commands();
