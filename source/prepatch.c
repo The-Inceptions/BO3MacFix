@@ -64,6 +64,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Com_GetBuildIntField, 5, 4, { 0x83, 0xFF, 0x02, 0x74, 0x11 } }, // cmp edi, 2; je +0x11
     { ADDR_CSteamAPIContext_Init, Push_R15 },
     { ADDR_DB_GetStreamFraction, Push_R15 },
+    { ADDR_Dvar_SetBool, 8, 0, { 0x55, 0x48, 0x89, 0xE5, 0x40, 0x0F, 0xB6, 0xF6 } }, // ...; movzx esi, sil
     { ADDR_dwInstantMessageDispatch, Push_R15 },
     { ADDR_GPad_GetGamepadType, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xC7 } }, // ...; movsxd rax, edi
     { ADDR_GScr_IsProfileBuild, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xF6 } }, // ...; xor esi, esi

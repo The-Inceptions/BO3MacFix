@@ -4,7 +4,8 @@ TARGET = BO3MacFix.dylib
 TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/test_sdl_displays tests/test_prepatch \
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
 	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint \
-	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan
+	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan \
+	tests/test_aae_cheats
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -43,6 +44,8 @@ SOURCES += source/prepatch.c
 
 # the build All-around Enhancement checks for, read from its fastfile (aae_build.c)
 SOURCES += source/aae_build.c
+# a map started with AAE keeping cheats off, so its bank and weapon locker load (aae_cheats.c)
+SOURCES += source/aae_cheats.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
 # weapons back with their camo, attachments and ammo types, and its perks (zm_inventory.c, zm_loadout.c)
 SOURCES += source/checkpoint.c source/zm_inventory.c source/zm_loadout.c
@@ -150,6 +153,13 @@ tests/test_zm_loadout: tests/test_zm_loadout.c source/zm_loadout.c source/zm_loa
 
 # zm_inventory.c's pass through the game's cheat check for BO3MacFix's give and take commands, against a made-up
 # g_entities (the test includes the source)
+# aae_cheats.c's decision and its reads of the game's command and mod name, against made-up memory (the test
+# includes the source itself)
+tests/test_aae_cheats: tests/test_aae_cheats.c source/aae_cheats.c source/aae_cheats.h source/offsets.h \
+		source/zm_loadout.c source/zm_loadout.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_aae_cheats.c \
+		source/zm_loadout.c
+
 tests/test_zm_inventory: tests/test_zm_inventory.c source/zm_inventory.c source/zm_inventory.h source/offsets.h \
 		source/zm_loadout.c source/zm_loadout.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -o $@ \
