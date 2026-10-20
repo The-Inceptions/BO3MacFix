@@ -57,6 +57,8 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `FrameStats` | 0 | Logs the frame rate, 1% low and worst frame time every N seconds. |
 | `BatteryFPS` | 0 | Limits the frame rate to N (30 to 240) only while the Mac runs on battery, to save power. |
 | `PauseMenuFPS` | 30 | Limits the frame rate to N (30 to 240) while the pause menu is open in a match, to save power, and lifts the limit as soon as it closes. 0 turns it off. The settings page offers Off, 30, 40 and 60, rates that divide a 120 Hz display's refresh evenly (45 came out at 40 there). With `FramePacingFPS` or `BatteryFPS` on too, the lowest limit wins. |
+| `MenuFPS` | 40 | Limits the frame rate to N (30 to 240) in the menus outside a match (the main menu, the lobby, the mods menu), to save power: the stock main menu otherwise renders at the display's 120 Hz. It ends as soon as a match starts, and as a map starts loading. 0 turns it off. The settings page offers Off, 30, 40 and 60. With other limits on too, the lowest that applies wins. |
+| `BackgroundFPS` | 30 | Limits the frame rate to N (10 to 240) while the game isn't the active app, or is hidden or minimized, to save power (the game itself keeps rendering at full speed behind other apps), and lifts it as soon as the game is in front again. It only applies with the menus or a match up, not while the game starts or a map loads. 0 turns it off. The settings page offers Off, 15, 30 and 60. |
 | `MetalHUD` | 0 | Shows macOS's Metal performance HUD (FPS and GPU time). |
 | `GpuDiagnostics` | 0 | Logs the window, display mode and Metal layer whenever they change. |
 | `NoCodePatches` | 0 | For testing only: leaves the game's code exactly as shipped, without any of the fixes. Solo play only. |

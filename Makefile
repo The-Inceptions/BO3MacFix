@@ -30,8 +30,9 @@ SOURCES += source/script_errors.c
 SOURCES += source/controllers.c source/gpu_tweaks.c
 # which players folder a .cfg comes from, for mods that save them from Lua (players_cfg.c)
 SOURCES += source/players_cfg.c
-# which frame rate limit applies to a frame, and the pause menu's state for PauseMenuFPS (frame_limit.c)
-SOURCES += source/frame_limit.c
+# which frame rate limit applies to a frame, and the pause menu's and the menus' state for PauseMenuFPS and MenuFPS
+# (frame_limit.c), and whether the game is in the background for BackgroundFPS (app_focus.m)
+SOURCES += source/frame_limit.c source/app_focus.m
 # PlayStation controllers through macOS's GameController framework (gc_bridge.m), weak-linked because it needs macOS 11.3
 SOURCES += source/gc_bridge.m
 FRAMEWORKS += -framework Foundation -weak_framework GameController -weak_framework CoreHaptics

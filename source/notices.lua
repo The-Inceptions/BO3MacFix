@@ -1,9 +1,9 @@
--- BO3MacFix's on-screen notices and PauseOnDisconnect, the UI half of notices.m, and whether the pause menu is open
--- in a match for PauseMenuFPS. The first menu made in each UI Lua state loads this. A timer then looks four times a
+-- BO3MacFix's on-screen notices and PauseOnDisconnect, the UI half of notices.m, whether the pause menu is open in a
+-- match for PauseMenuFPS, and whether the game is in the menus outside a match for MenuFPS. The first menu made in each UI Lua state loads this. A timer then looks four times a
 -- second for a notice to show (one at a time, each for four seconds at the top of the screen), for a request to pause
 -- because a controller disconnected, and at the pause menu. The argument says to log every menu made
 -- (BO3MACFIX_NOTICESDEBUG=1).
-local debug_menus = ...
+local debug_menus, menus_open = ...
 local bo3macfix = BO3MacFix
 if bo3macfix == nil or bo3macfix.TakeNotice == nil or LUI == nil or LUI.roots == nil or LUI.UITimer == nil then
     return
@@ -11,6 +11,7 @@ end
 local log = bo3macfix.NoticeLog or function() end
 local take_notice, take_pause, pause_game = bo3macfix.TakeNotice, bo3macfix.TakePauseRequest, bo3macfix.PauseGame
 local tell_pause_menu = bo3macfix.PauseMenuOpen or function() end
+local tell_menus = menus_open or function() end
 local clock = bo3macfix.NoticeClock -- seconds
 
 local POLL_MS, SHOW, FADE = 250, 4.0, 0.5
@@ -143,6 +144,14 @@ local function check_pause_menu()
     told_open = open
 end
 
+-- MenuFPS: BO3MacFix is told on every poll whether the game is in the menus outside a match (the main menu, the
+-- lobby, the mods menu: Engine.IsInGame says no). It stops counting it 2 seconds after the last poll, and a new UI
+-- state ends it at once, so a map loading from the menus isn't held back. BackgroundFPS only applies while these
+-- polls come, so not while the game starts or a map loads either.
+local function check_menus()
+    tell_menus(ask(Engine.IsInGame) == false and 1 or 0)
+end
+
 -- the latest menu made, until it's on a root (it goes on one after it's made, in the same frame)
 local new_menu, new_menu_name, new_menu_looks = nil, nil, 0
 
@@ -196,6 +205,7 @@ local function poll()
         end
     end
     check_pause_menu()
+    check_menus()
     local forced = take_pause()
     if forced ~= nil then try_pause(forced) end
 end

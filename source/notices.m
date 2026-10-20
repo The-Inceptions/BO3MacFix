@@ -13,8 +13,9 @@
 // an Escape key press to the game's own event queue, so the engine opens its pause menu and pauses exactly as when
 // the player presses Esc.
 //
-// PauseMenuFPS: notices.lua also tells gpu_tweaks.c when the pause menu is open in a match, which works with Notices
-// and PauseOnDisconnect off too (notices.lua is loaded in every UI Lua state either way).
+// PauseMenuFPS and MenuFPS: notices.lua also tells gpu_tweaks.c when the pause menu is open in a match and when the
+// game is in the menus outside one, which works with Notices and PauseOnDisconnect off too (notices.lua is loaded in
+// every UI Lua state either way).
 //
 // Test notifications, with BO3MACFIX_TESTHOOKS=1 (notifyutil -s NAME VALUE sets the value, notifyutil -p NAME posts):
 //   com.bo3macfix.test.notice      shows "Test notice N"
@@ -279,6 +280,15 @@ static int lua_pause_menu_open(lua_State *s) {
     return 0;
 }
 
+// MenusOpen(1 or 0): whether the game is in the menus, outside a match, for MenuFPS, on every poll (BackgroundFPS
+// waits for the polls)
+static int lua_menus_open(lua_State *s) {
+    float open = 0;
+    hks_number_arg(s, 1, &open);
+    gpu_tweaks_menus_open(open != 0);
+    return 0;
+}
+
 // NoticeClock() -> seconds since the game started, for how long a toast has shown (LUI's timers run late under load)
 static int lua_clock(lua_State *s) {
     hks_push_number(s, (float)(now() - started));
@@ -291,12 +301,16 @@ static int lua_log(lua_State *s) {
     return 0;
 }
 
-// runs notices.lua, which gets whether to log every menu made (BO3MACFIX_NOTICESDEBUG=1)
+// runs notices.lua, which gets whether to log every menu made (BO3MACFIX_NOTICESDEBUG=1) and MenusOpen. MenusOpen is
+// handed over here, when the first menu is made, rather than in start_lua: compiling or running any more Lua while the
+// UI state is set up, as All-around Enhancement's scripts load, makes AAE quit the game at a map's load (see
+// settings_menu.c). One more line in start_lua did.
 static int lua_load_ui(lua_State *s) {
     ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
     if (hks_load_source(s, (const char *)notices_lua, notices_lua_len, "=BO3MacFix notices")) {
         hks_push_boolean(s, debug_menus);
-        hks_pcall(s, 1, 0);
+        hks_push_cfunction(s, lua_menus_open, "NoticesMenusOpen");
+        hks_pcall(s, 2, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;
@@ -335,8 +349,9 @@ static const char start_lua[] =
 
 void notices_lua_install(lua_State *s) {
     // settings_menu.c calls this once for each new UI Lua state: the old state's pause menu went with it, maybe
-    // without its close running
+    // without its close running, and a map loading from the menus starts one
     gpu_tweaks_pause_menu_open(false);
+    gpu_tweaks_ui_gone();
     // the stack can be reallocated while our Lua runs, so remember the top as an index
     ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
     if (hks_load_source(s, start_lua, sizeof(start_lua) - 1, "=BO3MacFix notices start")) {

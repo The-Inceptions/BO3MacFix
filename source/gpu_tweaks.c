@@ -9,7 +9,10 @@
 // - FrameStats: logs the frame rate, 1% low and worst frame time every few seconds, for benchmarking.
 // - BatteryFPS: paces frames to that rate only while the Mac runs on battery, to save power.
 // - PauseMenuFPS: paces frames to that rate while the pause menu is open in a match (notices.lua says when), to save
-//   power. The lowest of these three that applies wins, see frame_limit.c.
+//   power.
+// - MenuFPS: the same in the menus outside a match (the main menu, the lobby, the mods menu; notices.lua says when).
+// - BackgroundFPS: the same while the game isn't the active app, or is hidden or minimized (app_focus.m says when).
+//   The lowest of these limits that applies wins, see frame_limit.c.
 // - MetalHUD: turns on macOS's Metal performance HUD.
 #include <math.h>
 #include <stdint.h>
@@ -28,6 +31,7 @@
 #include <objc/runtime.h>
 #include <objc/message.h>
 
+#include "app_focus.h"
 #include "frame_limit.h"
 #include "gpu_tweaks.h"
 #include "metalfx.h"
@@ -36,7 +40,7 @@
 
 extern uint64_t game_base_address;
 
-static frame_limits_t limits; // FramePacingFPS, BatteryFPS, PauseMenuFPS, on battery or not, the pause menu's state
+static frame_limits_t limits; // the frame rate limits (frame_limit.h) and the situations some apply in
 static SEL sel_present_after_minimum_duration;
 static int metalfx_active = 0;
 static int frame_stats_seconds = 0; // 0 when not logging frame stats
@@ -88,7 +92,7 @@ static void frame_stats_tick(void) {
     window_start = now;
 }
 
-// FramePacingFPS, BatteryFPS and PauseMenuFPS keep each frame on screen for at least 1/fps seconds, which a display
+// The frame rate limits keep each frame on screen for at least 1/fps seconds, which a display
 // with a fixed refresh rate rounds up to whole refreshes: 120 fps on a 144 Hz display shows each frame for 2
 // refreshes, so 72 fps. Says so when the game's display or the rate changes to one like that.
 static void check_pacing(double min_duration) {
@@ -128,19 +132,37 @@ static void wait_for_turn(double min_duration) {
     next += interval;
 }
 
+// the situational limits that started or stopped applying with this frame, and the rate it's paced at now
+static void log_limits(int started, int stopped, int fps) {
+    static const struct {
+        int bit;
+        const char *start, *stop;
+    } names[] = {
+        { Limit_Pause_Menu, "pause menu open in a match", "pause menu closed" },
+        { Limit_Menus, "in the menus", "left the menus" },
+        { Limit_Background, "the game is in the background", "the game is in front again" },
+    };
+    for (int i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
+        if (started & names[i].bit)
+            printf("BO3MacFix: %s, limiting to %i fps\n", names[i].start, fps);
+        if ((stopped & names[i].bit) && fps > 0)
+            printf("BO3MacFix: %s, limiting to %i fps\n", names[i].stop, fps);
+        else if (stopped & names[i].bit)
+            printf("BO3MacFix: %s, frame limit off\n", names[i].stop);
+    }
+}
+
 // called instead of objc_msgSend for Aspyr's [commandBuffer presentDrawable:drawable]
 static void present_drawable(id command_buffer, SEL sel, id drawable) {
     if (frame_stats_seconds > 0)
         frame_stats_tick();
     if (metalfx_active)
         metalfx_before_present(command_buffer);
-    // the lowest limit that applies to this frame; the pause menu's is logged here, where it starts or stops applying
-    int log;
-    int fps = frame_limit_for_frame(&limits, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), &log);
-    if (log > 0)
-        printf("BO3MacFix: pause menu open in a match, limiting to %i fps\n", fps);
-    else if (log < 0)
-        printf("BO3MacFix: pause menu closed, frame limit off\n");
+    // the lowest limit that applies to this frame; the situational ones are logged here, where they start or stop
+    int started, stopped;
+    int fps = frame_limit_for_frame(&limits, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), &started, &stopped);
+    if (started | stopped)
+        log_limits(started, stopped, fps);
     double min_duration = fps > 0 ? 1.0 / fps : 0;
     static unsigned int paced_frames = 0;
     if (min_duration > 0 && paced_frames++ % 120 == 0)
@@ -332,6 +354,44 @@ void gpu_tweaks_pause_menu_open(bool open) {
     frame_limit_set_pause_menu(&limits, open, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
 }
 
+void gpu_tweaks_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
+    if (fps < 30 || fps > 240)
+        return;
+    if (!redirect_present(checked_code_patch)) {
+        printf("couldn't hook Aspyr's present, no MenuFPS\n");
+        return;
+    }
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    atomic_store(&limits.menu_fps, fps);
+    printf("limiting the frame rate to %i fps in the menus\n", fps);
+}
+
+void gpu_tweaks_menus_open(bool in_menus) {
+    frame_limit_set_menus(&limits, in_menus, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+}
+
+void gpu_tweaks_ui_gone(void) {
+    frame_limit_ui_gone(&limits);
+}
+
+// from the main thread (app_focus.m)
+static void background_changed(bool background) {
+    atomic_store(&limits.in_background, background);
+}
+
+void gpu_tweaks_background_fps_init(int fps, code_patch_fn checked_code_patch) {
+    if (fps < 10 || fps > 240)
+        return;
+    if (!redirect_present(checked_code_patch)) {
+        printf("couldn't hook Aspyr's present, no BackgroundFPS\n");
+        return;
+    }
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    atomic_store(&limits.background_fps, fps);
+    app_focus_watch(background_changed);
+    printf("limiting the frame rate to %i fps in the background\n", fps);
+}
+
 void gpu_tweaks_metal_hud_init(int enabled) {
     const char *env = getenv("BO3MACFIX_METALHUD");
     if (env != NULL)
@@ -397,6 +457,30 @@ bool gpu_tweaks_set_pause_menu_fps(int fps) {
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
     atomic_store(&limits.pause_menu_fps, fps);
     printf(fps != 0 ? "limiting the frame rate to %i fps in the pause menu\n" : "not limiting the frame rate in the pause menu\n", fps);
+    return true;
+}
+
+bool gpu_tweaks_set_menu_fps(int fps) {
+    if (fps != 0 && (fps < 30 || fps > 240))
+        return false;
+    if (fps != 0 && !present_live())
+        return false;
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    atomic_store(&limits.menu_fps, fps);
+    printf(fps != 0 ? "limiting the frame rate to %i fps in the menus\n" : "not limiting the frame rate in the menus\n", fps);
+    return true;
+}
+
+bool gpu_tweaks_set_background_fps(int fps) {
+    if (fps != 0 && (fps < 10 || fps > 240))
+        return false;
+    if (fps != 0 && !present_live())
+        return false;
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    if (fps != 0)
+        app_focus_watch(background_changed);
+    atomic_store(&limits.background_fps, fps);
+    printf(fps != 0 ? "limiting the frame rate to %i fps in the background\n" : "not limiting the frame rate in the background\n", fps);
     return true;
 }
 
