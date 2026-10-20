@@ -18,8 +18,11 @@
 #   PRIVATE GAME is focused: Return -> lobby (CAREERS focused): Up (SETUP GAME), Return -> CHANGE MAP: Return ->
 #   Down (STANDARD), Return -> the current map is focused (Nacht der Untoten: Down x3 is Kino der Toten), Return ->
 #   Esc closes the flyout -> Up (START GAME), Return -> "Choose Crew Member": Return -> the match loads.
-#   In a match: Esc opens the start menu, F10 the settings page; on the page Down x45 is "Delete saved game" (the
-#   last row), Up 1 "Resume saved game", Up 2 "Save game".
+#   In a match: Esc opens the start menu, F10 the settings page; on the page Down x60 is "Delete saved game" (the
+#   last row: Down stops there, the page doesn't wrap around), Up 1 "Resume saved game", Up 2 "Save game". Count from
+#   the end, not the top: the page has a row per setting plus the 3 saved game rows (49 since day 4's MenuFPS,
+#   BackgroundFPS, MainWaitFix, ModWarningDialog and QuickSave), so the old Down x45 now stops on AutoSave, and a
+#   Return there switches it in the user's settings.ini.
 import argparse, os, re, shutil, signal, subprocess, sys, time
 
 game = os.path.expanduser("~/Library/Application Support/Steam/steamapps/common/Call of Duty Black Ops III")
