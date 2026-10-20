@@ -7,7 +7,7 @@
 //   BO3MacFix.RestartPending() -> true while a setting saved this session differs from what the game started with
 //                                  and couldn't be applied without a restart
 // Some settings apply right away (live = true): the frame rate ones, the display ones, the controller ones,
-// RawMouseScale, AAEOnline, ExitFix, AutoSave, QuickSave and ModWarningDialog, plus JobIdleFix, RenderIdleFix and AvoidNotch from the pre-patched executable. The rest
+// RawMouseScale, AAEOnline, ExitFix, AutoSave, QuickSave and ModWarningDialog, plus JobIdleFix, RenderIdleFix, MainWaitFix and AvoidNotch from the pre-patched executable. The rest
 // are read once at startup, so changing them asks for a restart.
 #include <limits.h>
 #include <spawn.h>
@@ -66,6 +66,7 @@ static const setting_t settings[] = {
     { "ThreadQoS", "Thread priority", "Runs the game's main, render and job threads at macOS's highest scheduling priority.", "Performance", Toggle(1) },
     { "JobIdleFix", "Idle job threads sleep", "Lets idle job threads sleep instead of spinning while they wait for work.", "Performance", Toggle_Live(1, Live_Prepatch) },
     { "RenderIdleFix", "Idle render thread sleeps", "Lets the render thread sleep while it waits for the next frame instead of spinning.", "Performance", Toggle_Live(1, Live_Prepatch) },
+    { "MainWaitFix", "Main thread sleeps", "Lets the main thread sleep while it waits for the render thread instead of spinning. Saves power, most of all in the menus and the pause menu.", "Performance", Toggle_Live(1, Live_Prepatch) },
     { "FastSetjmp", "Fast script calls", "Makes the script engines skip a slow system call they make constantly.", "Performance", Toggle(1) },
     { "FastScriptErrors", "Fast script errors", "Stops script errors from looking for missing script source files every time. Mods with many errors run faster.", "Performance", Toggle(1) },
     { "QuietScriptErrors", "Quiet script errors", "Shows each repeated script error in console_mp.log 3 times, then only counts it.", "Performance", Toggle(1) },
@@ -151,9 +152,11 @@ static bool apply_live(const setting_t *t, int value) {
     if (strcmp(n, "FrameStats") == 0)
         return gpu_tweaks_set_frame_stats(value);
     if (strcmp(n, "JobIdleFix") == 0)
-        return cpu_tuning_set_idle_fix(false, value);
+        return cpu_tuning_set_wait_fix(Wait_Fix_Job, value);
     if (strcmp(n, "RenderIdleFix") == 0)
-        return cpu_tuning_set_idle_fix(true, value);
+        return cpu_tuning_set_wait_fix(Wait_Fix_Render, value);
+    if (strcmp(n, "MainWaitFix") == 0)
+        return cpu_tuning_set_wait_fix(Wait_Fix_Main, value);
     if (strcmp(n, "ButtonPrompts") == 0)
         return controllers_set_button_prompts(value);
     if (strcmp(n, "AvoidNotch") == 0)

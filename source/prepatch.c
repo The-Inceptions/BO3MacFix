@@ -102,6 +102,7 @@ static const value_def_t value_defs[] = {
     { ADDR_JQ_IdleWait_TimeoutInstr, { 0xBE, 0x01, 0x00, 0x00, 0x00 } },         // mov esi, 1
     { ADDR_RenderThread_WaitTimeoutInstr, { 0xBF, 0x01, 0x00, 0x00, 0x00 } },    // mov edi, 1
     { ADDR_ASL_FramesInFlightSemaphoreInstr, { 0xBF, 0x02, 0x00, 0x00, 0x00 } }, // mov edi, 2
+    { ADDR_Main_RenderWait_TimeoutInstr, { 0xBE, 0x01, 0x00, 0x00, 0x00 } },     // mov esi, 1
 };
 
 // a call qword [rip+x] through objc_msgSend's pointer that a setting redirects

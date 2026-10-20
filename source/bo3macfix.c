@@ -1125,7 +1125,8 @@ __attribute__((constructor)) static void dylib_main() {
     // thread QoS and job worker waiting fixes (see cpu_tuning.c), each can be turned off in settings.ini
     cpu_tuning_init(game_base_address, read_int_setting("ThreadQoS", 1), read_int_setting("JobIdleFix", 1),
                     read_int_setting("YieldSleep0", 0), read_int_setting("FastSetjmp", 1),
-                    read_int_setting("RenderIdleFix", 1), read_int_setting("FastScriptErrors", 1));
+                    read_int_setting("RenderIdleFix", 1), read_int_setting("MainWaitFix", 1),
+                    read_int_setting("FastScriptErrors", 1));
     // repeated script errors are shown 3 times, then counted, see script_errors.c
     script_errors_init(game_base_address, read_int_setting("QuietScriptErrors", 1));
 
