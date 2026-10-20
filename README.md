@@ -27,6 +27,7 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `ThreadQoS` | 1 | Runs the game's main, render and job threads at the highest scheduling priority. |
 | `JobIdleFix` | 1 | Lets idle job threads sleep instead of spinning. |
 | `RenderIdleFix` | 1 | Lets the render thread sleep while it waits for the next frame, instead of spinning. |
+| `MainWaitFix` | 1 | Lets the main thread sleep while it waits for the render thread, instead of spinning. |
 | `YieldSleep0` | 0 | Makes `Sleep(0)` yield like on Windows. |
 | `FastSetjmp` | 1 | Makes the script VMs' `setjmp`/`longjmp` skip saving the signal mask, a syscall each time. |
 | `FastScriptErrors` | 1 | Stops each script error from trying to open the script source files (`scriptsrc.zip`, only the mod tools make them) again for every line of its call stack. All-around Enhancement's scripts hit thousands of errors a second, so this frees up much of the main thread. |

@@ -126,6 +126,7 @@
 #define ADDRS_TUVersion 0x016AA513, 0x017251FB, 0x01725209, 0x0172529C, 0x017252AB, 0x017252B7
 #define ADDR_JQ_IdleWait_TimeoutInstr 0x11a7551 // mid-func - mov esi, 1 (idle job workers' WaitForSingleObject timeout in ms)
 #define ADDR_RenderThread_WaitTimeoutInstr 0xfeb491 // mid-func - mov edi, 1 (render thread's wait for work, in ms)
+#define ADDR_Main_RenderWait_TimeoutInstr 0xd05c07 // mid-func - mov esi, 1 (main thread's wait for the render thread, in ms)
 // following display changes: the engine's video code (engine_display.c)
 #define ADDR_R_CheckVidRestart 0xdce17e // func - per frame on the engine's Main thread, applies pending video dvar changes
 #define ADDR_R_SetWndParms 0xdcca9a // func - fills the window parameters from r_fullscreen, r_monitor, r_mode, r_refreshRate

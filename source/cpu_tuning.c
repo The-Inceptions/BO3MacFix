@@ -77,6 +77,18 @@ static void render_idle_wait_patch(void) {
         printf("render thread waits when idle\n");
 }
 
+// The main thread waits for the render thread the same way, each frame in R_IssueRenderCommands:
+// WaitForSingleObject(event, 1 ms) in a loop until the event is set. So it spins whenever the render thread or the GPU
+// is the slower one, or one of our frame limits holds the render thread back: 85% of a core in a match at 120 fps,
+// 96% in the menus at 40 fps. A 2 ms wait really blocks, and the render thread sets the event when it's done (a
+// pthread_cond_broadcast), which wakes it straight away.
+static void main_wait_patch(void) {
+    static const uint8_t mov_esi_1[] = { 0xBE, 0x01, 0x00, 0x00, 0x00 };
+    uint8_t mov_esi_2[] = { 0xBE, 0x02, 0x00, 0x00, 0x00 };
+    if (cpu_checked_code_patch(ADDR_Main_RenderWait_TimeoutInstr, mov_esi_1, mov_esi_2, sizeof(mov_esi_2)))
+        printf("main thread waits for the render thread\n");
+}
+
 // The game's setjmp and longjmp also save and restore the signal mask, which is a system call each time: about
 // 200 ns under Rosetta, against 7 ns for _setjmp, which only saves registers. The GSC script VM calls setjmp for
 // every script thread it runs, and HavokScript for every protected call. Nothing in the game longjmps out of a
@@ -175,7 +187,7 @@ static int env_override(const char *name, int value) {
 }
 
 void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fix, int yield_sleep0, int fast_setjmp,
-                     int render_idle_fix, int fast_script_errors) {
+                     int render_idle_fix, int main_wait_fix, int fast_script_errors) {
     base_address = game_base_address;
     thread_qos_enabled = env_override("BO3MACFIX_THREADQOS", thread_qos) != 0;
     if (thread_qos_enabled)
@@ -184,6 +196,8 @@ void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fi
         job_idle_wait_patch();
     if (env_override("BO3MACFIX_RENDERIDLEFIX", render_idle_fix) != 0)
         render_idle_wait_patch();
+    if (env_override("BO3MACFIX_MAINWAITFIX", main_wait_fix) != 0)
+        main_wait_patch();
     if (env_override("BO3MACFIX_YIELDSLEEP0", yield_sleep0) != 0) {
         install_hook_ASL_SleepEx((void *)(base_address + ADDR_ASL_SleepEx));
         printf("Sleep(0) yields\n");
@@ -200,8 +214,11 @@ void cpu_tuning_init(uint64_t game_base_address, int thread_qos, int job_idle_fi
     }
 }
 
-// JobIdleFix / RenderIdleFix changed while the game runs: the pre-patched executable's instructions read their
-// timeout from a slot, otherwise it's a code write and needs a restart
-bool cpu_tuning_set_idle_fix(bool render_thread, int on) {
-    return prepatch_set_value(render_thread ? ADDR_RenderThread_WaitTimeoutInstr : ADDR_JQ_IdleWait_TimeoutInstr, on ? 2 : 0);
+// JobIdleFix / RenderIdleFix / MainWaitFix changed while the game runs: the pre-patched executable's instructions read
+// their timeout from a slot, otherwise it's a code write and needs a restart
+bool cpu_tuning_set_wait_fix(cpu_wait_fix_t which, int on) {
+    static const uint32_t sites[] = { [Wait_Fix_Job] = ADDR_JQ_IdleWait_TimeoutInstr,
+                                      [Wait_Fix_Render] = ADDR_RenderThread_WaitTimeoutInstr,
+                                      [Wait_Fix_Main] = ADDR_Main_RenderWait_TimeoutInstr };
+    return prepatch_set_value(sites[which], on ? 2 : 0);
 }

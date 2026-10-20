@@ -233,9 +233,11 @@ static void check_runtime(uint8_t *image, const uint8_t *original) {
           "RenderIdleFix's slot");
     CHECK(prepatch_set_value(ADDR_RenderThread_WaitTimeoutInstr, 0) && *(uint32_t *)(image + slot + 16) == 0,
           "RenderIdleFix off");
+    CHECK(prepatch_set_value(ADDR_Main_RenderWait_TimeoutInstr, 2) && *(uint32_t *)(image + slot + 32) == 2,
+          "MainWaitFix's slot");
     CHECK(!prepatch_set_value(ADDR_RenderThread_WaitTimeoutInstr + 1, 2), "a site that isn't one");
     CHECK(prepatch_redirect_call(ADDR_ASL_Present_PresentDrawableCall, (void *)fake_function) &&
-              *(void **)(image + slot + 4 * 8) == (void *)fake_function, "present's slot");
+              *(void **)(image + slot + 5 * 8) == (void *)fake_function, "present's slot");
     uint8_t ret[] = { 0xC3 };
     int in_place = patches_in_place;
     CHECK(BO3MacFix_CodePatch(image + ADDR_Lua_CmdParseArgs, ret, 1) == 0 && patches_in_place == in_place + 1,
