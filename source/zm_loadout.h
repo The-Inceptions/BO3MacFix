@@ -45,6 +45,11 @@ typedef struct {
     int perk_count;
     loadout_item_t items[Loadout_Max_Items];
     int item_count;
+    // the hero weapon's charge: its gadget power (0 to 100), which _zm_hero_weapon.gsc reads every 0.05 s for the HUD's
+    // meter and its "ready" state
+    bool have_hero_power;
+    char hero_name[Loadout_Name_Size]; // an item's name
+    int hero_power;
 } loadout_t;
 
 void loadout_clear(loadout_t *loadout);
@@ -126,12 +131,14 @@ typedef struct {
     bool (*holds)(void *context, uint64_t weapon);
     bool (*give_item)(void *context, uint64_t weapon); // zm_weapons::weapon_give, the scripts' own give
     bool (*set_ammo)(void *context, uint64_t weapon, int clip, int stock);
+    bool (*set_hero_power)(void *context, uint64_t weapon, int power); // the GadgetPowerSet builtin's code
 } loadout_ops_t;
 
 typedef struct {
     int taken, given, kept, aats, perks, perks_had, failed;
     char failures[256]; // what couldn't be restored, comma-separated
     int pap_levels, items, items_had, ammo;
+    int hero_power; // 1 if the hero weapon's charge came back
 } loadout_result_t;
 
 // turns the player's loadout into saved: takes the held primaries that aren't saved, gives each saved gun that isn't
@@ -141,6 +148,30 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
 
 // one line for the log: what a restore did
 void loadout_result_text(const loadout_result_t *result, char *out, size_t out_size);
+
+// ---- after a restore: the gun in hand once the player has control
+// A map's intro can still have the player when the loadout comes back (Ascension's lander ride, linked to the lander),
+// and the game then put a gun of its own in hand as the intro ended (live: the M1911, not the saved ray gun). So a
+// restore made while the player had no control (linked, frozen or with its weapons off) watches: once the player has
+// had control for a moment, a gun in hand other than the one the restore switched to is switched back, once. A
+// restore made with the player in control (Kino) watches nothing: what the player switches to later is the player's.
+#define Loadout_Switch_Settle_Polls 2 // polls the player has had control before the gun in hand counts
+#define Loadout_Switch_Watch_Polls 12 // then polls it's watched for (2 a second)
+#define Loadout_Switch_Max_Polls 360  // and no longer than this after the restore
+
+typedef struct {
+    uint64_t weapon; // the gun the restore switched to; 0: nothing to watch
+    int polls, controlled_polls;
+    bool switched;
+} loadout_switch_t;
+
+typedef enum { Loadout_Switch_Done, Loadout_Switch_Wait, Loadout_Switch_Now } loadout_switch_action_t;
+
+// starts watching after a restore that switched to weapon (0 for none), the player in control then or not
+void loadout_switch_start(loadout_switch_t *state, uint64_t weapon, bool controlled);
+// a poll's look at the player: whether it has control now, the gun in hand, whether it still holds state's gun.
+// Now: switch to state->weapon (once); Done: nothing more to watch.
+loadout_switch_action_t loadout_switch_poll(loadout_switch_t *state, bool controlled, uint64_t in_hand, bool holds);
 
 // ---- AAE's Repack-a-Punch (option tfoption_dpap): tfoption.gsc keeps each gun's level in a level array,
 // level.pap_lvup[self.guid + rootweapon.name] = 1 to 5 (1 at the first Pack-a-Punch, +1 at each repack after it)
@@ -177,6 +208,12 @@ bool loadout_parse_items(const char *value, loadout_t *loadout);
 bool loadout_format_gun_ammo(const loadout_t *loadout, char *out, size_t out_size);
 // sets loadout's guns' ammo from a GunAmmo value; a name loadout doesn't have is left out. False if it's malformed.
 bool loadout_parse_gun_ammo(const char *value, loadout_t *loadout);
+// whether an item is a hero weapon (the gadget the stock scripts keep in slot 0: hero_*, Shadows of Evil's glaive_*)
+bool loadout_is_hero_weapon(const char *name);
+// checkpoint.ini's "HeroPower = name:power" (name: the hero weapon's, as Items has it; power 0 to 100), "" for none
+bool loadout_format_hero_power(const loadout_t *loadout, char *out, size_t out_size);
+// loadout's hero power from a HeroPower value (NULL or empty for none); false, leaving it as it was, if malformed
+bool loadout_parse_hero_power(const char *value, loadout_t *loadout);
 // for the test switch BO3MACFIX_CHECKPOINT_PAP_DEBUG: entity's guid variable and level.pap_lvup's first entries as
 // the VM has them
 void loadout_vm_describe_pap(const loadout_vm_t *vm, uint32_t entity, char *out, size_t out_size);

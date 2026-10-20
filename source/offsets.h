@@ -231,6 +231,20 @@
 #define ADDR_BG_WeaponIsClipOnly 0xf52ec2 // func - int (Weapon): SetWeaponAmmoStock sets the clip of one
 #define ADDR_BG_GetMaxAmmo 0xf52d88 // func - int (playerState_t *, Weapon, uint64_t): SetWeaponAmmoStock's clamp, its third argument read from ADDR_bg_maxAmmoArg
 #define ADDR_bg_maxAmmoArg 0x189cb10 // uint64_t SetWeaponAmmoStock passes BG_GetMaxAmmo - name is a guess
+// whether the player has control (the gun in hand after a restore made during a map's intro, zm_inventory.c)
+#define gentity_TagInfo 0x3e8 // pointer, not NULL while linked to another entity (G_EntUnlink at 0x10fdb07 returns without one; Unlink 0x13eaf65)
+#define gentity_LinkFlags 0x2a9 // uint8_t: IsLinkedTo (0x1011845f2) wants 0x10 before it looks further (logged only)
+#define gclient_Flags 0x17004 // uint32_t: 0x4 FreezeControls (0xdaeacc), 0x10 FreezeControlsAllowLook (0xdaeb48); AreControlsFrozen (0xdaebc4) tests 0x4
+#define gclient_Frozen 0x14
+#define gclient_WeaponFlags 0x18 // uint8_t in the player state (gclient's first field): 0x40 DisableWeapons (0xdaed12)
+#define gclient_WeaponsDisabled 0x40
+// the hero weapon's charge: the gadget slots (3 x 0x20 bytes) in the player state, what GadgetPowerGet (0x13ee2df) reads
+// and GadgetPowerSet (0x13ee20d) sets; the stock _zm_hero_weapon.gsc keeps its hero weapon in slot 0
+#define gclient_Gadgets 0x88c
+#define gclient_Gadget0Power 0x8a4 // float, slot 0's power (0 to the gadget's most, 100)
+#define ADDR_Gadget_SlotWeapon 0x1107f36 // func - Weapon (gclient_t *, int slot), GadgetPowerSet's - name is a guess
+#define ADDR_G_GadgetPowerSet 0xe2b079 // func - void (gclient_t *, gadget *, Weapon, int time, float power): clamps to the gadget's most, GadgetPowerSet's - name is a guess
+#define ADDR_level_Time 0x10975324 // int, the time GadgetPowerSet passes (level_locals + 0x64e4) - name is a guess
 #define scrVarPub_LevelId 0x2c // uint32_t in scrVarPub (ADDR_scrVarPub, 0x78 bytes per instance): the level object's id, as GetLevel's opcode handler (0x12768de) and LevelEvalFieldVariable's (0x1277291) read it (+0x24, which handler 0x127685c pushes, is another object: live, it had no pap_lvup)
 // -- end zm inventory
 // -- END OFFSETS

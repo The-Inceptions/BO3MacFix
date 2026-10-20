@@ -334,6 +334,16 @@ static void test_loadout(void) {
                            8));
     checkpoint_read(&paths, text, sizeof(text));
     CHECK(strstr(text, "Saved=7\n") != NULL && strstr(text, "Items=frag_grenade:3:0,zod_riotshield::\n") != NULL);
+    // the hero weapon's charge: kept, read back for the restore; refused when malformed; gone with a save without it
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\nItems=hero_annihilator::\n"
+                                  "HeroPower=hero_annihilator:40\n", 9));
+    CHECK(checkpoint_loadout(&paths, &loadout) && loadout.have_hero_power && loadout.hero_power == 40);
+    CHECK(!checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\nHeroPower=hero_annihilator:400\n",
+                           10));
+    CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nGuns=ray_gun_upgraded:0:0:\n", 11));
+    CHECK(checkpoint_loadout(&paths, &loadout) && !loadout.have_hero_power);
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "HeroPower") == NULL);
     CHECK(checkpoint_save(&paths, "Round=12\nPoints=4000\nPerks=juggernaut\n", 3)); // as the test below expects
     // the longest a Guns line gets: four guns with eight attachments each fit in a value
     char long_guns[1024] = "";

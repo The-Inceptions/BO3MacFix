@@ -109,11 +109,11 @@ static int lua_checkpoint_allow_cheats(lua_State *s) {
 }
 
 // CheckpointLoadout(): the local player's full loadout as "Guns=...\nGunInHand=...\nPerkList=..." lines (zm_loadout.h),
-// then PapLevels, Items and GunAmmo lines when there are any,
+// then PapLevels, Items, GunAmmo and HeroPower lines when there are any,
 // nil without a game hosted here
 static int lua_checkpoint_loadout(lua_State *s) {
     static loadout_t loadout;
-    static char guns[1024], perks[1024], pap[1024], items[1024], ammo[1024], lines[5504];
+    static char guns[1024], perks[1024], pap[1024], items[1024], ammo[1024], hero[256], lines[5800];
     char note[256];
     if (!zm_inventory_read_loadout(&loadout, note, sizeof(note))) {
         hks_push_nil(s);
@@ -123,14 +123,16 @@ static int lua_checkpoint_loadout(lua_State *s) {
         printf("BO3MacFix: checkpoint: loadout: %s\n", note);
     if (!loadout_format_guns(&loadout, guns, sizeof(guns)) || !loadout_format_perks(&loadout, perks, sizeof(perks)) ||
         !loadout_format_pap_levels(&loadout, pap, sizeof(pap)) || !loadout_format_items(&loadout, items, sizeof(items)) ||
-        !loadout_format_gun_ammo(&loadout, ammo, sizeof(ammo))) {
+        !loadout_format_gun_ammo(&loadout, ammo, sizeof(ammo)) ||
+        !loadout_format_hero_power(&loadout, hero, sizeof(hero))) {
         printf("BO3MacFix: checkpoint: the loadout doesn't fit in checkpoint.ini\n");
         hks_push_nil(s);
         return 1;
     }
-    snprintf(lines, sizeof(lines), "Guns=%s\nGunInHand=%s\nPerkList=%s%s%s%s%s%s%s", guns,
+    snprintf(lines, sizeof(lines), "Guns=%s\nGunInHand=%s\nPerkList=%s%s%s%s%s%s%s%s%s", guns,
              loadout.held >= 0 ? loadout.guns[loadout.held].name : "", perks, pap[0] != '\0' ? "\nPapLevels=" : "", pap,
-             items[0] != '\0' ? "\nItems=" : "", items, ammo[0] != '\0' ? "\nGunAmmo=" : "", ammo);
+             items[0] != '\0' ? "\nItems=" : "", items, ammo[0] != '\0' ? "\nGunAmmo=" : "", ammo,
+             hero[0] != '\0' ? "\nHeroPower=" : "", hero);
     hks_push_string(s, lines);
     return 1;
 }
@@ -152,6 +154,17 @@ static int lua_checkpoint_restore_result(lua_State *s) {
     char text[512];
     if (zm_inventory_restore_result(text, sizeof(text)))
         hks_push_string(s, text);
+    else
+        hks_push_nil(s);
+    return 1;
+}
+
+// CheckpointRestoreSwitch(): after a restore made during a map's intro, at each poll: nil once there's nothing more
+// to look at, "" meanwhile, or the give command that switches back to the saved gun in hand (zm_inventory_switch_poll)
+static int lua_checkpoint_restore_switch(lua_State *s) {
+    const char *command = zm_inventory_switch_poll();
+    if (command != NULL)
+        hks_push_string(s, command);
     else
         hks_push_nil(s);
     return 1;
@@ -317,7 +330,7 @@ static int lua_load_menu(lua_State *s) {
     // Then the test switches: save so many seconds into a match, give these weapons first, log what the match has
     // so many seconds in. Then AutoSave's writer and deleting the save, and its test switch: how many seconds of a
     // match only set the round it starts at. Then the full loadout's functions, and its test switch: give these perks
-    // first.
+    // first. Then the gun in hand after a restore made during a map's intro.
     checkpoint_autosave_init(&checkpoint_paths, Autosave_Interval_Ms, autosave_report);
     if (hks_load_source(s, (const char *)checkpoint_lua, checkpoint_lua_len, "=BO3MacFix checkpoint")) {
         hks_push_cfunction(s, locked_checkpoint_save, "CheckpointSave");
@@ -340,7 +353,8 @@ static int lua_load_menu(lua_State *s) {
         hks_push_cfunction(s, lua_checkpoint_restore_result, "CheckpointRestoreResult");
         hks_push_cfunction(s, lua_checkpoint_test_loadout, "CheckpointTestLoadout");
         push_env(s, "BO3MACFIX_CHECKPOINT_PERKS");
-        hks_pcall(s, 20, 0);
+        hks_push_cfunction(s, lua_checkpoint_restore_switch, "CheckpointRestoreSwitch");
+        hks_pcall(s, 21, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;
