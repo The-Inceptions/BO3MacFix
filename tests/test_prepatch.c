@@ -294,7 +294,14 @@ int main(void) {
               strstr(message, "no pre-patched") != NULL, "no copy yet: \"%s\"", message);
     CHECK(BO3MacFix_BuildPrepatched(original_path, copy_path, message, sizeof(message)) == 0, "build: \"%s\"", message);
     printf("%s\n", message);
-    CHECK(BO3MacFix_PrepatchedIsCurrent(original_path, copy_path, message, sizeof(message)) == 0, "current: \"%s\"", message);
+    CHECK(BO3MacFix_PrepatchedIsCurrent(original_path, copy_path, message, sizeof(message)) == 0 &&
+              strstr(message, "unchanged") == NULL, "current: \"%s\"", message);
+    // the original's hash is kept, so the next launch doesn't read the whole file again
+    char checked_path[300];
+    snprintf(checked_path, sizeof(checked_path), "%s.checked", copy_path);
+    CHECK(access(checked_path, F_OK) == 0, "no %s after a check", checked_path);
+    CHECK(BO3MacFix_PrepatchedIsCurrent(original_path, copy_path, message, sizeof(message)) == 0 &&
+              strstr(message, "unchanged") != NULL, "current from the kept hash: \"%s\"", message);
     size_t copy_size = 0;
     uint8_t *copy = read_file(copy_path, &copy_size);
     CHECK(copy != NULL && copy_size == File_Size, "the copy is %zu bytes", copy_size);
@@ -322,6 +329,31 @@ int main(void) {
               strstr(message, "updated") != NULL, "after an update: \"%s\"", message);
     original[0x5000] ^= 1;
     write_file(original_path, original, File_Size);
+    CHECK(BO3MacFix_PrepatchedIsCurrent(original_path, copy_path, message, sizeof(message)) == 0 &&
+              strstr(message, "unchanged") == NULL, "the original back, hashed again: \"%s\"", message);
+
+    // a damaged or short .checked file is hashed over
+    size_t checked_size = 0;
+    uint8_t *checked = read_file(checked_path, &checked_size);
+    CHECK(checked != NULL && checked_size > 64, "the kept hash is %zu bytes", checked_size);
+    if (checked != NULL) {
+        write_file(checked_path, checked, 40);
+        CHECK(BO3MacFix_PrepatchedIsCurrent(original_path, copy_path, message, sizeof(message)) == 0 &&
+                  strstr(message, "unchanged") == NULL, "a short .checked: \"%s\"", message);
+        // a kept hash that isn't what the copy was made from: the copy isn't current
+        checked[checked_size - 1] ^= 1;
+        write_file(checked_path, checked, checked_size);
+        CHECK(BO3MacFix_PrepatchedIsCurrent(original_path, copy_path, message, sizeof(message)) == -1 &&
+                  strstr(message, "updated") != NULL, "a .checked with another hash: \"%s\"", message);
+        free(checked);
+    }
+    // the original replaced by another file with the same contents (a new inode): hashed again, and current
+    write_file(other_path, original, File_Size);
+    CHECK(rename(other_path, original_path) == 0, "couldn't replace the original");
+    CHECK(BO3MacFix_PrepatchedIsCurrent(original_path, copy_path, message, sizeof(message)) == 0 &&
+              strstr(message, "unchanged") == NULL, "a replaced original: \"%s\"", message);
+    CHECK(BO3MacFix_PrepatchedIsCurrent(original_path, copy_path, message, sizeof(message)) == 0 &&
+              strstr(message, "unchanged") != NULL, "then from the kept hash: \"%s\"", message);
 
     // a copy from another BO3MacFix
     if (copy != NULL) {
@@ -362,6 +394,7 @@ int main(void) {
 
     unlink(other_path);
     unlink(original_path);
+    unlink(checked_path);
     rmdir(directory);
     free(copy);
     free(original);
