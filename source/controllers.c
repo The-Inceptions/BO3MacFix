@@ -16,6 +16,8 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDDevice.h>
 #include <IOKit/hid/IOHIDKeys.h>
+#include <IOKit/hid/IOHIDManager.h>
+#include <IOKit/hid/IOHIDUsageTables.h>
 #include "dobby.h"
 #include "offsets.h"
 #include "controllers.h"
@@ -145,6 +147,196 @@ static bool is_playstation_product(int product) {
     return false;
 }
 
+static void hid_string_property(IOHIDDeviceRef device, CFStringRef key, char *out, size_t size) {
+    out[0] = '\0';
+    CFTypeRef ref = IOHIDDeviceGetProperty(device, key);
+    if (ref != NULL && CFGetTypeID(ref) == CFStringGetTypeID() &&
+        !CFStringGetCString(ref, out, (CFIndex)size, kCFStringEncodingUTF8))
+        out[0] = '\0';
+}
+
+// Steam Input's virtual controllers. With Steam Input on, Steam reads the real controller itself and gives the game a
+// virtual one, which SDL takes as well: with the bridge reading the real DualSense, one controller is two. On macOS
+// the virtual one is a wired Xbox 360 controller (045e:028e) named "GamePad-N", N being its Steam slot + 1 (SDL 2.30
+// reads the slot that way; steamclient.dylib passes over HID devices named "GamePad-" or "Steam Virtual Gamepad" as
+// its own). Elsewhere it's Valve's 28de:11ff. A real Xbox 360 controller has the same ids, but its own name
+// ("Controller", say), so 045e:028e needs the name. Returns the slot (0-15), -1 for a virtual controller whose slot
+// isn't known, or NOT_STEAM_PAD.
+#define NOT_STEAM_PAD (-2)
+#define VALVE_VENDOR_ID 0x28DE
+#define STEAM_VIRTUAL_GAMEPAD 0x11FF
+#define MICROSOFT_VENDOR_ID 0x045E
+#define XBOX360_WIRED 0x028E
+
+static bool steam_pad_ids(int vendor, int product) {
+    return (vendor == VALVE_VENDOR_ID && product == STEAM_VIRTUAL_GAMEPAD) ||
+           (vendor == MICROSOFT_VENDOR_ID && product == XBOX360_WIRED);
+}
+
+static int steam_pad_slot(int vendor, int product, const char *name) {
+    if (!steam_pad_ids(vendor, product))
+        return NOT_STEAM_PAD;
+    if (strncmp(name, "GamePad-", 8) == 0) {
+        const char *digits = name + 8;
+        size_t length = strlen(digits);
+        if (length >= 1 && length <= 2 && digits[0] != '0' && strspn(digits, "0123456789") == length) {
+            int n = atoi(digits);
+            if (n <= 16)
+                return n - 1;
+        }
+    }
+    if (strncmp(name, "Steam Virtual Gamepad", 21) == 0)
+        return -1;
+    return vendor == VALVE_VENDOR_ID ? -1 : NOT_STEAM_PAD;
+}
+
+// Steam lists its virtual controllers in a file, named by the SteamVirtualGamepadInfo variable it starts games with
+// (config/virtualgamepadinfo.txt in Steam's folder): "[slot N]", then name=, VID=0x..., PID=0x..., type= and handle=
+// of the real controller behind slot N. True, with that controller's vendor and product, if the slot is listed.
+static bool steam_info_lookup(const char *text, int slot, int *vendor, int *product) {
+    bool in_slot = false, listed = false;
+    int v = -1, p = -1;
+    for (const char *line = text; *line != '\0';) {
+        size_t length = strcspn(line, "\r\n");
+        int n;
+        if (line[0] == '[') {
+            if (in_slot)
+                break;
+            in_slot = sscanf(line, "[slot %d]", &n) == 1 && n == slot;
+            listed = listed || in_slot;
+        } else if (in_slot && strncmp(line, "VID=", 4) == 0) {
+            v = (int)strtol(line + 4, NULL, 0);
+        } else if (in_slot && strncmp(line, "PID=", 4) == 0) {
+            p = (int)strtol(line + 4, NULL, 0);
+        }
+        line += length;
+        line += strspn(line, "\r\n");
+    }
+    if (!listed || v <= 0 || p <= 0)
+        return false;
+    *vendor = v;
+    *product = p;
+    return true;
+}
+
+static char *read_steam_info(void) {
+    char fallback[1024];
+    const char *path = getenv("SteamVirtualGamepadInfo");
+    if (path == NULL || path[0] == '\0') {
+        const char *home = getenv("HOME");
+        if (home == NULL)
+            return NULL;
+        snprintf(fallback, sizeof(fallback), "%s/Library/Application Support/Steam/config/virtualgamepadinfo.txt", home);
+        path = fallback;
+    }
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL)
+        return NULL;
+    char *text = calloc(1, 16384);
+    if (text != NULL)
+        fread(text, 1, 16383, fp);
+    fclose(fp);
+    return text;
+}
+
+typedef struct {
+    bool listed;         // Steam's file lists the virtual controller's slot
+    bool listed_bridged; // and the real controller there is a PlayStation one, which the bridge reads
+    int bridged;         // PlayStation controllers the bridge reads, or IOKit has (the bridge is about to)
+    int others;          // other real controllers IOKit has, which the bridge leaves to SDL
+} steam_pad_facts;
+
+// keep a Steam virtual controller away from SDL? Only while the bridge has a real controller, and only when the
+// virtual one stands for it: Steam Input still works for controllers the bridge doesn't read. Returns why, for the log
+static const char *steam_pad_verdict(const steam_pad_facts *facts, bool *hide) {
+    *hide = false;
+    if (facts->bridged <= 0)
+        return "the GameController bridge has no PlayStation controller";
+    if (facts->listed) {
+        *hide = facts->listed_bridged;
+        return *hide ? "Steam says it stands for a PlayStation controller, which the GameController bridge reads"
+                     : "Steam says it stands for a controller the GameController bridge doesn't read";
+    }
+    if (facts->others > 0)
+        return "another controller is connected, and Steam doesn't say which one this stands for";
+    *hide = true;
+    return "the GameController bridge's PlayStation controllers are the only ones connected";
+}
+
+// the controllers IOKit has: PlayStation ones (the bridge's), and other real ones (gamepads, joysticks, Valve's own)
+static void count_hid_controllers(int *bridged, int *others) {
+    *bridged = *others = 0;
+    IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+    if (manager == NULL)
+        return;
+    IOHIDManagerSetDeviceMatching(manager, NULL);
+    CFSetRef devices = IOHIDManagerCopyDevices(manager);
+    if (devices != NULL) {
+        CFIndex count = CFSetGetCount(devices);
+        IOHIDDeviceRef *list = calloc(count > 0 ? count : 1, sizeof(IOHIDDeviceRef));
+        if (list != NULL) {
+            CFSetGetValues(devices, (const void **)list);
+            for (CFIndex i = 0; i < count; i++) {
+                int vendor = hid_int_property(list[i], CFSTR(kIOHIDVendorIDKey));
+                int product = hid_int_property(list[i], CFSTR(kIOHIDProductIDKey));
+                int page = hid_int_property(list[i], CFSTR(kIOHIDPrimaryUsagePageKey));
+                int usage = hid_int_property(list[i], CFSTR(kIOHIDPrimaryUsageKey));
+                char name[64];
+                hid_string_property(list[i], CFSTR(kIOHIDProductKey), name, sizeof(name));
+                if (vendor == SONY_VENDOR_ID && is_playstation_product(product))
+                    (*bridged)++;
+                else if (steam_pad_slot(vendor, product, name) != NOT_STEAM_PAD)
+                    continue;
+                else if (vendor == VALVE_VENDOR_ID ||
+                         (page == kHIDPage_GenericDesktop && (usage == kHIDUsage_GD_Joystick || usage == kHIDUsage_GD_GamePad ||
+                                                              usage == kHIDUsage_GD_MultiAxisController)))
+                    (*others)++;
+            }
+            free(list);
+        }
+        CFRelease(devices);
+    }
+    CFRelease(manager);
+}
+
+// a Steam virtual controller SDL is adding: should it be kept away from SDL? (logs what it decided)
+static bool hide_steam_pad(IOHIDDeviceRef device, int vendor, int product) {
+    if (!steam_pad_ids(vendor, product))
+        return false;
+    char name[64];
+    hid_string_property(device, CFSTR(kIOHIDProductKey), name, sizeof(name));
+    int slot = steam_pad_slot(vendor, product, name);
+    if (slot == NOT_STEAM_PAD)
+        return false;
+    steam_pad_facts facts = { 0 };
+    count_hid_controllers(&facts.bridged, &facts.others);
+    int pads = gc_bridge_pad_count();
+    if (pads > facts.bridged)
+        facts.bridged = pads;
+    char *info = slot >= 0 ? read_steam_info() : NULL;
+    int real_vendor, real_product;
+    if (info != NULL && steam_info_lookup(info, slot, &real_vendor, &real_product)) {
+        facts.listed = true;
+        facts.listed_bridged = real_vendor == SONY_VENDOR_ID && is_playstation_product(real_product);
+    }
+    free(info);
+    bool hide;
+    const char *why = steam_pad_verdict(&facts, &hide);
+    printf("BO3MacFix: Steam Input's virtual controller \"%s\" (%04x:%04x), %s: %s\n", name, vendor, product,
+           hide ? "keeping it away from SDL" : "left to SDL", why);
+    return hide;
+}
+
+// a version no SDL mapping has, so SDL doesn't make a game controller of the device
+static CFNumberRef unmapped_version(void) {
+    static CFNumberRef version_unmapped = NULL;
+    if (version_unmapped == NULL) {
+        int v = 0xFFFF;
+        version_unmapped = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &v);
+    }
+    return version_unmapped;
+}
+
 // Controllers connected while the game runs. The game only looks for XInput controllers in its gpadupdate command,
 // which runs at startup and, on Windows, when WM_DEVICECHANGE says devices changed (DBT_DEVNODES_CHANGED); every
 // frame it reads only the user indexes it found then. Aspyr's port sends that message without DBT_DEVNODES_CHANGED,
@@ -219,11 +411,14 @@ CFTypeRef controllers_hid_property(IOHIDDeviceRef device, CFStringRef key, CFTyp
     bool bridged = gc_bridge_enabled() && vendor == SONY_VENDOR_ID && is_playstation_product(product);
     // after startup, this is a controller connected while the game runs: Aspyr takes it as soon as SDL has, but the
     // game has to be asked to look (the bridge asks for its own controllers)
-    if (gamepads_up()) {
+    bool up = gamepads_up();
+    if (up)
         printf("BO3MacFix: SDL found a controller connected while the game runs (%04x:%04x)\n", vendor, product);
-        if (!bridged)
-            controllers_request_gamepad_scan("SDL found a new controller");
-    }
+    // Steam Input's copy of a controller the bridge reads goes the same way as the controller itself
+    if (!bridged && gc_bridge_enabled() && hide_steam_pad(device, vendor, product))
+        return unmapped_version();
+    if (up && !bridged)
+        controllers_request_gamepad_scan("SDL found a new controller");
     if ((!mappings_enabled && !gc_bridge_enabled()) || vendor != SONY_VENDOR_ID)
         return value;
     int version = 0;
@@ -236,13 +431,8 @@ CFTypeRef controllers_hid_property(IOHIDDeviceRef device, CFStringRef key, CFTyp
     printf("BO3MacFix: Sony controller %04x:%04x version %04x over %s\n", vendor, product, version, transport);
 
     if (bridged) {
-        static CFNumberRef version_unmapped = NULL;
-        if (version_unmapped == NULL) {
-            int v = 0xFFFF;
-            version_unmapped = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &v);
-        }
         printf("BO3MacFix: keeping it away from SDL, the GameController bridge reads it\n");
-        return version_unmapped;
+        return unmapped_version();
     }
     if (!is_playstation_product(product) || version == 0x0100)
         return value;

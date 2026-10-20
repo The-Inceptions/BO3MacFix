@@ -7,15 +7,18 @@
 // lightbar colour from settings.ini. The game's own code only ever calls those two XInput functions.
 //
 // Aspyr keeps an SDL controller per XInput user index (player) and gives a new one the first free slot. A bridged
-// controller takes the first index SDL isn't using, and moves if SDL later puts a controller of its own there.
+// controller takes the first index SDL isn't using and keeps it: a controller SDL later puts there moves to the first
+// free index instead, as if the bridged one were in Aspyr's table. Only with no index free does the bridged one move.
 // The game only looks for controllers at startup and when asked, so it's asked whenever one connects or moves later.
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
 #import <CoreHaptics/CoreHaptics.h>
 #include <IOKit/hid/IOHIDManager.h>
 #include <IOKit/hid/IOHIDKeys.h>
+#include <errno.h>
 #include <math.h>
 #include <os/lock.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -184,8 +187,58 @@ static void player_changed(bridged_pad *pad, int old_index, bool taken) {
     }
 }
 
+// Aspyr's lock around its slots (a std::mutex), held while it adds controllers
+static pthread_mutex_t *asl_mutex(void) {
+    return (pthread_mutex_t *)(base_address + ADDR_ASL_XInputMutex);
+}
+
+// Aspyr puts a controller SDL adds (an Xbox one, say) in the first slot whose controller is NULL, and a bridged
+// controller isn't in its table, so the new one can land on a bridged controller's index. Left there, the bridged one
+// would move to another player and the game would read the new one. Move SDL's to the first free index instead, the
+// one Aspyr would have given it with the bridged controller in its table. Under Aspyr's lock, and only if it's free
+// (Aspyr is adding controllers otherwise). Returns 1 moved, 0 nowhere free (the bridged one gives way), -1 try again
+// on the next call.
+static int move_sdl_off(bridged_pad *pad, int user_index) {
+    int to = first_free_user_index();
+    if (to < 0)
+        return 0;
+    int locked = pthread_mutex_trylock(asl_mutex());
+    if (locked == EBUSY)
+        return -1;
+    if (locked != 0)
+        return 0;
+    // { SDL_GameController *; SDL_Haptic *; int effect; } as three words: the rumble first and the controller last, so
+    // Aspyr's XInput, reading without the lock, never sees the controller without its rumble
+    volatile uint64_t *from = (volatile uint64_t *)(base_address + ADDR_ASL_XInputSlots + user_index * 24);
+    volatile uint64_t *dest = (volatile uint64_t *)(base_address + ADDR_ASL_XInputSlots + to * 24);
+    const uint8_t *controller = (const uint8_t *)(uintptr_t)from[0];
+    bool moved = controller != NULL && dest[0] == 0;
+    if (moved) {
+        dest[1] = from[1];
+        dest[2] = from[2];
+        dest[0] = from[0];
+        from[0] = 0;
+        from[1] = 0;
+        from[2] = 0;
+    }
+    pthread_mutex_unlock(asl_mutex());
+    // SDL let go of it meanwhile (the index is free again), or Aspyr filled the free one (look again next time)
+    if (!moved)
+        return controller == NULL ? 1 : -1;
+    sdl_seen[user_index] = NULL;
+    sdl_seen[to] = controller;
+    uint16_t vendor, product;
+    memcpy(&vendor, controller + 0x10, sizeof(vendor));
+    memcpy(&product, controller + 0x14, sizeof(product));
+    printf("GameController bridge: SDL put a controller (%04x:%04x) on player %i, the %s's, moved it to player %i\n",
+           vendor, product, user_index + 1, pad->kind, to + 1);
+    controllers_request_gamepad_scan("an SDL controller moved to a free player");
+    return 1;
+}
+
 // SDL takes the first free slot when a controller it handles connects (an Xbox controller, say), which can be the
-// one a bridged controller is on. Move bridged controllers off slots SDL has taken, give waiting ones a free one, and
+// one a bridged controller is on: SDL's moves to a free one (move_sdl_off). With none free, move bridged controllers
+// off slots SDL has taken. Give waiting ones a free one, and
 // move them down when a lower one is free: the game reads player 1, and when the controller there goes away another
 // one takes its place without the game seeing a gap. A DualSense that goes from Bluetooth to USB can come back as a
 // new controller before macOS says the old one has gone, say.
@@ -197,6 +250,12 @@ static void rehome_pads(void) {
             continue;
         int old_index = pad->user_index;
         bool taken = old_index >= 0 && sdl_slot_in_use(old_index);
+        if (taken) {
+            int moved = move_sdl_off(pad, old_index);
+            if (moved < 0)
+                continue; // the game reads SDL's this once
+            taken = moved == 0;
+        }
         if (taken)
             pad->user_index = -1;
         int free_index = first_free_user_index();
@@ -913,6 +972,17 @@ static void gc_setup(void) {
 
 bool gc_bridge_enabled(void) {
     return enabled;
+}
+
+int gc_bridge_pad_count(void) {
+    if (!enabled)
+        return 0;
+    int count = 0;
+    os_unfair_lock_lock(&pads_lock);
+    for (int i = 0; i < XUSER_MAX_COUNT; i++)
+        count += pads[i].controller != nil;
+    os_unfair_lock_unlock(&pads_lock);
+    return count;
 }
 
 bool gc_bridge_is_playstation_user(int user_index) {
