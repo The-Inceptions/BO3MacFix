@@ -915,6 +915,17 @@ bool gc_bridge_enabled(void) {
     return enabled;
 }
 
+int gc_bridge_pad_count(void) {
+    if (!enabled)
+        return 0;
+    int count = 0;
+    os_unfair_lock_lock(&pads_lock);
+    for (int i = 0; i < XUSER_MAX_COUNT; i++)
+        count += pads[i].controller != nil;
+    os_unfair_lock_unlock(&pads_lock);
+    return count;
+}
+
 bool gc_bridge_is_playstation_user(int user_index) {
     if (!enabled || user_index < 0 || user_index >= XUSER_MAX_COUNT)
         return false;
