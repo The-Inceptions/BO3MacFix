@@ -22,6 +22,12 @@
 #define Checkpoint_Quick_Revive_Dvar "tfoption_spawn_with_quick_res"
 // the perk the HUD calls quick_revive (hudItems.perks.quick_revive), the only one AAE can give by itself
 #define Checkpoint_Quick_Revive_Perk "quick_revive"
+// the "Key = value" entries checkpoint.ini holds: a save's 16 keys and Saved, a resume's InUse, Applied, AppliedPreset
+// and 2 per AAE option (28 in all), with room for more. A save or resume that needs one more is refused, with a log
+// line, and the file stays as it was.
+#define Checkpoint_Max_Entries 64
+// checkpoint_read's out: every entry checkpoint.ini can hold (a 31-character key and a 1023-character value each)
+#define Checkpoint_Read_Size 69632
 
 // AAE's custom mutations files are "modvar <dvar> <value>" lines, which it runs with exec.
 
@@ -47,7 +53,8 @@ typedef struct {
 // has something other than names in it, the loadout doesn't read back, or the file can't be written.
 bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long now);
 
-// the checkpoint as "Key=value" lines into out (empty if there's none)
+// the checkpoint as "Key=value" lines into out (empty if there's none); out_size is Checkpoint_Read_Size, so every
+// line fits
 void checkpoint_read(const checkpoint_paths_t *paths, char *out, size_t out_size);
 
 // sets up the next game to resume the checkpoint: its round (1 to 255), its points, and Perkaholic and Quick Revive if

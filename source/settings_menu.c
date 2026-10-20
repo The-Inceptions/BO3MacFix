@@ -35,7 +35,7 @@ static int lua_checkpoint_save(lua_State *s) {
 
 // ReadCheckpoint(): the checkpoint as "Key=value" lines, empty if there's none
 static int lua_checkpoint_read(lua_State *s) {
-    static char text[8192];
+    static char text[Checkpoint_Read_Size];
     checkpoint_read(&checkpoint_paths, text, sizeof(text));
     hks_push_string(s, text);
     return 1;

@@ -11,9 +11,10 @@
 #include "zm_loadout.h"
 
 #define File_Size 65536
-#define Max_Entries 32
+#define Max_Entries Checkpoint_Max_Entries
 #define Key_Size 32
 #define Value_Size 1024 // a Guns line: a few guns with their attachments, options and ammo types
+_Static_assert(Checkpoint_Read_Size >= Max_Entries * (Key_Size + Value_Size) + 1, "checkpoint_read's lines fit");
 
 // what checkpoint_save takes from the settings page; the rest of checkpoint.ini is ours
 static const char *const saved_keys[] = { "Map",       "Round", "Points",    "Perks", "Weapons", "Equipment",
@@ -124,8 +125,11 @@ static bool store_set(store_t *store, const char *key, const char *value) {
     if (!valid_key(key, strlen(key)) || !valid_value(value, strlen(value)))
         return false;
     if (entry == NULL) {
-        if (store->count == Max_Entries)
+        if (store->count == Max_Entries) {
+            printf("BO3MacFix: checkpoint: checkpoint.ini has no room for %s (it holds %d entries), so it isn't "
+                   "changed\n", key, Max_Entries);
             return false;
+        }
         entry = &store->entries[store->count++];
         snprintf(entry->key, sizeof(entry->key), "%s", key);
     }
@@ -186,7 +190,11 @@ static bool save_store(const char *path, store_t *store) {
     for (int i = 0; i < store->count && used < sizeof(text); i++)
         used += (size_t)snprintf(text + used, sizeof(text) - used, "%s = %s\n", store->entries[i].key,
                                  store->entries[i].value);
-    return used < sizeof(text) && write_file(path, text);
+    if (used >= sizeof(text)) {
+        printf("BO3MacFix: checkpoint: checkpoint.ini would be over %d KB, so it isn't changed\n", File_Size / 1024);
+        return false;
+    }
+    return write_file(path, text);
 }
 
 // a whole number in text, nothing else
@@ -385,10 +393,16 @@ bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long no
         !loadout_parse_gun_ammo(store_get(&given, "GunAmmo"), &loadout) ||
         !loadout_parse_hero_power(store_get(&given, "HeroPower"), &loadout))
         return false;
-    // a key this save doesn't have goes, so nothing from the last game stays with this one
+    // a key this save doesn't have goes, so nothing from the last game stays with this one; first, so it makes room
+    // for this save's keys
     for (size_t i = 0; i < sizeof(saved_keys) / sizeof(saved_keys[0]); i++)
-        if (!store_set(&store, saved_keys[i], store_get(&given, saved_keys[i])))
+        if (store_get(&given, saved_keys[i]) == NULL)
+            store_set(&store, saved_keys[i], NULL);
+    for (size_t i = 0; i < sizeof(saved_keys) / sizeof(saved_keys[0]); i++) {
+        const char *value = store_get(&given, saved_keys[i]);
+        if (value != NULL && !store_set(&store, saved_keys[i], value))
             return false;
+    }
     char saved[32];
     snprintf(saved, sizeof(saved), "%ld", now);
     return store_set(&store, "Saved", saved) && save_store(paths->checkpoint, &store);
