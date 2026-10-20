@@ -160,6 +160,8 @@ static bool let_through(void *ent, uint64_t return_address) {
 #define Attachment_Count 44
 #define Restore_Ms 30000   // how long a restore set up from Lua waits for its give command
 #define Restore_Command "bo3macfix_restore"
+#define Switch_Command "bo3macfix_switch" // the gun in hand again, after a restore during a map's intro
+#define Switch_Ms 10000                   // how long its command is waited for
 
 // the game's handle for a script function: its "script::function" name, then where its code starts
 typedef struct {
@@ -194,6 +196,8 @@ static int (*BG_GetMaxAmmo)(void *ps, uint64_t weapon, uint64_t arg);
 static void *(*Dvar_FindByHash)(uint32_t hash);
 static int (*Dvar_GetInt)(const void *dvar);
 
+static uint64_t (*Gadget_SlotWeapon)(void *client, int slot);
+static void (*G_GadgetPowerSet)(void *client, void *gadget, uint64_t weapon, int time, float power);
 
 // the server script VM, read through safe_read
 static loadout_vm_t server_vm(void) {
@@ -316,6 +320,16 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
             out->held = out->gun_count;
         out->gun_count++;
     }
+    // the hero weapon's charge: gadget slot 0's power, which the stock _zm_hero_weapon.gsc reads for the HUD
+    for (int i = 0; i < out->item_count && !out->have_hero_power; i++) {
+        float power = 0;
+        if (loadout_is_hero_weapon(out->items[i].name) &&
+            safe_read(client + gclient_Gadget0Power, &power, sizeof(power)) && power >= 0 && power <= 100.5f) {
+            snprintf(out->hero_name, sizeof(out->hero_name), "%s", out->items[i].name);
+            out->hero_power = power > 100 ? 100 : (int)(power + 0.5f);
+            out->have_hero_power = true;
+        }
+    }
     // AAE's Repack-a-Punch levels (level.pap_lvup, keyed by self.guid and the root weapon's name)
     char guid[32];
     bool have_guid = player != 0 && loadout_vm_guid(&vm, player, guid, sizeof(guid));
@@ -344,7 +358,33 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
 typedef struct {
     uint8_t *ent, *client;
     int entnum;
+    uint64_t switched_to; // the gun the restore put in hand
 } restore_context_t;
+
+// whether the player has control: not linked to another entity (Ascension's intro links it to the lander), its
+// controls not frozen, its weapons not off; what it lacks in why, and the raw values in raw (for the log)
+static bool player_controls(uint64_t ent, uint64_t client, char *why, size_t why_size, char *raw, size_t raw_size) {
+    uint64_t tag_info = 0;
+    uint8_t link = 0, weapon_flags = 0;
+    uint32_t flags = 0;
+    bool read = safe_read(ent + gentity_TagInfo, &tag_info, sizeof(tag_info)) &&
+                safe_read(ent + gentity_LinkFlags, &link, sizeof(link)) &&
+                safe_read(client + gclient_Flags, &flags, sizeof(flags)) &&
+                safe_read(client + gclient_WeaponFlags, &weapon_flags, sizeof(weapon_flags));
+    if (raw_size > 0)
+        snprintf(raw, raw_size, "tag info %s, link byte %#x, flags %#x, weapon flags %#x", tag_info != 0 ? "set" : "none",
+                 link, flags, weapon_flags);
+    if (!read) {
+        snprintf(why, why_size, "unreadable");
+        return false;
+    }
+    snprintf(why, why_size, "%s%s%s", tag_info != 0 ? "linked " : "", (flags & gclient_Frozen) ? "frozen " : "",
+             (weapon_flags & gclient_WeaponsDisabled) ? "weapons off " : "");
+    size_t len = strlen(why);
+    if (len > 0)
+        why[len - 1] = '\0';
+    return len == 0;
+}
 
 // the weapon by the name the server looks it up by, or else by its other form (with or without "_zm")
 static uint64_t op_weapon_for_name(void *context, const char *name) {
@@ -534,9 +574,23 @@ static bool op_set_ammo(void *context, uint64_t weapon, int clip, int stock) {
     return true;
 }
 
+// what the GadgetPowerSet builtin does for slot 0 (the stock hero weapon script's), if the hero weapon is in that slot;
+// true if the power reads back as given
+static bool op_set_hero_power(void *context, uint64_t weapon, int power) {
+    restore_context_t *c = context;
+    if (Gadget_SlotWeapon(c->client, 0) != weapon)
+        return false;
+    int time = 0;
+    safe_read(base + ADDR_level_Time, &time, sizeof(time));
+    G_GadgetPowerSet(c->client, c->client + gclient_Gadgets, weapon, time, (float)power);
+    float now = -1;
+    return safe_read((uint64_t)c->client + gclient_Gadget0Power, &now, sizeof(now)) && now > power - 1 && now < power + 1;
+}
+
 static void op_switch_to(void *context, uint64_t weapon) {
     restore_context_t *c = context;
     G_SwitchToWeapon(c->ent, 0, weapon);
+    c->switched_to = weapon;
 }
 
 static os_unfair_lock restore_lock = OS_UNFAIR_LOCK_INIT;
@@ -545,6 +599,11 @@ static bool restore_pap_test; // the plan is the test switch's, given the Pack-a
 static long long restore_until; // when the plan set up stops waiting for its command, 0 for none
 static char restore_result[512];
 static bool restore_finished;
+// after a restore made while the player had no control (loadout_switch_poll), and the switch its command makes
+static loadout_switch_t switch_watch;
+static uint64_t switch_weapon;
+static long long switch_until;
+static char switch_state[64]; // what the last poll saw, logged when it changes
 
 static const char *set_restore(const loadout_t *plan, bool pap_test) {
     os_unfair_lock_lock(&restore_lock);
@@ -627,14 +686,15 @@ static void finish_restore(const char *text) {
     os_unfair_lock_unlock(&restore_lock);
 }
 
-// whether the client command CheatsOk was asked for, returning to return_address, is "give bo3macfix_restore"
-static bool restore_command(uint64_t return_address) {
+// which of BO3MacFix's give commands the client command CheatsOk was asked for (returning to return_address) is:
+// 1 "give bo3macfix_restore", 2 "give bo3macfix_switch", 0 neither
+static int restore_command(uint64_t return_address) {
     if (return_address != base + ADDR_CheatsOk_From_Give || SV_Cmd_ArgvBuffer == NULL)
-        return false;
+        return 0;
     char arg[64];
     arg[0] = '\0';
     SV_Cmd_ArgvBuffer(1, arg, sizeof(arg));
-    return strcmp(arg, Restore_Command) == 0;
+    return strcmp(arg, Restore_Command) == 0 ? 1 : strcmp(arg, Switch_Command) == 0 ? 2 : 0;
 }
 
 // the restore set up last, for the local player, while it's alive; in the give command, on the server thread, where
@@ -662,7 +722,7 @@ static void run_restore(void *ent) {
         !safe_read((uint64_t)ent + gentity_Client, &client, sizeof(client)) || client == 0 ||
         !safe_read((uint64_t)ent + gentity_Health, &health, sizeof(health)) || health <= 0)
         return finish_restore("not for the local player, or it isn't alive");
-    restore_context_t context = { ent, (uint8_t *)client, 0 };
+    restore_context_t context = { ent, (uint8_t *)client, 0, 0 };
     char text[512];
     if (pap_test) {
         run_pap_test(&context, &plan, text, sizeof(text));
@@ -670,11 +730,85 @@ static void run_restore(void *ent) {
     }
     loadout_ops_t ops = { &context,     op_weapon_for_name, op_primaries, op_take,      op_give,
                           op_acquire_aat, op_has_perk,      op_give_perk, op_switch_to, op_set_pap_level,
-                          op_holds,       op_give_item,     op_set_ammo };
+                          op_holds,       op_give_item,     op_set_ammo,  op_set_hero_power };
     loadout_result_t result;
     loadout_restore(&plan, &ops, &result);
     loadout_result_text(&result, text, sizeof(text));
+    // a map's intro that still has the player (linked, frozen) can put a gun of its own in hand as it ends
+    char why[64], raw[96];
+    bool controlled = player_controls((uint64_t)ent, client, why, sizeof(why), raw, sizeof(raw));
+    os_unfair_lock_lock(&restore_lock);
+    loadout_switch_start(&switch_watch, context.switched_to, controlled);
+    switch_weapon = 0;
+    switch_state[0] = '\0'; // the first poll is logged
+    os_unfair_lock_unlock(&restore_lock);
+    if (context.switched_to != 0 && !controlled)
+        printf("BO3MacFix: zm inventory: the player has no control yet (%s; %s): the gun in hand is looked at again "
+               "once it has\n", why, raw);
     finish_restore(text);
+}
+
+// "give bo3macfix_switch": the gun the restore put in hand, again, if the player still holds it and has another in hand
+static void run_switch(void *ent) {
+    os_unfair_lock_lock(&restore_lock);
+    uint64_t weapon = now_ms() < switch_until ? switch_weapon : 0;
+    switch_weapon = 0;
+    os_unfair_lock_unlock(&restore_lock);
+    uint64_t first = entities(), client = 0, in_hand = 0;
+    int health = 0;
+    if (weapon == 0 || ent == NULL || (uint64_t)ent != first ||
+        !safe_read((uint64_t)ent + gentity_Client, &client, sizeof(client)) || client == 0 ||
+        !safe_read((uint64_t)ent + gentity_Health, &health, sizeof(health)) || health <= 0 ||
+        !safe_read(client + gclient_Weapon, &in_hand, sizeof(in_hand))) {
+        printf("BO3MacFix: zm inventory: a switch command with nothing set up, or not for the local player alive\n");
+        return;
+    }
+    char name[72] = "?";
+    weapon_script_name(weapon, name, sizeof(name));
+    if (in_hand == weapon || !holds(client, weapon)) {
+        printf("BO3MacFix: zm inventory: no switch to %s: %s\n", name, in_hand == weapon ? "in hand already" : "not held");
+        return;
+    }
+    G_SwitchToWeapon(ent, 0, weapon);
+    printf("BO3MacFix: zm inventory: switched to the saved gun in hand again: %s\n", name);
+}
+
+const char *zm_inventory_switch_poll(void) {
+    uint64_t first = entities(), client = 0, in_hand = 0;
+    char why[64] = "no player", raw[96] = "";
+    bool readable = first != 0 && safe_read(first + gentity_Client, &client, sizeof(client)) && client != 0 &&
+                    safe_read(client + gclient_Weapon, &in_hand, sizeof(in_hand));
+    bool controlled = readable && player_controls(first, client, why, sizeof(why), raw, sizeof(raw));
+    os_unfair_lock_lock(&restore_lock);
+    uint64_t weapon = switch_watch.weapon;
+    os_unfair_lock_unlock(&restore_lock);
+    if (weapon == 0)
+        return NULL;
+    bool held = readable && holds(client, weapon);
+    char state[64], name[72] = "none";
+    if (in_hand != 0)
+        weapon_script_name(in_hand, name, sizeof(name));
+    // what's logged when it changes: control, and the gun in hand
+    snprintf(state, sizeof(state), "%s, %s", controlled ? "in control" : why, name);
+    os_unfair_lock_lock(&restore_lock);
+    // (a restore since the read above starts over)
+    loadout_switch_action_t action = switch_watch.weapon != weapon ? Loadout_Switch_Wait :
+        loadout_switch_poll(&switch_watch, controlled, in_hand, held);
+    if (action == Loadout_Switch_Now) {
+        switch_weapon = weapon;
+        switch_until = now_ms() + Switch_Ms;
+    }
+    // the log tells when the player got control and what it had in hand then
+    bool changed = strcmp(state, switch_state) != 0;
+    snprintf(switch_state, sizeof(switch_state), "%s", state);
+    os_unfair_lock_unlock(&restore_lock);
+    if (changed)
+        printf("BO3MacFix: zm inventory: after the restore: %s in hand%s (%s)\n", state,
+               in_hand == weapon ? " (the saved one)" : "", raw);
+    if (action == Loadout_Switch_Now)
+        printf("BO3MacFix: zm inventory: %s in hand once the player had control, not the saved gun: switching back\n",
+               name);
+    return action == Loadout_Switch_Done ? NULL : action == Loadout_Switch_Now ? "give " Switch_Command : "";
 }
 
 // CheatsOk(ent): whether ent may use cheat commands (sv_cheats is on and it's alive). BO3MacFix's own give and take
@@ -683,10 +817,13 @@ static void run_restore(void *ent) {
 // The hook is reached by a jump (the pre-patched copy's stub or Dobby's), so the return address is the game's caller.
 install_hook_name(CheatsOk, int, void *ent) {
     uint64_t from = (uint64_t)__builtin_return_address(0);
-    if (restore_command(from)) {
+    int command = restore_command(from);
+    if (command == 1)
         run_restore(ent);
+    else if (command == 2)
+        run_switch(ent);
+    if (command != 0)
         return 0;
-    }
     if (let_through(ent, from)) {
         printf("BO3MacFix: zm inventory: let BO3MacFix's command past the cheat check\n");
         return 1;
@@ -720,6 +857,8 @@ void zm_inventory_init(uint64_t game_base) {
     BG_GetMaxAmmo = (void *)(base + ADDR_BG_GetMaxAmmo);
     Dvar_FindByHash = (void *)(base + ADDR_Dvar_FindByHash);
     Dvar_GetInt = (void *)(base + ADDR_Dvar_GetInt);
+    Gadget_SlotWeapon = (void *)(base + ADDR_Gadget_SlotWeapon);
+    G_GadgetPowerSet = (void *)(base + ADDR_G_GadgetPowerSet);
 }
 
 // at start-up, before the game's threads run: the pre-patched copy has a slot for it, so that only stores a pointer.

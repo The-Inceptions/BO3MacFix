@@ -274,6 +274,8 @@ static uint64_t g_weapon_for_name(void *context, const char *name) {
         return 0x62;
     if (strcmp(name, "zod_riotshield") == 0)
         return 0x63;
+    if (strcmp(name, "hero_annihilator") == 0)
+        return 0x64;
     return 0;
 }
 
@@ -307,6 +309,12 @@ static bool g_give_item(void *context, uint64_t weapon) {
 static bool g_set_ammo(void *context, uint64_t weapon, int clip, int stock) {
     game_t *game = context;
     call(game, "ammo %" PRIx64 " %d %d", weapon, clip, stock);
+    return !game->fail_ammo;
+}
+
+static bool g_set_hero_power(void *context, uint64_t weapon, int power) {
+    game_t *game = context;
+    call(game, "power %" PRIx64 " %d", weapon, power);
     return !game->fail_ammo;
 }
 
@@ -364,7 +372,7 @@ static const char *restore(game_t *game, const char *guns, const char *in_hand, 
     if (!loadout_parse(guns, in_hand, perks, &saved))
         return "(malformed)";
     loadout_ops_t ops = { game, g_weapon_for_name, g_primaries, g_take,      g_give,
-                          g_acquire_aat, g_has_perk, g_give_perk, g_switch_to, NULL, NULL, NULL, NULL };
+                          g_acquire_aat, g_has_perk, g_give_perk, g_switch_to, NULL, NULL, NULL, NULL, NULL };
     game->calls[0] = '\0';
     memcpy(game->now, game->held, sizeof(game->now));
     game->now_count = game->held_count;
@@ -381,9 +389,9 @@ static const char *restore_full(game_t *game, const char *guns, const char *perk
         return "(malformed)";
     loadout_ops_t ops = { game,          g_weapon_for_name, g_primaries, g_take,      g_give,
                           g_acquire_aat, g_has_perk,        g_give_perk, g_switch_to, g_set_pap_level,
-                          g_holds,       g_give_item,       g_set_ammo };
+                          g_holds,       g_give_item,       g_set_ammo,  g_set_hero_power };
     if (!new_ops)
-        ops.set_pap_level = NULL, ops.holds = NULL, ops.give_item = NULL, ops.set_ammo = NULL;
+        ops.set_pap_level = NULL, ops.holds = NULL, ops.give_item = NULL, ops.set_ammo = NULL, ops.set_hero_power = NULL;
     game->calls[0] = '\0';
     memcpy(game->now, game->held, sizeof(game->now));
     game->now_count = game->held_count;
@@ -631,6 +639,106 @@ static void test_pap_levels(void) {
     CHECK(loadout_vm_read_pap_levels(&reader, NULL, &hex) == 1 && hex.guns[0].pap_level == 4);
 }
 
+// the hero weapon's charge: HeroPower's text, and given back once the hero weapon is
+static void test_hero_power(void) {
+    loadout_t loadout;
+    loadout_clear(&loadout);
+    char out[256];
+    CHECK(loadout_format_hero_power(&loadout, out, sizeof(out)) && out[0] == '\0'); // none
+    CHECK(loadout_parse_hero_power(NULL, &loadout) && loadout_parse_hero_power("", &loadout) && !loadout.have_hero_power);
+    CHECK(loadout_parse_hero_power("hero_annihilator:40", &loadout) && loadout.have_hero_power &&
+          loadout.hero_power == 40 && strcmp(loadout.hero_name, "hero_annihilator") == 0);
+    CHECK(loadout_format_hero_power(&loadout, out, sizeof(out)) && strcmp(out, "hero_annihilator:40") == 0);
+    CHECK(loadout_parse_hero_power("glaive_apothicon_0:100", &loadout) && loadout.hero_power == 100);
+    CHECK(loadout_parse_hero_power("hero_gravityspikes_melee:0", &loadout) && loadout.hero_power == 0);
+    // malformed, or not a hero weapon: refused, and what was there stays
+    const char *bad[] = { "hero_annihilator", "hero_annihilator:", "hero_annihilator:101", "hero_annihilator:-1",
+                          "hero_annihilator:4x", "ray_gun_upgraded:40", "hero annihilator:40", ":40" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        CHECK(!loadout_parse_hero_power(bad[i], &loadout) && loadout.hero_power == 0);
+    CHECK(loadout_is_hero_weapon("hero_mirg2000") && loadout_is_hero_weapon("glaive_keeper_0") &&
+          !loadout_is_hero_weapon("zod_riotshield") && !loadout_is_hero_weapon("ray_gun"));
+    // given back after the items (the hero weapon given first), and told when it can't be
+    game_t game;
+    memset(&game, 0, sizeof(game));
+    game.held[0] = pistol;
+    game.held_count = 1;
+    loadout_result_t result;
+    loadout_t saved;
+    CHECK(loadout_parse("ray_gun_upgraded_zm:0:0:", NULL, "", &saved) &&
+          loadout_parse_items("hero_annihilator::", &saved) && loadout_parse_hero_power("hero_annihilator:40", &saved));
+    loadout_ops_t ops = { &game,         g_weapon_for_name, g_primaries, g_take,      g_give,
+                          g_acquire_aat, g_has_perk,        g_give_perk, g_switch_to, g_set_pap_level,
+                          g_holds,       g_give_item,       g_set_ammo,  g_set_hero_power };
+    loadout_restore(&saved, &ops, &result);
+    CHECK(strstr(game.calls, "item 64; power 64 40; ") != NULL && result.hero_power == 1 && result.failed == 0);
+    char text[512];
+    loadout_result_text(&result, text, sizeof(text));
+    CHECK(strstr(text, "hero weapon's charge, ") != NULL);
+    // an older game without the op, or the hero weapon not held
+    memset(&game, 0, sizeof(game));
+    ops.set_hero_power = NULL;
+    loadout_restore(&saved, &ops, &result);
+    CHECK(result.hero_power == 0 && result.failed == 1 && strstr(result.failures, "no charge for hero_annihilator"));
+    memset(&game, 0, sizeof(game));
+    ops.set_hero_power = g_set_hero_power;
+    game.fail_item = true;
+    loadout_restore(&saved, &ops, &result);
+    CHECK(result.hero_power == 0 && strstr(game.calls, "power") == NULL &&
+          strstr(result.failures, "no charge for hero_annihilator"));
+}
+
+// the gun in hand after a restore made during a map's intro (loadout_switch_*)
+static loadout_switch_action_t polls(loadout_switch_t *state, int count, bool controlled, uint64_t in_hand, bool holds) {
+    loadout_switch_action_t action = Loadout_Switch_Wait;
+    for (int i = 0; i < count; i++)
+        action = loadout_switch_poll(state, controlled, in_hand, holds);
+    return action;
+}
+
+static void test_switch(void) {
+    const uint64_t ray_gun = 0x45, pistol = 0x12;
+    loadout_switch_t state;
+    // in control at the restore (Kino): nothing to watch, whatever the player switches to later
+    loadout_switch_start(&state, ray_gun, true);
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Done);
+    // nothing switched to: nothing to watch
+    loadout_switch_start(&state, 0, false);
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Done);
+    // Ascension: no control during the intro, whatever is in hand; then the game's pistol once it has control, for a
+    // moment first: switched back once
+    loadout_switch_start(&state, ray_gun, false);
+    CHECK(polls(&state, 30, false, pistol, true) == Loadout_Switch_Wait);
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Wait); // the settle
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Now);
+    CHECK(polls(&state, 3, true, pistol, true) == Loadout_Switch_Wait); // never twice
+    CHECK(polls(&state, Loadout_Switch_Watch_Polls, true, ray_gun, true) == Loadout_Switch_Done);
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Done);
+    // the saved gun still in hand once in control: watched a while, then done, no switch
+    loadout_switch_start(&state, ray_gun, false);
+    CHECK(polls(&state, 4, false, ray_gun, true) == Loadout_Switch_Wait);
+    for (int i = 0; i < Loadout_Switch_Settle_Polls + Loadout_Switch_Watch_Polls - 1; i++)
+        CHECK(loadout_switch_poll(&state, true, ray_gun, true) == Loadout_Switch_Wait);
+    CHECK(loadout_switch_poll(&state, true, ray_gun, true) == Loadout_Switch_Done);
+    // the game's switch a moment after the player gets control is still seen
+    loadout_switch_start(&state, ray_gun, false);
+    CHECK(polls(&state, Loadout_Switch_Settle_Polls + 3, true, ray_gun, true) == Loadout_Switch_Wait);
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Now);
+    // control lost again before the moment is up: it starts over
+    loadout_switch_start(&state, ray_gun, false);
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Wait);
+    CHECK(loadout_switch_poll(&state, false, pistol, true) == Loadout_Switch_Wait);
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Wait);
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Now);
+    // the saved gun gone (taken by the game): nothing to switch to
+    loadout_switch_start(&state, ray_gun, false);
+    CHECK(polls(&state, Loadout_Switch_Settle_Polls, true, pistol, false) == Loadout_Switch_Done);
+    // never gets control: gives up after the most polls
+    loadout_switch_start(&state, ray_gun, false);
+    CHECK(polls(&state, Loadout_Switch_Max_Polls, false, pistol, true) == Loadout_Switch_Wait);
+    CHECK(loadout_switch_poll(&state, true, pistol, true) == Loadout_Switch_Done);
+}
+
 int main(void) {
     test_hash();
     test_names();
@@ -640,6 +748,8 @@ int main(void) {
     test_pap_levels();
     test_restore_more();
     test_items_text();
+    test_switch();
+    test_hero_power();
     if (failures == 0)
         printf("test_zm_loadout: all passed\n");
     return failures == 0 ? 0 : 1;

@@ -18,10 +18,10 @@
 -- seconds in. Then AutoSave's writer and deleting the save (checkpoint_autosave.c), and its test switch: how many
 -- seconds of a match only set the round it starts at (10). Then zm_inventory.c's full loadout: reading it, setting
 -- the checkpoint's up to be given back and what that did, setting a test one up; and its test switch: give these perks
--- first (a PerkList line).
+-- first (a PerkList line). Then the gun in hand after a restore made during a map's intro (zm_inventory_switch_poll).
 local save_fn, read_fn, apply_fn, clear_fn, resume_fn, weapons_fn, weapon_commands_fn, allow_cheats_fn, notice_fn,
     save_after, give_test, report_after, autosave_fn, delete_fn, autosave_start, loadout_fn, restore_fn,
-    restore_result_fn, test_loadout_fn, perks_test = ...
+    restore_result_fn, test_loadout_fn, perks_test, restore_switch_fn = ...
 local bo3macfix = BO3MacFix
 if bo3macfix == nil or read_fn == nil then return end
 bo3macfix.SaveCheckpoint, bo3macfix.ReadCheckpoint, bo3macfix.ApplyCheckpoint = save_fn, read_fn, apply_fn
@@ -30,6 +30,7 @@ bo3macfix.CheckpointWeaponCommands, bo3macfix.CheckpointAllowCheats = weapon_com
 bo3macfix.CheckpointNotice = notice_fn
 bo3macfix.CheckpointLoadout, bo3macfix.CheckpointRestoreLoadout = loadout_fn, restore_fn
 bo3macfix.CheckpointRestoreResult, bo3macfix.CheckpointTestLoadout = restore_result_fn, test_loadout_fn
+bo3macfix.CheckpointRestoreSwitch = restore_switch_fn
 local log = bo3macfix.Log or function() end
 
 local POLL_MS = 500
@@ -251,7 +252,8 @@ local function collect(controller)
                     "\nPerkList=" .. (checkpoint.PerkList or "") ..
                     (checkpoint.PapLevels ~= nil and ("\nPapLevels=" .. checkpoint.PapLevels) or "") ..
                     (checkpoint.Items ~= nil and ("\nItems=" .. checkpoint.Items) or "") ..
-                    (checkpoint.GunAmmo ~= nil and ("\nGunAmmo=" .. checkpoint.GunAmmo) or "")
+                    (checkpoint.GunAmmo ~= nil and ("\nGunAmmo=" .. checkpoint.GunAmmo) or "") ..
+                    (checkpoint.HeroPower ~= nil and ("\nHeroPower=" .. checkpoint.HeroPower) or "")
                 perks = split(checkpoint.Perks)
             else
                 -- an older save without them stays one: the loadout read now is the starting guns', and a Guns line
@@ -625,6 +627,7 @@ local function poll(controller)
             -- last try) gave nothing back, so saves keep the checkpoint's loadout, as before it's back
             local ran = loadout_pending ~= "resume" or string.find(result, "^took ") ~= nil
             match.restoring_at, match.restored_at = nil, match.polls
+            match.switch_watch = string.find(result, "^took ") ~= nil and bo3macfix.CheckpointRestoreSwitch ~= nil
             if ran then loadout_pending = nil end
             local _, _, raw = weapons_now()
             log("checkpoint: loadout " .. (ran and "restored: " or "not restored: ") .. result .. "; weapons now " ..
@@ -646,6 +649,18 @@ local function poll(controller)
             match.restoring_at = nil
             if loadout_pending ~= "resume" then loadout_pending = nil end
             log("checkpoint: the saved loadout wasn't restored: the game didn't run its give command")
+        end
+    end
+    -- a restore made while a map's intro still had the player (Ascension's lander ride): the game puts a gun of its
+    -- own in hand as the intro ends, so zm_inventory.c looks once the player has control, and its command switches
+    -- back to the saved gun
+    if match.switch_watch then
+        local command = call(bo3macfix.CheckpointRestoreSwitch)
+        if type(command) ~= "string" then
+            match.switch_watch = nil
+        elseif command ~= "" then
+            log("checkpoint: switching back to the saved gun in hand")
+            run_commands(controller, command)
         end
     end
     -- the HUD's round is one less than roundsPlayed

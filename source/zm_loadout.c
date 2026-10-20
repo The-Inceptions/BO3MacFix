@@ -524,6 +524,15 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         if (gun->aat[0] != '\0' && !ops->acquire_aat(context, wanted[i], gun->aat))
             note_failure(result, "no ammo type", gun->aat);
     }
+    // the hero weapon's charge, once it's back
+    if (saved->have_hero_power) {
+        uint64_t weapon = ops->weapon_for_name(context, saved->hero_name);
+        if (weapon != 0 && ops->holds != NULL && ops->holds(context, weapon) && ops->set_hero_power != NULL &&
+            ops->set_hero_power(context, weapon, saved->hero_power))
+            result->hero_power++;
+        else
+            note_failure(result, "no charge for", saved->hero_name);
+    }
     // the guns' clip and stock, which came back as their start ammo
     for (int i = 0; i < saved->gun_count; i++) {
         const loadout_gun_t *gun = &saved->guns[i];
@@ -547,14 +556,47 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
 void loadout_result_text(const loadout_result_t *result, char *out, size_t out_size) {
     char more[160] = "";
     if (result->pap_levels > 0 || result->items > 0 || result->items_had > 0 || result->ammo > 0)
-        snprintf(more, sizeof(more), "%d repack levels, %d items (%d held already), ammo for %d, ", result->pap_levels,
-                 result->items, result->items_had, result->ammo);
+        snprintf(more, sizeof(more), "%d repack levels, %d items (%d held already), ammo for %d, %s", result->pap_levels,
+                 result->items, result->items_had, result->ammo, result->hero_power > 0 ? "hero weapon's charge, " : "");
     if (result->given_back > 0)
         snprintf(more + strlen(more), sizeof(more) - strlen(more), "%d guns given back after an item's give, ",
                  result->given_back);
     snprintf(out, out_size, "took %d, gave %d guns (%d held already), %d ammo types, %d perks (%d had already), %s%d "
              "failed%s%s", result->taken, result->given, result->kept, result->aats, result->perks, result->perks_had,
              more, result->failed, result->failed > 0 ? ": " : "", result->failures);
+}
+
+// ---- after a restore: the gun in hand once the player has control
+
+void loadout_switch_start(loadout_switch_t *state, uint64_t weapon, bool controlled) {
+    memset(state, 0, sizeof(*state));
+    // with the player in control the switch has landed as it does on Kino
+    state->weapon = controlled ? 0 : weapon;
+}
+
+loadout_switch_action_t loadout_switch_poll(loadout_switch_t *state, bool controlled, uint64_t in_hand, bool holds) {
+    if (state->weapon == 0)
+        return Loadout_Switch_Done;
+    if (++state->polls > Loadout_Switch_Max_Polls) {
+        state->weapon = 0;
+        return Loadout_Switch_Done;
+    }
+    // (control lost again, a later scene say: the moment counts from when it's back)
+    if (!controlled) {
+        state->controlled_polls = 0;
+        return Loadout_Switch_Wait;
+    }
+    if (++state->controlled_polls < Loadout_Switch_Settle_Polls)
+        return Loadout_Switch_Wait;
+    if (!holds || state->controlled_polls >= Loadout_Switch_Settle_Polls + Loadout_Switch_Watch_Polls) {
+        state->weapon = 0;
+        return Loadout_Switch_Done;
+    }
+    if (in_hand != state->weapon && !state->switched) {
+        state->switched = true;
+        return Loadout_Switch_Now;
+    }
+    return Loadout_Switch_Wait;
 }
 
 // ---- AAE's Repack-a-Punch levels
@@ -878,4 +920,43 @@ void loadout_vm_describe_pap(const loadout_vm_t *vm, uint32_t entity, char *out,
                child.value);
         id = child.next;
     }
+}
+
+// ---- the hero weapon's charge: "HeroPower = name:power"
+
+bool loadout_is_hero_weapon(const char *name) {
+    return strncmp(name, "hero_", 5) == 0 || strncmp(name, "glaive_", 7) == 0;
+}
+
+bool loadout_format_hero_power(const loadout_t *loadout, char *out, size_t out_size) {
+    if (out_size == 0)
+        return false;
+    out[0] = '\0';
+    if (!loadout->have_hero_power)
+        return true;
+    int len = snprintf(out, out_size, "%s:%d", loadout->hero_name, loadout->hero_power);
+    if (len < 0 || (size_t)len >= out_size || !loadout_valid_name(loadout->hero_name) || loadout->hero_power < 0 ||
+        loadout->hero_power > 100) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
+bool loadout_parse_hero_power(const char *value, loadout_t *loadout) {
+    if (value == NULL || value[0] == '\0')
+        return true;
+    const char *colon = strchr(value, ':');
+    char name[Loadout_Name_Size];
+    if (colon == NULL || !copy_field(value, colon, name, sizeof(name)) || !loadout_valid_name(name) ||
+        !loadout_is_hero_weapon(name))
+        return false;
+    char *end = NULL;
+    long power = strtol(colon + 1, &end, 10);
+    if (end == colon + 1 || *end != '\0' || power < 0 || power > 100)
+        return false;
+    snprintf(loadout->hero_name, sizeof(loadout->hero_name), "%s", name);
+    loadout->hero_power = (int)power;
+    loadout->have_hero_power = true;
+    return true;
 }

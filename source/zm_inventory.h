@@ -43,3 +43,9 @@ const char *zm_inventory_set_pap_test(const loadout_t *plan);
 
 // once the restore has run: what it did, as one line (loadout_result_text), into out; false until then
 bool zm_inventory_restore_result(char *out, size_t out_size);
+
+// after a restore made while the player had no control (a map's intro: Ascension's lander ride), called by Lua at each
+// poll: NULL once there's nothing more to look at, "" meanwhile, and "give bo3macfix_switch" when the player has had
+// control for a moment with a gun in hand other than the one the restore put there (the game's own, as the intro
+// ended): that command switches back to it, on the server thread (loadout_switch_poll). From the UI thread.
+const char *zm_inventory_switch_poll(void);
