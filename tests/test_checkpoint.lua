@@ -430,8 +430,9 @@ polls(2)
 check(#notices == said, "nothing said before the game answers")
 restore_result = "took 1, gave 2 guns (0 held already), 1 ammo types, 2 perks (0 had already), 0 failed"
 weapons = "ar_standard_upgraded_zm+reflex+extclip:0,ray_gun_upgraded_zm:0,frag_grenade_zm:1,knife_zm:4"
--- after the restore: watching ("") while the intro has the player, then the switch back, then nothing more (nil)
-switch_answers, switch_calls = { "", "", "give bo3macfix_switch", "" }, 0
+-- after the restore: watching ("") while the intro has the player, then the switch back, the shield's health once the
+-- shield is held, then nothing more (nil)
+switch_answers, switch_calls = { "", "", "give bo3macfix_switch", "", "give bo3macfix_shield" }, 0
 polls(1)
 check(string.find(notices[#notices - 1] or "", "Guns back: ar standard (Pack-a-Punched, 2 attachments, Dead Wire), " ..
     "ray gun (Pack-a-Punched)", 1, true) ~= nil, "the guns back: " .. tostring(notices[#notices - 1]))
@@ -440,11 +441,15 @@ logged = table.concat(logs, "\n")
 check(string.find(logged, "loadout restored: took 1, gave 2 guns", 1, true) ~= nil, "logged")
 polls(10)
 check(restore_plans == 1, "only once")
-local switched = 0
-for _, line in ipairs(execs) do if line == "give bo3macfix_switch" then switched = switched + 1 end end
-check(switched == 1 and switch_calls == 5, "the switch back's command run once, then no more polls: " .. switched ..
-    ", " .. switch_calls)
+local switched, shielded = 0, 0
+for _, line in ipairs(execs) do
+    if line == "give bo3macfix_switch" then switched = switched + 1 end
+    if line == "give bo3macfix_shield" then shielded = shielded + 1 end
+end
+check(switched == 1 and shielded == 1 and switch_calls == 6, "the switch back's and the shield's commands run once, " ..
+    "then no more polls: " .. switched .. ", " .. shielded .. ", " .. switch_calls)
 check(string.find(table.concat(logs, "\n"), "switching back to the saved gun in hand", 1, true) ~= nil, "logged")
+check(string.find(table.concat(logs, "\n"), "setting the shield's health back", 1, true) ~= nil, "logged")
 -- something that couldn't be restored is said
 leave_match()
 polls(1)
@@ -516,9 +521,10 @@ polls(1)
 check(restore_plans == 1 and string.find(table.concat(notices, "\n"), "Guns back", 1, true) ~= nil,
     "the late answer taken: " .. restore_plans)
 
--- quitting a resumed game before the loadout is back keeps the saved one
+-- quitting a resumed game before the loadout is back keeps the saved one (with its items and shield health)
 leave_match()
 polls(1)
+store.Items, store.ShieldHealth = "zod_riotshield::", "zod_riotshield:740"
 resume_row.run()
 enter_match("zm_theater")
 loadout = "Guns=pistol_standard_zm:0:0:\nGunInHand=pistol_standard_zm\nPerkList="
@@ -531,6 +537,9 @@ BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
 check(#saves == before + 1 and saves[#saves].Guns == LOADOUT_GUNS and
     saves[#saves].PerkList == "specialty_armorvest,specialty_doubletap2" and
     saves[#saves].Perks == "juggernaut,quick_revive,doubletap2", "the saved loadout kept: " .. tostring(saves[#saves].Guns))
+check(saves[#saves].Items == "zod_riotshield::" and saves[#saves].ShieldHealth == "zod_riotshield:740",
+    "the shield's health kept: " .. tostring(saves[#saves].ShieldHealth))
+store.Items, store.ShieldHealth = nil, nil
 leave_match()
 polls(1)
 

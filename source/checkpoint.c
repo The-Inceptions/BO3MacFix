@@ -20,7 +20,7 @@ _Static_assert(Checkpoint_Read_Size >= Max_Entries * (Key_Size + Value_Size) + 1
 // what checkpoint_save takes from the settings page; the rest of checkpoint.ini is ours
 static const char *const saved_keys[] = { "Map",       "Round", "Points",    "Perks", "Weapons", "Equipment",
                                           "Held",      "Character", "Stats", "Guns",  "GunInHand", "PerkList",
-                                          "PapLevels", "Items", "GunAmmo", "HeroPower" };
+                                          "PapLevels", "Items", "GunAmmo", "HeroPower", "ShieldHealth" };
 // the ones that are comma-separated names: perks, and weapons that go into give and take commands
 static const char *const list_keys[] = { "Perks", "Weapons", "Equipment", "PerkList" };
 
@@ -414,7 +414,8 @@ bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long no
         !loadout_parse_pap_levels(store_get(&given, "PapLevels"), &loadout) ||
         !loadout_parse_items(store_get(&given, "Items"), &loadout) ||
         !loadout_parse_gun_ammo(store_get(&given, "GunAmmo"), &loadout) ||
-        !loadout_parse_hero_power(store_get(&given, "HeroPower"), &loadout))
+        !loadout_parse_hero_power(store_get(&given, "HeroPower"), &loadout) ||
+        !loadout_parse_shield_health(store_get(&given, "ShieldHealth"), &loadout))
         return false;
     // a key this save doesn't have goes, so nothing from the last game stays with this one; first, so it makes room
     // for this save's keys
@@ -739,5 +740,6 @@ bool checkpoint_loadout(const checkpoint_paths_t *paths, loadout_t *loadout) {
            loadout_parse_pap_levels(store_get(&store, "PapLevels"), loadout) &&
            loadout_parse_items(store_get(&store, "Items"), loadout) &&
            loadout_parse_gun_ammo(store_get(&store, "GunAmmo"), loadout) &&
-           loadout_parse_hero_power(store_get(&store, "HeroPower"), loadout);
+           loadout_parse_hero_power(store_get(&store, "HeroPower"), loadout) &&
+           loadout_parse_shield_health(store_get(&store, "ShieldHealth"), loadout);
 }

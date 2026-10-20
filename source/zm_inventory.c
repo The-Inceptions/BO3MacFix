@@ -205,6 +205,10 @@ static bool let_through(void *ent, uint64_t return_address, long long *held) {
 #define Restore_Command "bo3macfix_restore"
 #define Switch_Command "bo3macfix_switch" // the gun in hand again, after a restore during a map's intro
 #define Switch_Ms 10000                   // how long its command is waited for
+#define Shield_Command "bo3macfix_shield" // the shield's health, once the shield given by the restore is held
+#define Shield_Wait_Ms 30000              // how long after the restore the shield is waited for
+#define Shield_Resend_Ms 3000             // and its command, before it's sent again
+#define Aae_ShieldHud 0x70c029fa          // riotshield::?70c029fa(health, full): the HUD's zmInventory.shield_health
 
 // the game's handle for a script function: its "script::function" name, then where its code starts
 typedef struct {
@@ -238,6 +242,9 @@ static int (*BG_GetMaxAmmo)(void *ps, uint64_t weapon, uint64_t arg);
 static void *(*Dvar_FindByHash)(uint32_t hash);
 static int (*Dvar_GetInt)(const void *dvar);
 
+static void (*G_SetShieldHealth)(void *ent, int health);
+static int (*BG_GetShieldHealth)(int unused, int client_num, uint64_t weapon);
+static uint64_t *(*BG_ThreadBgs)(void);
 static uint64_t (*Gadget_SlotWeapon)(void *client, int slot);
 static void (*G_GadgetPowerSet)(void *client, void *gadget, uint64_t weapon, int time, float power);
 
@@ -315,6 +322,58 @@ static void read_item(uint64_t client, uint64_t weapon, const char *variant, int
     out->item_count++;
 }
 
+// a weapon's WeaponDef, as BG_GetWeaponDef (0x12362cd) finds it
+static bool weapon_def(uint64_t weapon, uint64_t *def) {
+    uint32_t index = (uint32_t)(weapon & Weapon_Index_Mask);
+    int32_t last = 0;
+    uint64_t variant = 0;
+    return index != 0 && safe_read(base + ADDR_bg_lastWeaponIndex, &last, sizeof(last)) && index <= (uint32_t)last &&
+           safe_read(base + ADDR_bg_weaponVariantDefs + index * sizeof(uint64_t), &variant, sizeof(variant)) &&
+           safe_read(variant + WeaponVariantDef_WeaponDef, def, sizeof(*def)) && *def != 0;
+}
+
+// the first held shield (the one the engine's shield functions take) and its full health
+static uint64_t held_shield(uint64_t client, int *full) {
+    for (int i = 0; i < gclient_HeldWeapon_Count; i++) {
+        uint64_t weapon = 0, def = 0;
+        int32_t type = 0;
+        if (held_weapon(client, i, &weapon, NULL, NULL) && (weapon & Weapon_Index_Mask) != 0 && weapon_def(weapon, &def) &&
+            safe_read(def + WeaponDef_Type, &type, sizeof(type)) && type == WeaponType_Shield)
+            return safe_read(def + WeaponDef_StartHitPoints, full, sizeof(*full)) && *full > 0 &&
+                   *full <= Loadout_Max_Shield_Health ? weapon : 0;
+    }
+    return 0;
+}
+
+// the shield's health where the server keeps it (level_bgs, for the player's client number)
+static bool stored_shield_health(uint64_t client, int *health) {
+    int32_t client_num = -1;
+    return safe_read(client + gclient_ClientNum, &client_num, sizeof(client_num)) && client_num >= 0 &&
+           client_num < 64 &&
+           safe_read(base + ADDR_level_bgs + bgs_ShieldHealth + (uint64_t)client_num * bgs_Client_Size, health,
+                     sizeof(*health));
+}
+
+// the held shield's health (read-only), if Items has the shield
+static void read_shield_health(uint64_t client, loadout_t *out) {
+    int full = 0, health = -1;
+    char name[72];
+    uint64_t weapon = held_shield(client, &full);
+    if (weapon == 0 || !weapon_script_name(weapon, name, sizeof(name)) || !stored_shield_health(client, &health) ||
+        health < 0 || health > full)
+        return;
+    for (int i = 0; i < out->item_count; i++) {
+        const char *item = out->items[i].name;
+        size_t len = strlen(name);
+        if (loadout_is_shield(item) && strncmp(item, name, len) == 0 && (item[len] == '\0' || item[len] == '+')) {
+            snprintf(out->shield_name, sizeof(out->shield_name), "%s", item);
+            out->shield_health = health;
+            out->have_shield_health = true;
+            return;
+        }
+    }
+}
+
 bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
     loadout_clear(out);
     if (note_size > 0)
@@ -372,6 +431,7 @@ bool zm_inventory_read_loadout(loadout_t *out, char *note, size_t note_size) {
             out->have_hero_power = true;
         }
     }
+    read_shield_health(client, out);
     // AAE's Repack-a-Punch levels (level.pap_lvup, keyed by self.guid and the root weapon's name)
     char guid[32];
     bool have_guid = player != 0 && loadout_vm_guid(&vm, player, guid, sizeof(guid));
@@ -630,6 +690,27 @@ static bool op_set_hero_power(void *context, uint64_t weapon, int power) {
     return safe_read((uint64_t)c->client + gclient_Gadget0Power, &now, sizeof(now)) && now > power - 1 && now < power + 1;
 }
 
+// the shield's health waits for the shield: the scripts' give (zm_equipment::give) lands a moment after the restore,
+// and puts it at full. The switch poll (UI thread) sends Shield_Command once the shield is held; run_shield sets it.
+static os_unfair_lock shield_lock = OS_UNFAIR_LOCK_INIT;
+static uint64_t shield_weapon; // 0: nothing waiting
+static int shield_health, shield_held_polls;
+static long long shield_until, shield_sent_at, shield_command_until;
+
+static bool op_set_shield_health(void *context, uint64_t weapon, int health) {
+    (void)context;
+    if (G_SetShieldHealth == NULL || health < 0)
+        return false;
+    os_unfair_lock_lock(&shield_lock);
+    shield_weapon = weapon;
+    shield_health = health;
+    shield_held_polls = 0;
+    shield_until = now_ms() + Shield_Wait_Ms;
+    shield_sent_at = shield_command_until = 0;
+    os_unfair_lock_unlock(&shield_lock);
+    return true;
+}
+
 static void op_switch_to(void *context, uint64_t weapon) {
     restore_context_t *c = context;
     G_SwitchToWeapon(c->ent, 0, weapon);
@@ -730,14 +811,15 @@ static void finish_restore(const char *text) {
 }
 
 // which of BO3MacFix's give commands the client command CheatsOk was asked for (returning to return_address) is:
-// 1 "give bo3macfix_restore", 2 "give bo3macfix_switch", 0 neither
+// 1 "give bo3macfix_restore", 2 "give bo3macfix_switch", 3 "give bo3macfix_shield", 0 none
 static int restore_command(uint64_t return_address) {
     if (return_address != base + ADDR_CheatsOk_From_Give || SV_Cmd_ArgvBuffer == NULL)
         return 0;
     char arg[64];
     arg[0] = '\0';
     SV_Cmd_ArgvBuffer(1, arg, sizeof(arg));
-    return strcmp(arg, Restore_Command) == 0 ? 1 : strcmp(arg, Switch_Command) == 0 ? 2 : 0;
+    return strcmp(arg, Restore_Command) == 0 ? 1 : strcmp(arg, Switch_Command) == 0 ? 2 :
+           strcmp(arg, Shield_Command) == 0  ? 3 : 0;
 }
 
 // the restore set up last, for the local player, while it's alive; in the give command, on the server thread, where
@@ -773,7 +855,7 @@ static void run_restore(void *ent) {
     }
     loadout_ops_t ops = { &context,     op_weapon_for_name, op_primaries, op_take,      op_give,
                           op_acquire_aat, op_has_perk,      op_give_perk, op_switch_to, op_set_pap_level,
-                          op_holds,       op_give_item,     op_set_ammo,  op_set_hero_power };
+                          op_holds,       op_give_item,     op_set_ammo,  op_set_hero_power, op_set_shield_health };
     loadout_result_t result;
     loadout_restore(&plan, &ops, &result);
     loadout_result_text(&result, text, sizeof(text));
@@ -816,17 +898,101 @@ static void run_switch(void *ent) {
     printf("BO3MacFix: zm inventory: switched to the saved gun in hand again: %s\n", name);
 }
 
+// "give bo3macfix_shield": the saved health on the shield the restore gave, through the engine's own setter (what the
+// player's weaponhealth field does), then the HUD's meter the way the shield's damage function sets it
+static void run_shield(void *ent) {
+    os_unfair_lock_lock(&shield_lock);
+    uint64_t weapon = now_ms() < shield_command_until ? shield_weapon : 0;
+    int health = shield_health;
+    os_unfair_lock_unlock(&shield_lock);
+    uint64_t first = entities(), client = 0;
+    int alive = 0, full = 0;
+    if (weapon == 0 || ent == NULL || (uint64_t)ent != first ||
+        !safe_read((uint64_t)ent + gentity_Client, &client, sizeof(client)) || client == 0 ||
+        !safe_read((uint64_t)ent + gentity_Health, &alive, sizeof(alive)) || alive <= 0) {
+        printf("BO3MacFix: zm inventory: a shield command with nothing set up, or not for the local player alive\n");
+        return;
+    }
+    // (not held: the poll sends it again)
+    if (held_shield(client, &full) != weapon)
+        return (void)printf("BO3MacFix: zm inventory: no shield health yet: the shield isn't held\n");
+    os_unfair_lock_lock(&shield_lock);
+    shield_weapon = 0;
+    os_unfair_lock_unlock(&shield_lock);
+    // the engine's shield functions reach the server's BG state through this thread's bgs pointer
+    uint64_t *bgs = BG_ThreadBgs();
+    if (bgs == NULL || *bgs != base + ADDR_level_bgs)
+        return (void)printf("BO3MacFix: zm inventory: no shield health: this thread's BG state (%#llx) isn't the "
+                            "server's\n", bgs != NULL ? (unsigned long long)*bgs : 0ULL);
+    int32_t client_num = 0;
+    safe_read(client + gclient_ClientNum, &client_num, sizeof(client_num));
+    int before = BG_GetShieldHealth(-1, client_num, weapon);
+    G_SetShieldHealth(ent, health);
+    int now = BG_GetShieldHealth(-1, client_num, weapon), stored = -1;
+    stored_shield_health(client, &stored);
+    // AAE's _zm_weap_riotshield.gsc: (health, full) -> zmInventory.shield_health = health / full, after its model update
+    script_handle_t handle;
+    bool hud = script_function_hashed(&handle, "scripts/zm/_zm_weap_riotshield", loadout_script_hash("riotshield"),
+                                      Aae_ShieldHud);
+    if (hud) {
+        // the last parameter first
+        Scr_AddInt(Script_Server, full);
+        Scr_AddInt(Script_Server, now);
+        Scr_FreeThread(Script_Server, Scr_ExecEntThread(ent, 2, handle));
+    }
+    char name[72] = "?";
+    weapon_script_name(weapon, name, sizeof(name));
+    printf("BO3MacFix: zm inventory: %s's health %s: %d of %d (was %d; stored %d)%s\n", name,
+           now == health && stored == now ? "back" : "NOT back", now, full, before, stored,
+           hud ? ", the HUD's meter set" : ", no HUD function (not AAE's riotshield script)");
+}
+
+// the shield's step of the poll: NULL nothing waiting, "" waiting, else the command to send
+static const char *shield_poll(uint64_t client, bool readable) {
+    os_unfair_lock_lock(&shield_lock);
+    uint64_t weapon = shield_weapon;
+    os_unfair_lock_unlock(&shield_lock);
+    if (weapon == 0)
+        return NULL;
+    int full = 0;
+    bool held = readable && held_shield(client, &full) == weapon;
+    long long now = now_ms();
+    const char *step = "";
+    bool expired = false;
+    os_unfair_lock_lock(&shield_lock);
+    if (shield_weapon != weapon) // (a restore since the read above)
+        step = shield_weapon != 0 ? "" : NULL;
+    else if (now >= shield_until) {
+        shield_weapon = 0;
+        step = NULL;
+        expired = true;
+    } else if (!held)
+        shield_held_polls = 0;
+    // held for two polls, so the give's own HUD update (full) has run
+    else if (++shield_held_polls >= 2 && now >= shield_sent_at + Shield_Resend_Ms) {
+        shield_sent_at = now;
+        shield_command_until = now + Switch_Ms;
+        step = "give " Shield_Command;
+    }
+    os_unfair_lock_unlock(&shield_lock);
+    if (expired)
+        printf("BO3MacFix: zm inventory: the shield wasn't held (or its command didn't run) within %d s of the "
+               "restore: its health stays full\n", Shield_Wait_Ms / 1000);
+    return step;
+}
+
 const char *zm_inventory_switch_poll(void) {
     uint64_t first = entities(), client = 0, in_hand = 0;
     char why[64] = "no player", raw[96] = "";
     bool readable = first != 0 && safe_read(first + gentity_Client, &client, sizeof(client)) && client != 0 &&
                     safe_read(client + gclient_Weapon, &in_hand, sizeof(in_hand));
     bool controlled = readable && player_controls(first, client, why, sizeof(why), raw, sizeof(raw));
+    const char *shield = shield_poll(client, readable);
     os_unfair_lock_lock(&restore_lock);
     uint64_t weapon = switch_watch.weapon;
     os_unfair_lock_unlock(&restore_lock);
     if (weapon == 0)
-        return NULL;
+        return shield;
     bool held = readable && holds(client, weapon);
     char state[64], name[72] = "none";
     if (in_hand != 0)
@@ -851,7 +1017,10 @@ const char *zm_inventory_switch_poll(void) {
     if (action == Loadout_Switch_Now)
         printf("BO3MacFix: zm inventory: %s in hand once the player had control, not the saved gun: switching back\n",
                name);
-    return action == Loadout_Switch_Done ? NULL : action == Loadout_Switch_Now ? "give " Switch_Command : "";
+    if (action == Loadout_Switch_Now)
+        return "give " Switch_Command;
+    // the shield's command when the gun in hand has none this poll
+    return shield != NULL && shield[0] != '\0' ? shield : action == Loadout_Switch_Done ? shield : "";
 }
 
 // CheatsOk(ent): whether ent may use cheat commands (sv_cheats is on and it's alive). BO3MacFix's own give and take
@@ -865,6 +1034,8 @@ install_hook_name(CheatsOk, int, void *ent) {
         run_restore(ent);
     else if (command == 2)
         run_switch(ent);
+    else if (command == 3)
+        run_shield(ent);
     if (command != 0)
         return 0;
     long long held = 0;
@@ -904,6 +1075,9 @@ void zm_inventory_init(uint64_t game_base) {
     Dvar_GetInt = (void *)(base + ADDR_Dvar_GetInt);
     Gadget_SlotWeapon = (void *)(base + ADDR_Gadget_SlotWeapon);
     G_GadgetPowerSet = (void *)(base + ADDR_G_GadgetPowerSet);
+    G_SetShieldHealth = (void *)(base + ADDR_G_SetShieldHealth);
+    BG_GetShieldHealth = (void *)(base + ADDR_BG_GetShieldHealth);
+    BG_ThreadBgs = (void *)(base + ADDR_BG_ThreadBgs);
 }
 
 // at start-up, before the game's threads run: the pre-patched copy has a slot for it, so that only stores a pointer.

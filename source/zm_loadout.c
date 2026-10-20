@@ -533,6 +533,15 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         else
             note_failure(result, "no charge for", saved->hero_name);
     }
+    // the shield's health: the give put it at full
+    if (saved->have_shield_health) {
+        uint64_t weapon = ops->weapon_for_name(context, saved->shield_name);
+        if (weapon != 0 && ops->set_shield_health != NULL &&
+            ops->set_shield_health(context, weapon, saved->shield_health))
+            result->shield_health++;
+        else
+            note_failure(result, "no health for", saved->shield_name);
+    }
     // the guns' clip and stock, which came back as their start ammo
     for (int i = 0; i < saved->gun_count; i++) {
         const loadout_gun_t *gun = &saved->guns[i];
@@ -554,10 +563,12 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
 }
 
 void loadout_result_text(const loadout_result_t *result, char *out, size_t out_size) {
-    char more[160] = "";
+    char more[192] = "";
     if (result->pap_levels > 0 || result->items > 0 || result->items_had > 0 || result->ammo > 0)
         snprintf(more, sizeof(more), "%d repack levels, %d items (%d held already), ammo for %d, %s", result->pap_levels,
                  result->items, result->items_had, result->ammo, result->hero_power > 0 ? "hero weapon's charge, " : "");
+    if (result->shield_health > 0)
+        snprintf(more + strlen(more), sizeof(more) - strlen(more), "shield's health, ");
     if (result->given_back > 0)
         snprintf(more + strlen(more), sizeof(more) - strlen(more), "%d guns given back after an item's give, ",
                  result->given_back);
@@ -958,5 +969,45 @@ bool loadout_parse_hero_power(const char *value, loadout_t *loadout) {
     snprintf(loadout->hero_name, sizeof(loadout->hero_name), "%s", name);
     loadout->hero_power = (int)power;
     loadout->have_hero_power = true;
+    return true;
+}
+
+// ---- the shield's health: "ShieldHealth = name:health"
+
+bool loadout_is_shield(const char *name) {
+    return strstr(name, "shield") != NULL;
+}
+
+bool loadout_format_shield_health(const loadout_t *loadout, char *out, size_t out_size) {
+    if (out_size == 0)
+        return false;
+    out[0] = '\0';
+    if (!loadout->have_shield_health)
+        return true;
+    int len = snprintf(out, out_size, "%s:%d", loadout->shield_name, loadout->shield_health);
+    if (len < 0 || (size_t)len >= out_size || !loadout_valid_name(loadout->shield_name) ||
+        !loadout_is_shield(loadout->shield_name) || loadout->shield_health < 0 ||
+        loadout->shield_health > Loadout_Max_Shield_Health) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
+bool loadout_parse_shield_health(const char *value, loadout_t *loadout) {
+    if (value == NULL || value[0] == '\0')
+        return true;
+    const char *colon = strchr(value, ':');
+    char name[Loadout_Name_Size];
+    if (colon == NULL || !copy_field(value, colon, name, sizeof(name)) || !loadout_valid_name(name) ||
+        !loadout_is_shield(name))
+        return false;
+    char *end = NULL;
+    long health = strtol(colon + 1, &end, 10);
+    if (end == colon + 1 || *end != '\0' || health < 0 || health > Loadout_Max_Shield_Health)
+        return false;
+    snprintf(loadout->shield_name, sizeof(loadout->shield_name), "%s", name);
+    loadout->shield_health = (int)health;
+    loadout->have_shield_health = true;
     return true;
 }
