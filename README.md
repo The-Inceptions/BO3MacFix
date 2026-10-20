@@ -54,12 +54,14 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `AudioFollowsDefault` | 1 | Moves the game's audio to the new default output device, e.g. when AirPods connect or disconnect. |
 | `Notices` | 1 | Shows a short notice at the top of the screen when a controller connects or disconnects (with its battery level), when its battery gets low (20, 10 and 5 %), and when the game moves to another display. The controller ones need `ControllerBridge`. |
 | `AutoSave` | 1 | Saves a solo zombies game by itself each time a new round starts, to the same `BO3MacFix/checkpoint.ini` as the settings page's Save game, so a crash or a force quit loses at most the round being played. A game saved at a higher round stays unless this game resumed it, and a notice says "Saved round N". The file is written on a background thread, at most every 15 seconds. The page's Delete saved game removes the save. |
+| `QuickSave` | 96 | A key that saves a solo zombies game like the settings page's Save game, with the same checks: the macOS key code of F5 (96), F6 (97), F7 (98), F8 (100) or F9 (101), or 0 for off. Holding L3 + R3 for a second in the pause menu does the same, with `ControllerBridge`. A notice says "Game saved: round N" or why not. A game saved at a higher round that this one didn't resume takes a second press within 5 seconds. |
 | `FrameStats` | 0 | Logs the frame rate, 1% low and worst frame time every N seconds. |
 | `BatteryFPS` | 0 | Limits the frame rate to N (30 to 240) only while the Mac runs on battery, to save power. |
 | `PauseMenuFPS` | 30 | Limits the frame rate to N (30 to 240) while the pause menu is open in a match, to save power, and lifts the limit as soon as it closes. 0 turns it off. The settings page offers Off, 30, 40 and 60, rates that divide a 120 Hz display's refresh evenly (45 came out at 40 there). With `FramePacingFPS` or `BatteryFPS` on too, the lowest limit wins. |
 | `MetalHUD` | 0 | Shows macOS's Metal performance HUD (FPS and GPU time). |
 | `GpuDiagnostics` | 0 | Logs the window, display mode and Metal layer whenever they change. |
 | `NoCodePatches` | 0 | For testing only: leaves the game's code exactly as shipped, without any of the fixes. Solo play only. |
+| `ModWarningDialog` | 0 | When a mod tries to load a Windows DLL, BO3MacFix warns once a launch with a notice (and in the log). 1 shows the old "BO3MacFix Mod Warning" dialog instead, which stops the game until it's closed, fullscreen too. |
 
 Most can also be set with an environment variable, `BO3MACFIX_` and the name in capitals. When the game is started
 from Steam, BO3MacFix's log goes to `BO3MacFix/log.txt` and the launcher's to `BO3MacFix/launcher.log`.

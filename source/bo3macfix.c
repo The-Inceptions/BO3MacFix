@@ -42,6 +42,7 @@
 #include "checkpoint.h"
 #include "checkpoint_autosave.h"
 #include "prepatch.h"
+#include "quick_save.h"
 #include "qol.h"
 #include "rawmouse.h"
 #include "zm_inventory.h"
@@ -870,14 +871,23 @@ install_hook_name(hks_load_dll, bool, void *s, const char *filename, const char 
         return true;
     }
 
-    // display an alert message (that makes sense) to the user informing them that the DLL load has failed
-    if (!is_macos_dylib(newpath) && !shown_dll_warning) {
-        printf("which isn't a macOS dylib, erroring...\n");
-        char alert_msg[1024];
-        snprintf(alert_msg, sizeof(alert_msg), "The mod you loaded tried to open a Windows DLL file. The game might work fine, but it might be unstable.\n\n%s: %s", filename_from_path(newpath), func_name);
-        display_nsalert("BO3MacFix Mod Warning", alert_msg);
-        // only show the warning once
-        shown_dll_warning = true;
+    // tell the user (once a launch) that the DLL load has failed: in the log and as an on-screen notice that waits for
+    // the UI, since the load often comes while the mod's scripts load or a map does. The modal dialog it used to be
+    // (ModWarningDialog = 1) stopped the game, fullscreen too, until OK was clicked.
+    if (!is_macos_dylib(newpath)) {
+        printf("which isn't a macOS dylib%s, erroring...\n",
+               access(newpath, F_OK) == 0 ? "" : " (there's no such file: Lua looking for a module)");
+        if (!shown_dll_warning) {
+            // only show the warning once
+            shown_dll_warning = true;
+            if (read_int_setting_or_env("ModWarningDialog", 0) != 0) {
+                char alert_msg[1024];
+                snprintf(alert_msg, sizeof(alert_msg), "The mod you loaded tried to open a Windows DLL file. The game might work fine, but it might be unstable.\n\n%s: %s", filename_from_path(newpath), func_name);
+                display_nsalert("BO3MacFix Mod Warning", alert_msg);
+            } else {
+                notices_mod_warning(filename_from_path(newpath), func_name);
+            }
+        }
     }
 
     // TODO(Emma): we want to make sure the OS won't reject the dylib load because of Gatekeeper...
@@ -1142,6 +1152,8 @@ __attribute__((constructor)) static void dylib_main() {
 
     // notices in the game (controllers, their batteries, the display) and pausing when the controller disconnects
     notices_init(read_int_setting_or_env("Notices", 1), read_int_setting_or_env("PauseOnDisconnect", 0));
+    // a key (F5 by default), or L3 + R3 in the pause menu, saves a solo zombies game (quick_save.m, checkpoint.lua)
+    quick_save_init(read_int_setting_or_env("QuickSave", 96));
 
     // aiming with the mouse's raw movement instead of macOS's accelerated one (RawMouse, off by default)
     rawmouse_init(game_base_address, read_int_setting("RawMouse", 0), read_int_setting("RawMouseScale", 100));

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 #include <unistd.h>
 #include "checkpoint.h"
 #include "zm_loadout.h"
@@ -441,6 +442,35 @@ void checkpoint_read(const checkpoint_paths_t *paths, char *out, size_t out_size
         int len = snprintf(line, sizeof(line), "%s=%s\n", store.entries[i].key, store.entries[i].value);
         if (!append(out, out_size, &used, line, (size_t)len))
             return;
+    }
+}
+
+void checkpoint_saved_when(const char *saved, long now, char *out, size_t out_size) {
+    long when;
+    if (out_size == 0)
+        return;
+    out[0] = '\0';
+    if (!parse_number(saved, &when) || when <= 0 || when > now + 60)
+        return;
+    long ago = now > when ? now - when : 0;
+    if (ago < 60) {
+        snprintf(out, out_size, "just now");
+    } else if (ago < 3600) {
+        snprintf(out, out_size, "%ld min ago", ago / 60);
+    } else if (ago < 86400) {
+        snprintf(out, out_size, "%ld h ago", ago / 3600);
+    } else {
+        time_t then_time = (time_t)when, now_time = (time_t)now;
+        struct tm then_tm, now_tm;
+        if (localtime_r(&then_time, &then_tm) == NULL || localtime_r(&now_time, &now_tm) == NULL)
+            return;
+        // English month names, as the rest of the page is English (not the locale's)
+        static const char *const months[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+        if (then_tm.tm_year == now_tm.tm_year)
+            snprintf(out, out_size, "%s %d", months[then_tm.tm_mon], then_tm.tm_mday);
+        else
+            snprintf(out, out_size, "%s %d %d", months[then_tm.tm_mon], then_tm.tm_mday, then_tm.tm_year + 1900);
     }
 }
 

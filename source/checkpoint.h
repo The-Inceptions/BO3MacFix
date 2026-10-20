@@ -57,6 +57,11 @@ bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long no
 // line fits
 void checkpoint_read(const checkpoint_paths_t *paths, char *out, size_t out_size);
 
+// when a checkpoint was saved (its Saved, seconds since 1970) as the settings page shows it, now being the time now:
+// "just now", "5 min ago", "3 h ago" within a day, then the date ("Oct 19", with the year if it isn't this one's), in
+// local time. "" for a time that isn't a number or is over a minute ahead of now (a clock that was changed).
+void checkpoint_saved_when(const char *saved, long now, char *out, size_t out_size);
+
 // sets up the next game to resume the checkpoint: its round (1 to 255), its points, and Perkaholic and Quick Revive if
 // it had perks, in the AAE preset's custom mutations file (preset: what follows AAECustomMutations in its name, like
 // "_Default") and, through the console commands put in commands (one per line, for Engine.Exec), in the game's options

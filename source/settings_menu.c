@@ -12,6 +12,7 @@
 #include "settings.h"
 #include "settings_menu.h"
 #include "settings_menu_lua.h"
+#include "quick_save.h"
 #include "zm_inventory.h"
 
 // BO3MacFix.Log(text): the page's messages go in BO3MacFix's log
@@ -265,6 +266,14 @@ static const char *string_arg(lua_State *s, int index) {
     return arg < HKS_TOP(s) && (arg->t & 0xF) == HKS_TSTRING ? hks_check_string(s, index) : NULL;
 }
 
+// CheckpointSavedWhen(saved): the checkpoint's Saved time as the page shows it ("3 h ago"), "" without one
+static int lua_checkpoint_saved_when(lua_State *s) {
+    char text[32];
+    checkpoint_saved_when(string_arg(s, 1), (long)time(NULL), text, sizeof(text));
+    hks_push_string(s, text);
+    return 1;
+}
+
 // CheckpointAutoSave(lines, note): gives this game ("Key=value" lines, as SaveCheckpoint takes) to the background
 // writer, with a note for the log, true if it took it; with no arguments, whether AutoSave is on
 static int lua_checkpoint_autosave(lua_State *s) {
@@ -330,7 +339,8 @@ static int lua_load_menu(lua_State *s) {
     // Then the test switches: save so many seconds into a match, give these weapons first, log what the match has
     // so many seconds in. Then AutoSave's writer and deleting the save, and its test switch: how many seconds of a
     // match only set the round it starts at. Then the full loadout's functions, and its test switch: give these perks
-    // first. Then the gun in hand after a restore made during a map's intro.
+    // first. Then the gun in hand after a restore made during a map's intro. Then the quick save's request (the key,
+    // or L3 + R3; quick_save.m) and the saved game's time as the page shows it.
     checkpoint_autosave_init(&checkpoint_paths, Autosave_Interval_Ms, autosave_report);
     if (hks_load_source(s, (const char *)checkpoint_lua, checkpoint_lua_len, "=BO3MacFix checkpoint")) {
         hks_push_cfunction(s, locked_checkpoint_save, "CheckpointSave");
@@ -354,7 +364,9 @@ static int lua_load_menu(lua_State *s) {
         hks_push_cfunction(s, lua_checkpoint_test_loadout, "CheckpointTestLoadout");
         push_env(s, "BO3MACFIX_CHECKPOINT_PERKS");
         hks_push_cfunction(s, lua_checkpoint_restore_switch, "CheckpointRestoreSwitch");
-        hks_pcall(s, 21, 0);
+        hks_push_cfunction(s, quick_save_lua_take, "CheckpointTakeQuickSave");
+        hks_push_cfunction(s, lua_checkpoint_saved_when, "CheckpointSavedWhen");
+        hks_pcall(s, 23, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;

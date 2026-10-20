@@ -9,7 +9,8 @@
 
 typedef struct {
     char text[Notice_Text_Max];
-    double time; // seconds, any clock that only goes forward
+    double time;  // seconds, any clock that only goes forward
+    bool lasting; // waits for the UI however long that takes
 } notice_t;
 
 typedef struct {
@@ -19,9 +20,13 @@ typedef struct {
 
 // adds a notice. When the queue is full the oldest goes; the same text as the newest within 3 seconds is dropped.
 void notice_queue_push(notice_queue_t *queue, const char *text, double now);
+// the same for a notice that doesn't get too old to show (a warning that comes before the UI can show anything, or
+// while a map loads). A full queue drops the oldest of the others first.
+void notice_queue_push_lasting(notice_queue_t *queue, const char *text, double now);
 
-// takes the oldest notice that's at most max_age seconds old into out, dropping older ones. False if there's none.
-bool notice_queue_pop(notice_queue_t *queue, double now, double max_age, char *out, size_t out_size);
+// takes the oldest notice that's at most max_age seconds old, or lasting, into out, dropping older ones; lasting (may
+// be NULL) says which kind it was. False if there's none.
+bool notice_queue_pop(notice_queue_t *queue, double now, double max_age, char *out, size_t out_size, bool *lasting);
 
 // Low battery warnings for one controller, at 20, 10 and 5 percent, each once. warned keeps the lowest level warned
 // about (start it at 0). percent < 0 means unknown. Returns the level to warn about now, or 0. Charging, or the level

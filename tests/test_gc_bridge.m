@@ -58,6 +58,10 @@ static int lost = 0; // PauseOnDisconnect's requests
 void notices_controller_lost(void) {
     lost++;
 }
+static int quick_save_looks = 0; // the controller states the quick save's L3 + R3 saw
+void quick_save_pad(uint32_t user, uint16_t buttons) {
+    quick_save_looks++;
+}
 
 // Aspyr's own XInput functions: connected only where SDL has a controller
 static uint32_t aspyr_get_state(uint32_t user_index, XINPUT_STATE *state) {
@@ -252,6 +256,9 @@ int main(void) {
     disconnect_pad(xbox_pad);
     run_main_queue();
     CHECK(lost == 3);
+
+    // the quick save looks at the states the game reads, bridged or SDL's (L3 + R3 in the pause menu)
+    CHECK(quick_save_looks > 0);
 
     drain_input_queue();
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.2, false); // the player index updates, on the main queue

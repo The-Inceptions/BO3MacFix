@@ -5,7 +5,7 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
 	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint \
 	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan \
-	tests/test_aae_cheats
+	tests/test_aae_cheats tests/test_quick_save
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -74,6 +74,9 @@ SOURCES += source/notch.m source/notch_layout.c
 # on-screen notices in the game (notices.m with the queue in notice_queue.c, drawn by notices.lua) and pausing when the
 # controller disconnects
 SOURCES += source/notices.m source/notice_queue.c
+# a key, or L3 + R3 in the pause menu, saving a solo zombies game like the settings page's Save game (quick_save.m, with
+# its rules in quick_save_rules.c; checkpoint.lua does the saving)
+SOURCES += source/quick_save.m source/quick_save_rules.c
 # ColorSync for display UUIDs, CoreVideo for the refresh rate of SDL's display modes
 FRAMEWORKS += -framework ColorSync -framework CoreVideo
 
@@ -87,6 +90,8 @@ test: $(TEST_TARGETS)
 	if command -v lua >/dev/null; then lua tests/test_checkpoint.lua; else echo "no lua, skipping tests/test_checkpoint.lua"; fi
 	@# AutoSave's round trigger and the Delete saved game row in checkpoint.lua
 	if command -v lua >/dev/null; then lua tests/test_autosave.lua; else echo "no lua, skipping tests/test_autosave.lua"; fi
+	@# the quick save (a key, or L3 + R3 in the pause menu) and the saved game's details on the settings page
+	if command -v lua >/dev/null; then lua tests/test_quick_save.lua; else echo "no lua, skipping tests/test_quick_save.lua"; fi
 
 tests/test_stream_stall_recovery: tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_stream_stall_recovery.c source/stream_stall_recovery.c
@@ -127,6 +132,10 @@ tests/test_prepatch: tests/test_prepatch.c source/prepatch.c source/prepatch.h s
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_prepatch.c
 
 # the notices' queue and low battery levels (notice_queue.c) are plain C too
+# quick_save_rules.c: when L3 + R3 count as held, and the request waiting for checkpoint.lua
+tests/test_quick_save: tests/test_quick_save.c source/quick_save_rules.c source/quick_save_rules.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_quick_save.c source/quick_save_rules.c
+
 tests/test_notice_queue: tests/test_notice_queue.c source/notice_queue.c source/notice_queue.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_notice_queue.c source/notice_queue.c
 
