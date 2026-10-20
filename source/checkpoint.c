@@ -79,6 +79,7 @@ typedef struct {
 typedef struct {
     entry_t entries[Max_Entries];
     int count;
+    bool full; // the last store_set was refused for want of room
 } store_t;
 
 static bool valid_key(const char *key, size_t len) {
@@ -115,6 +116,7 @@ static const char *store_get(store_t *store, const char *key) {
 // sets key to value, or takes it out if value is NULL
 static bool store_set(store_t *store, const char *key, const char *value) {
     entry_t *entry = store_find(store, key);
+    store->full = false;
     if (value == NULL) {
         if (entry != NULL) {
             *entry = store->entries[store->count - 1];
@@ -126,8 +128,7 @@ static bool store_set(store_t *store, const char *key, const char *value) {
         return false;
     if (entry == NULL) {
         if (store->count == Max_Entries) {
-            printf("BO3MacFix: checkpoint: checkpoint.ini has no room for %s (it holds %d entries), so it isn't "
-                   "changed\n", key, Max_Entries);
+            store->full = true;
             return false;
         }
         entry = &store->entries[store->count++];
@@ -135,6 +136,17 @@ static bool store_set(store_t *store, const char *key, const char *value) {
     }
     snprintf(entry->value, sizeof(entry->value), "%s", value);
     return true;
+}
+
+// store_set for a change to checkpoint.ini, saying so when it has no room for key (a reader that finds a file with
+// more entries than it holds just doesn't read it, as with any it can't, so a poll doesn't log it again and again)
+static bool store_change(store_t *store, const char *key, const char *value) {
+    if (store_set(store, key, value))
+        return true;
+    if (store->full)
+        printf("BO3MacFix: checkpoint: checkpoint.ini has no room for %s (it holds %d entries), so it isn't changed\n",
+               key, Max_Entries);
+    return false;
 }
 
 static void trim(const char **start, const char **end) {
@@ -148,6 +160,7 @@ static void trim(const char **start, const char **end) {
 // line is malformed.
 static bool parse_store(const char *text, store_t *store) {
     store->count = 0;
+    store->full = false;
     for (const char *line = text; *line != '\0';) {
         const char *end = strchr(line, '\n');
         const char *next = end != NULL ? end + 1 : line + strlen(line);
@@ -181,6 +194,8 @@ static bool parse_store(const char *text, store_t *store) {
 
 static bool load_store(const char *path, store_t *store) {
     static char text[File_Size];
+    store->count = 0;
+    store->full = false;
     return read_file(path, text, sizeof(text)) && parse_store(text, store);
 }
 
@@ -373,9 +388,16 @@ bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long no
     static store_t given, store;
     if (!parse_store(lines, &given))
         return false;
-    // a checkpoint.ini that can't be read is replaced
-    if (!load_store(paths->checkpoint, &store))
+    // a checkpoint.ini that can't be read is replaced, but not one with more entries than it holds (from a newer
+    // BO3MacFix): that would lose a resume set up in it
+    if (!load_store(paths->checkpoint, &store)) {
+        if (store.full) {
+            printf("BO3MacFix: checkpoint: checkpoint.ini has more entries than the %d it holds, so it isn't "
+                   "changed\n", Max_Entries);
+            return false;
+        }
         store.count = 0;
+    }
     long round, points;
     if (!parse_number(store_get(&given, "Round"), &round) || round < 1 ||
         !parse_number(store_get(&given, "Points"), &points) || points < 0)
@@ -400,12 +422,12 @@ bool checkpoint_save(const checkpoint_paths_t *paths, const char *lines, long no
             store_set(&store, saved_keys[i], NULL);
     for (size_t i = 0; i < sizeof(saved_keys) / sizeof(saved_keys[0]); i++) {
         const char *value = store_get(&given, saved_keys[i]);
-        if (value != NULL && !store_set(&store, saved_keys[i], value))
+        if (value != NULL && !store_change(&store, saved_keys[i], value))
             return false;
     }
     char saved[32];
     snprintf(saved, sizeof(saved), "%ld", now);
-    return store_set(&store, "Saved", saved) && save_store(paths->checkpoint, &store);
+    return store_change(&store, "Saved", saved) && save_store(paths->checkpoint, &store);
 }
 
 void checkpoint_read(const checkpoint_paths_t *paths, char *out, size_t out_size) {
@@ -438,7 +460,7 @@ bool checkpoint_mark_in_use(const checkpoint_paths_t *paths) {
     static store_t store;
     if (checkpoint_resume_state(paths) != Checkpoint_Resume_Set_Up)
         return false;
-    return load_store(paths->checkpoint, &store) && store_set(&store, "InUse", "1") &&
+    return load_store(paths->checkpoint, &store) && store_change(&store, "InUse", "1") &&
            save_store(paths->checkpoint, &store);
 }
 
@@ -446,7 +468,7 @@ bool checkpoint_mark_weapons_given(const checkpoint_paths_t *paths) {
     static store_t store;
     if (checkpoint_resume_state(paths) != Checkpoint_Resume_In_Use)
         return false;
-    return load_store(paths->checkpoint, &store) && store_set(&store, "InUse", "2") &&
+    return load_store(paths->checkpoint, &store) && store_change(&store, "InUse", "2") &&
            save_store(paths->checkpoint, &store);
 }
 
@@ -553,15 +575,15 @@ bool checkpoint_apply(const checkpoint_paths_t *paths, const char *preset, char 
             // an option that already has the checkpoint's value is the player's own, so it's left alone
             if (strcmp(current, values[i]) == 0)
                 continue;
-            if (!store_set(&store, previous_key, current))
+            if (!store_change(&store, previous_key, current))
                 return false;
         }
-        if (!store_set(&store, applied_key, values[i]) ||
+        if (!store_change(&store, applied_key, values[i]) ||
             !cfg_set_in_place(after, sizeof(after), options[i].dvar, values[i]))
             return false;
         add_command(commands, commands_size, options[i].dvar, values[i]);
     }
-    if (!store_set(&store, "Applied", "1") || !store_set(&store, "AppliedPreset", preset_copy))
+    if (!store_change(&store, "Applied", "1") || !store_change(&store, "AppliedPreset", preset_copy))
         return false;
     bool changed = strcmp(before, after) != 0;
     if (changed && !write_file(path, after))

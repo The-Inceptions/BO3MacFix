@@ -212,6 +212,23 @@ static void test_store_room(void) {
     checkpoint_read(&paths, text, sizeof(text));
     CHECK(strstr(text, "Map=zm_theater\n") != NULL && strstr(text, "Held=") == NULL &&
           strstr(text, "Applied=1\n") != NULL && strstr(text, "Saved=4\n") != NULL);
+    // a file with more entries than that (a newer version's) isn't replaced either: it may have a resume set up
+    write_store(Checkpoint_Max_Entries + 1);
+    free(before);
+    before = strdup(read_text(checkpoint_path));
+    capture_start();
+    saved = checkpoint_save(&paths, full_save, 5);
+    log = capture_end();
+    CHECK(!saved && strcmp(read_text(checkpoint_path), before) == 0 && strstr(log, "checkpoint.ini has more entries than the 64 it holds, so it isn't changed") != NULL);
+    // and its readers just don't read it, without a word
+    char state_text[64];
+    capture_start();
+    checkpoint_resume_t state = checkpoint_resume_state(&paths);
+    checkpoint_read(&paths, state_text, sizeof(state_text));
+    free(log);
+    log = capture_end();
+    CHECK(state == Checkpoint_No_Resume && state_text[0] == '\0' && log[0] == '\0');
+    free(log);
     // nor does the resume's InUse go in when there's no room for it
     write_store(Checkpoint_Max_Entries);
     char *full = calloc(1, 65536);
