@@ -456,7 +456,13 @@ static void test_restore_more(void) {
                       "aat 4 zm_aat_dead_wire; ammo 4 8 40; switch 4; ") != 0)
         printf("  calls: %s\n", calls);
     CHECK(g_holds(&game, pistol) && g_holds(&game, raygun) && result.kept == 1 && result.given == 1 &&
-          result.failed == 0);
+          result.given_back == 1 && result.failed == 0);
+    loadout_result_text(&result, text, sizeof(text));
+    CHECK(strcmp(text, "took 0, gave 1 guns (1 held already), 1 ammo types, 0 perks (0 had already), 0 repack levels, "
+                       "1 items (0 held already), ammo for 1, 1 guns given back after an item's give, 0 failed") == 0);
+    if (strcmp(text, "took 0, gave 1 guns (1 held already), 1 ammo types, 0 perks (0 had already), 0 repack levels, "
+                     "1 items (0 held already), ammo for 1, 1 guns given back after an item's give, 0 failed") != 0)
+        printf("  text: %s\n", text);
     // one that can't be given back is told
     game.fail_give = true;
     game.held[1] = raygun;

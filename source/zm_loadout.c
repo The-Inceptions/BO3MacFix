@@ -516,9 +516,12 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         const loadout_gun_t *gun = &saved->guns[i];
         if (!back[i] || ops->holds(context, wanted[i]))
             continue;
-        if (!ops->give(context, wanted[i], gun->options, gun->acvi))
+        if (!ops->give(context, wanted[i], gun->options, gun->acvi)) {
             note_failure(result, "an item's give took", gun->name);
-        else if (gun->aat[0] != '\0' && !ops->acquire_aat(context, wanted[i], gun->aat))
+            continue;
+        }
+        result->given_back++;
+        if (gun->aat[0] != '\0' && !ops->acquire_aat(context, wanted[i], gun->aat))
             note_failure(result, "no ammo type", gun->aat);
     }
     // the guns' clip and stock, which came back as their start ammo
@@ -546,6 +549,9 @@ void loadout_result_text(const loadout_result_t *result, char *out, size_t out_s
     if (result->pap_levels > 0 || result->items > 0 || result->items_had > 0 || result->ammo > 0)
         snprintf(more, sizeof(more), "%d repack levels, %d items (%d held already), ammo for %d, ", result->pap_levels,
                  result->items, result->items_had, result->ammo);
+    if (result->given_back > 0)
+        snprintf(more + strlen(more), sizeof(more) - strlen(more), "%d guns given back after an item's give, ",
+                 result->given_back);
     snprintf(out, out_size, "took %d, gave %d guns (%d held already), %d ammo types, %d perks (%d had already), %s%d "
              "failed%s%s", result->taken, result->given, result->kept, result->aats, result->perks, result->perks_had,
              more, result->failed, result->failed > 0 ? ": " : "", result->failures);
