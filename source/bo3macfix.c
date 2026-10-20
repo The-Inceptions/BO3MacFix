@@ -441,6 +441,8 @@ install_hook_name(HKAI_InitMapData, void, const char *mapname, char restart) {
     printf("HKAI_InitMapData for %s\n", mapname);
     // each map shows each repeated script error 3 times again
     script_errors_new_map();
+    // and a shield's health still waiting is the last game's
+    zm_inventory_new_map();
 
     char physicsPath[0x200];
     char physicsAltPath[0x200];

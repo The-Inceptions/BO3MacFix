@@ -136,7 +136,12 @@ bool zm_inventory_read(char *out, size_t out_size) {
     return true;
 }
 
+static void drop_shield_health(const char *why);
+
 int zm_inventory_allow_commands(const char *commands) {
+    // none: a new match (checkpoint.lua), where a shield's health still waiting is the last game's
+    if (commands == NULL || commands[0] == '\0')
+        drop_shield_health("a new match");
     os_unfair_lock_lock(&allowed_lock);
     allowed_count = 0;
     allowed_at = now_ms();
@@ -696,6 +701,23 @@ static os_unfair_lock shield_lock = OS_UNFAIR_LOCK_INIT;
 static uint64_t shield_weapon; // 0: nothing waiting
 static int shield_health, shield_held_polls;
 static long long shield_until, shield_sent_at, shield_command_until;
+
+// a new map or match: the restore that set the health up was the last game's, and a shield held now (within the 30 s)
+// isn't the one it gave
+static void drop_shield_health(const char *why) {
+    os_unfair_lock_lock(&shield_lock);
+    bool waiting = shield_weapon != 0;
+    shield_weapon = 0;
+    shield_held_polls = 0;
+    shield_until = shield_sent_at = shield_command_until = 0;
+    os_unfair_lock_unlock(&shield_lock);
+    if (waiting)
+        printf("BO3MacFix: zm inventory: %s: the shield's health from the last restore isn't set any more\n", why);
+}
+
+void zm_inventory_new_map(void) {
+    drop_shield_health("a new map");
+}
 
 static bool op_set_shield_health(void *context, uint64_t weapon, int health) {
     (void)context;
