@@ -230,7 +230,24 @@ typedef struct {
     uint64_t items[8]; // the items held
     int item_count;
     bool fail_pap, fail_item, fail_ammo;
+    uint64_t now[16]; // the guns held during a restore: held, then what's given and taken
+    int now_count;
+    uint64_t in_hand;     // the gun in hand at the start
+    bool shield_makes_room; // the shield's give takes the gun in hand with two guns held, as weapon_give does
 } game_t;
+
+static int now_index(game_t *game, uint64_t weapon) {
+    for (int i = 0; i < game->now_count; i++)
+        if (game->now[i] == weapon)
+            return i;
+    return -1;
+}
+
+static void now_remove(game_t *game, uint64_t weapon) {
+    int i = now_index(game, weapon);
+    if (i >= 0)
+        game->now[i] = game->now[--game->now_count];
+}
 
 static void call(game_t *game, const char *format, ...) __attribute__((format(printf, 2, 3)));
 static void call(game_t *game, const char *format, ...) {
@@ -273,12 +290,16 @@ static bool g_holds(void *context, uint64_t weapon) {
     for (int i = 0; i < game->item_count; i++)
         if (game->items[i] == weapon)
             return true;
-    return false;
+    return now_index(game, weapon) >= 0;
 }
 
 static bool g_give_item(void *context, uint64_t weapon) {
     game_t *game = context;
     call(game, "item %" PRIx64, weapon);
+    if (weapon == 0x63 && game->shield_makes_room && game->now_count >= 2 && now_index(game, game->in_hand) >= 0) {
+        call(game, "weapon_take %" PRIx64, game->in_hand);
+        now_remove(game, game->in_hand);
+    }
     // held at once, as the scripts give a grenade or a hero weapon; the shield (equipment) only a moment later
     if (!game->fail_item && weapon != 0x63 && game->item_count < 8)
         game->items[game->item_count++] = weapon;
@@ -308,12 +329,15 @@ static int g_primaries(void *context, uint64_t *out, int max) {
 static bool g_take(void *context, uint64_t weapon) {
     game_t *game = context;
     call(game, "take %" PRIx64, weapon);
+    now_remove(game, weapon);
     return true;
 }
 
 static bool g_give(void *context, uint64_t weapon, uint64_t options, uint32_t acvi) {
     game_t *game = context;
     call(game, "give %" PRIx64 " %" PRIx64 " %u", weapon, options, acvi);
+    if (!game->fail_give && now_index(game, weapon) < 0 && game->now_count < 16)
+        game->now[game->now_count++] = weapon;
     return !game->fail_give;
 }
 
@@ -350,6 +374,8 @@ static const char *restore(game_t *game, const char *guns, const char *in_hand, 
     loadout_ops_t ops = { game, g_weapon_for_name, g_primaries, g_take,      g_give,
                           g_acquire_aat, g_has_perk, g_give_perk, g_switch_to, NULL, NULL, NULL, NULL, NULL };
     game->calls[0] = '\0';
+    memcpy(game->now, game->held, sizeof(game->now));
+    game->now_count = game->held_count;
     loadout_restore(&saved, &ops, result);
     return game->calls;
 }
@@ -367,6 +393,8 @@ static const char *restore_full(game_t *game, const char *guns, const char *perk
     if (!new_ops)
         ops.set_pap_level = NULL, ops.holds = NULL, ops.give_item = NULL, ops.set_ammo = NULL, ops.set_hero_power = NULL;
     game->calls[0] = '\0';
+    memcpy(game->now, game->held, sizeof(game->now));
+    game->now_count = game->held_count;
     loadout_restore(&saved, &ops, result);
     return game->calls;
 }
@@ -422,6 +450,36 @@ static void test_restore_more(void) {
     CHECK(strcmp(calls, "take 4; give 44323 822a 17; give a5 2a 0; switch 44323; ") == 0);
     loadout_result_text(&result, text, sizeof(text));
     CHECK(strcmp(text, "took 1, gave 2 guns (0 held already), 0 ammo types, 0 perks (0 had already), 0 failed") == 0);
+
+    // the starting pistol in hand is a saved gun, so it stays; with two guns, weapon_give takes it to make room for
+    // the shield: it's given back (with its ammo type), then gets its ammo
+    game.item_count = 1;
+    game.in_hand = pistol;
+    game.shield_makes_room = true;
+    calls = restore_full(&game, "pistol_standard_zm:0:0:zm_aat_dead_wire,ray_gun_upgraded_zm:2a:0:", "", NULL,
+                         "zod_riotshield:3:0", "pistol_standard_zm:8:40", true, &result);
+    CHECK(strcmp(calls, "give a5 2a 0; aat 4 zm_aat_dead_wire; item 63; weapon_take 4; give 4 0 0; "
+                        "aat 4 zm_aat_dead_wire; ammo 4 8 40; switch 4; ") == 0);
+    if (strcmp(calls, "give a5 2a 0; aat 4 zm_aat_dead_wire; item 63; weapon_take 4; give 4 0 0; "
+                      "aat 4 zm_aat_dead_wire; ammo 4 8 40; switch 4; ") != 0)
+        printf("  calls: %s\n", calls);
+    CHECK(g_holds(&game, pistol) && g_holds(&game, raygun) && result.kept == 1 && result.given == 1 &&
+          result.given_back == 1 && result.failed == 0);
+    loadout_result_text(&result, text, sizeof(text));
+    CHECK(strcmp(text, "took 0, gave 1 guns (1 held already), 1 ammo types, 0 perks (0 had already), 0 repack levels, "
+                       "1 items (0 held already), ammo for 1, 1 guns given back after an item's give, 0 failed") == 0);
+    if (strcmp(text, "took 0, gave 1 guns (1 held already), 1 ammo types, 0 perks (0 had already), 0 repack levels, "
+                     "1 items (0 held already), ammo for 1, 1 guns given back after an item's give, 0 failed") != 0)
+        printf("  text: %s\n", text);
+    // one that can't be given back is told
+    game.fail_give = true;
+    game.held[1] = raygun;
+    game.held_count = 2;
+    restore_full(&game, "pistol_standard_zm:0:0:,ray_gun_upgraded_zm:2a:0:", "", NULL, "zod_riotshield:3:0", NULL,
+                 true, &result);
+    CHECK(strcmp(result.failures, "an item's give took pistol_standard_zm") == 0 && result.kept == 2);
+    game.fail_give = game.shield_makes_room = false;
+    game.held_count = 1;
 }
 
 // Items and GunAmmo text

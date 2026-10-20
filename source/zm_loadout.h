@@ -138,6 +138,7 @@ typedef struct {
     int taken, given, kept, aats, perks, perks_had, failed;
     char failures[256]; // what couldn't be restored, comma-separated
     int pap_levels, items, items_had, ammo;
+    int given_back; // guns an item's give took (to make room for a shield), given back
     int hero_power; // 1 if the hero weapon's charge came back
 } loadout_result_t;
 

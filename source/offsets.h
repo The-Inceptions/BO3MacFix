@@ -231,6 +231,9 @@
 #define ADDR_BG_WeaponIsClipOnly 0xf52ec2 // func - int (Weapon): SetWeaponAmmoStock sets the clip of one
 #define ADDR_BG_GetMaxAmmo 0xf52d88 // func - int (playerState_t *, Weapon, uint64_t): SetWeaponAmmoStock's clamp, its third argument read from ADDR_bg_maxAmmoArg
 #define ADDR_bg_maxAmmoArg 0x189cb10 // uint64_t SetWeaponAmmoStock passes BG_GetMaxAmmo - name is a guess
+#define ADDR_sv_running 0x118df7f0 // dvar_t *: sv_running (hash 0xefd7ca2e; Dvar_RegisterBool at 0xe77008, default off), on while this Mac runs the game's server (solo or host)
+#define dvar_Type 0x1c // uint32_t in dvar_t: 1 for a bool (Dvar_GetInt at 0xfa0252)
+#define dvar_Value 0x28 // the current value: a bool's is a byte
 // whether the player has control (the gun in hand after a restore made during a map's intro, zm_inventory.c)
 #define gentity_TagInfo 0x3e8 // pointer, not NULL while linked to another entity (G_EntUnlink at 0x10fdb07 returns without one; Unlink 0x13eaf65)
 #define gentity_LinkFlags 0x2a9 // uint8_t: IsLinkedTo (0x1011845f2) wants 0x10 before it looks further (logged only)

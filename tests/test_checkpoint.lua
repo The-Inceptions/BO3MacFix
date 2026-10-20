@@ -501,6 +501,36 @@ check(#saves == before + 1 and saves[#saves].Guns == LOADOUT_GUNS and
 leave_match()
 polls(1)
 
+-- a resumed game whose HUD isn't at its saved round yet (Ascension's intro, the HUD's round not moved yet, the
+-- restore pending): a quit, the page's row or the test switch don't write a lower round over the checkpoint
+store.Round, store.Points = "38", "12340"
+resume_row.run()
+check(state == 1 and store.AppliedRound == "38", "a round 38 resume set up")
+enter_match("zm_cosmodrome")
+models["controller0.gameScore.roundsPlayed"] = nil -- the intro: no HUD round yet
+before = #saves
+BO3MacFix.CheckpointMenuCreated("EndGamePopup", {})
+check(#saves == before and store.Round == "38", "no save during the intro: " .. tostring(store.Round))
+models["controller0.gameScore.roundsPlayed"] = 2 -- the HUD up at round 1 for a moment, the resume in use
+polls(1)
+check(state == 2, "in use")
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == before and store.Round == "38", "no round 1 over round 38: " .. tostring(store.Round))
+message = nil
+save_row.run()
+check(#saves == before and message ~= nil and string.find(message, "saved round 38", 1, true) ~= nil,
+    "the page's row says why: " .. tostring(message))
+-- at its round: saved as before (the saved loadout kept while its restore is pending)
+models["controller0.gameScore.roundsPlayed"] = 39
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == before + 1 and store.Round == "38", "at round 38 a quit saves: " .. tostring(store.Round))
+models["controller0.gameScore.roundsPlayed"] = 41
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+check(#saves == before + 2 and store.Round == "40", "and deeper: " .. tostring(store.Round))
+leave_match()
+polls(1)
+check(state == 0, "the resume undone after the match")
+
 -- the test switches with a Guns line and perks: set up the same way
 BO3MacFix.CheckpointMenuCreated = nil
 load(nil, "ray_gun_upgraded_zm:2a:0:zm_aat_turned", nil, "specialty_armorvest")

@@ -420,6 +420,7 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
     memset(result, 0, sizeof(*result));
     void *context = ops->context;
     uint64_t wanted[Loadout_Max_Guns] = { 0 };
+    bool back[Loadout_Max_Guns] = { false }; // held once the guns were given
     for (int i = 0; i < saved->gun_count; i++) {
         wanted[i] = ops->weapon_for_name(context, saved->guns[i].name);
         if (wanted[i] == 0)
@@ -456,11 +457,13 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         const loadout_gun_t *gun = &saved->guns[i];
         if (wanted[i] == 0 || contains(wanted, i, wanted[i]))
             continue;
-        if (contains(held, held_count, wanted[i]))
+        if (contains(held, held_count, wanted[i])) {
             result->kept++;
-        else if (ops->give(context, wanted[i], gun->options, gun->acvi))
+            back[i] = true;
+        } else if (ops->give(context, wanted[i], gun->options, gun->acvi)) {
             result->given++;
-        else
+            back[i] = true;
+        } else
             note_failure(result, "couldn't give", gun->name);
     }
     for (int i = 0; i < saved->gun_count; i++) {
@@ -506,6 +509,21 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         else
             note_failure(result, "no ammo for", item->name);
     }
+    // zm_weapons::weapon_give makes room for an item that isn't an offhand one (a shield) by taking the gun in hand
+    // when the guns are at the weapon limit (AAE's, as stock: before it gives the item, if the player didn't have it).
+    // The gun in hand is a saved one when it was kept from the start, so a saved gun such a give took goes back.
+    for (int i = 0; result->items > 0 && ops->holds != NULL && i < saved->gun_count; i++) {
+        const loadout_gun_t *gun = &saved->guns[i];
+        if (!back[i] || ops->holds(context, wanted[i]))
+            continue;
+        if (!ops->give(context, wanted[i], gun->options, gun->acvi)) {
+            note_failure(result, "an item's give took", gun->name);
+            continue;
+        }
+        result->given_back++;
+        if (gun->aat[0] != '\0' && !ops->acquire_aat(context, wanted[i], gun->aat))
+            note_failure(result, "no ammo type", gun->aat);
+    }
     // the hero weapon's charge, once it's back
     if (saved->have_hero_power) {
         uint64_t weapon = ops->weapon_for_name(context, saved->hero_name);
@@ -540,6 +558,9 @@ void loadout_result_text(const loadout_result_t *result, char *out, size_t out_s
     if (result->pap_levels > 0 || result->items > 0 || result->items_had > 0 || result->ammo > 0)
         snprintf(more, sizeof(more), "%d repack levels, %d items (%d held already), ammo for %d, %s", result->pap_levels,
                  result->items, result->items_had, result->ammo, result->hero_power > 0 ? "hero weapon's charge, " : "");
+    if (result->given_back > 0)
+        snprintf(more + strlen(more), sizeof(more) - strlen(more), "%d guns given back after an item's give, ",
+                 result->given_back);
     snprintf(out, out_size, "took %d, gave %d guns (%d held already), %d ammo types, %d perks (%d had already), %s%d "
              "failed%s%s", result->taken, result->given, result->kept, result->aats, result->perks, result->perks_had,
              more, result->failed, result->failed > 0 ? ": " : "", result->failures);

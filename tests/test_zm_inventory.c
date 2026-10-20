@@ -161,7 +161,9 @@ static int *ammo_at(uint64_t weapon, int offset) {
     int i = held_index(weapon);
     return i < 0 ? NULL : (int *)(client + offset + i * 4);
 }
+static int clip_reads; // calls of the game's clip getter
 static int fake_get_clip(void *ps, uint64_t weapon) {
+    clip_reads++;
     int *at = ammo_at(weapon, 0x684);
     return at != NULL ? *at : 0;
 }
@@ -281,6 +283,22 @@ static void fake_free(int inst, unsigned int thread) {
         note("free %d %u", inst, thread);
 }
 
+// the dvars: sv_running (a bool, read through safe_read) and AAE's Repack-a-Punch option (found by its hash)
+_Alignas(8) static uint8_t sv_running_dvar[0x40], dpap_dvar[0x40];
+static bool dpap_defined;
+static int dpap_value;
+static void set_server_running(bool running) {
+    uint32_t type = 1;
+    memcpy(sv_running_dvar + dvar_Type, &type, 4);
+    sv_running_dvar[dvar_Value] = running;
+}
+static void *fake_find_dvar(uint32_t hash) {
+    return dpap_defined && hash == loadout_script_hash("tfoption_dpap") ? dpap_dvar : NULL;
+}
+static int fake_dvar_int(const void *dvar) {
+    return dvar == dpap_dvar ? dpap_value : 0;
+}
+
 static void make_image(void) {
     image = mmap(NULL, Image_Size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (image == MAP_FAILED) {
@@ -312,6 +330,9 @@ static void make_image(void) {
     }
     image_put(ADDR_bg_attachmentNames, attachment_table, sizeof(attachment_table));
     image_put(ADDR_scrDefaultFunction, &default_code, 8);
+    uint64_t sv_running_at = (uint64_t)sv_running_dvar;
+    image_put(ADDR_sv_running, &sv_running_at, 8);
+    set_server_running(true);
     // the server script VM: its globals, class table and strings where the game has their pointers
     fake_vm_init(&vm, vm_memory, (uint64_t)vm_memory);
     image_put(ADDR_scrVarGlob, vm_memory + FakeVm_Glob, 0x100);
@@ -344,6 +365,8 @@ static void make_image(void) {
     BG_GetClipSize = fake_clip_size;
     BG_WeaponIsClipOnly = fake_clip_only;
     BG_GetMaxAmmo = fake_max_ammo;
+    Dvar_FindByHash = fake_find_dvar;
+    Dvar_GetInt = fake_dvar_int;
 }
 
 // the restore's give command, run now (as the give command's cheat check would run it); its result line
@@ -402,6 +425,16 @@ static void test_loadout(void) {
     CHECK(bare.gun_count == 3 && bare.guns[1].aat[0] == '\0' && bare.perk_count == 0);
     CHECK(strstr(note_text, "no script object") != NULL);
     fake_vm_put32(&vm, FakeVm_Classes + 4, real_class);
+    // a match this Mac doesn't run (sv_running off): g_entities is the last game's here, so nothing is read and the
+    // game's ammo functions aren't called
+    set_server_running(false);
+    clip_reads = 0;
+    char weapons_text[256];
+    CHECK(!zm_inventory_read_loadout(&bare, note_text, sizeof(note_text)) && bare.gun_count == 0 &&
+          bare.item_count == 0 && clip_reads == 0);
+    CHECK(!zm_inventory_read(weapons_text, sizeof(weapons_text)) && weapons_text[0] == '\0');
+    set_server_running(true);
+    CHECK(zm_inventory_read_loadout(&bare, note_text, sizeof(note_text)) && bare.gun_count == 3 && clip_reads > 0);
 
     // the resumed game: the starting pistol in hand, Quick Revive from the start, no ammo types yet
     memset(client + gclient_HeldWeapons, 0, gclient_HeldWeapon_Count * gclient_HeldWeapon_Size);
@@ -532,6 +565,19 @@ static void test_loadout(void) {
     pap_stuck = false;
     CHECK(strstr(calls, "pap_lvup a5; clip") != NULL && strstr(result, "no repack level for ray_gun_upgraded_zm") != NULL);
     CHECK(pap_level == 3);
+    // AAE's Repack-a-Punch option off now (tfoption_dpap 0): no repack levels; back on: given
+    dpap_defined = true;
+    dpap_value = 0;
+    zm_inventory_set_restore(&loadout);
+    result = restore_now(player_entity);
+    CHECK(strstr(calls, "pap_lvup") == NULL && strstr(result, "no repack level for ray_gun_upgraded_zm") != NULL &&
+          pap_level == 3);
+    dpap_value = 1;
+    zm_inventory_set_restore(&loadout);
+    result = restore_now(player_entity);
+    CHECK(strstr(calls, "pap_lvup a5; pap_lvup a5; clip") != NULL && strstr(result, "1 repack levels") != NULL &&
+          pap_level == 5);
+    dpap_defined = false;
 
     // the command itself: only "give bo3macfix_restore", from give's cheat check
     uint64_t give = base + ADDR_CheatsOk_From_Give, take = base + ADDR_CheatsOk_From_Take;

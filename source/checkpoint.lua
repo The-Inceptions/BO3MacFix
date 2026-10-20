@@ -283,7 +283,28 @@ local function collect(controller)
     return table.concat(lines, "\n"), seen
 end
 
+-- why a save now (a quit, the settings page's row, the test switch; AutoSave has its own rules) would write a lower
+-- round over the checkpoint, nil if it wouldn't: a resumed game whose HUD isn't at the round it resumes yet (its
+-- intro, the HUD's round not moved yet, often with its loadout's restore still pending)
+local function short_of_resume(controller)
+    local state = call(bo3macfix.CheckpointResume, 0)
+    if type(state) ~= "number" or state < 1 then return nil end
+    local checkpoint = read_checkpoint()
+    local resumed = tonumber(checkpoint.AppliedRound or checkpoint.Round)
+    local played = tonumber(model_value(Engine.GetModelForController(controller), "gameScore.roundsPlayed"))
+    -- the HUD's round is one less than roundsPlayed (see collect)
+    if resumed == nil or (played ~= nil and played - 1 >= resumed) then return nil end
+    return "this resumed game isn't at its saved round " .. tostring(resumed) .. " yet"
+end
+
+-- true once saved, nil if this game's round and points can't be read, false if it couldn't be saved; false and why
+-- when it isn't saved, so as not to write a lower round over the checkpoint
 local function save(controller, why)
+    local short = short_of_resume(controller)
+    if short ~= nil then
+        log("checkpoint: not saved (" .. why .. "): " .. short .. ", so the saved game stays")
+        return false, short
+    end
     local lines, seen = collect(controller)
     if lines == nil then
         log("checkpoint: couldn't read this game's round and points (" .. why .. ")")
@@ -348,7 +369,8 @@ function bo3macfix.CheckpointRows(controller, message)
     end
     save_row.run = function()
         if not in_match() then return message("Open this page during a zombies game to save it.") end
-        local saved = save(controller, "settings page")
+        local saved, short = save(controller, "settings page")
+        if short ~= nil then return message("Not saved: " .. short .. ", so the saved game stays.") end
         if saved == nil then return message("Couldn't read this game's round and points.") end
         if not saved then return message("Couldn't save BO3MacFix/checkpoint.ini.") end
         message("Saved " .. summary(read_checkpoint()) .. ".")
