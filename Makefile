@@ -5,7 +5,7 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
 	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint \
 	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan \
-	tests/test_aae_cheats
+	tests/test_aae_cheats tests/test_script_errors
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -159,6 +159,12 @@ tests/test_aae_cheats: tests/test_aae_cheats.c source/aae_cheats.c source/aae_ch
 		source/zm_loadout.c source/zm_loadout.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_aae_cheats.c \
 		source/zm_loadout.c
+
+# script_errors.c's QuietScriptErrors: which script errors it shows, against made-up script engine memory (the test
+# includes the source itself)
+tests/test_script_errors: tests/test_script_errors.c source/script_errors.c source/script_errors.h source/offsets.h \
+		source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_script_errors.c
 
 tests/test_zm_inventory: tests/test_zm_inventory.c source/zm_inventory.c source/zm_inventory.h source/offsets.h \
 		source/zm_loadout.c source/zm_loadout.h

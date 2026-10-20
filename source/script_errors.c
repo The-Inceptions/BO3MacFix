@@ -3,10 +3,10 @@
 // The Mac build runs the script engines with their developer flag on, so every script runtime error is printed: a
 // "throwing script exception" line, then a report with its call stack, about 760 bytes. A mod script that hits the
 // same error every frame writes that many times a second for as long as the game runs: All-around Enhancement's zombie
-// health bars assign a vector component about 30 times a second, ~80 MB an hour. With QuietScriptErrors each message
-// (its numbers left out) is shown in full 3 times a map; after that it's only counted, and once a minute a line says
-// how many more there were. At a map change (and at quit, in log.txt) a line for each message says how many weren't
-// shown on that map. The errors themselves, and what the scripts do after them, don't change.
+// health bars assign a vector component about 30 times a second, ~80 MB an hour. With QuietScriptErrors each error (its
+// message, numbers left out, at its place in the scripts) is shown in full 3 times a map; after that it's only counted,
+// and once a minute a line says how many more there were. At a map change (and at quit, in log.txt) a line for each
+// says how many weren't shown on that map. The errors themselves, and what the scripts do after them, don't change.
 #include <os/lock.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -29,6 +29,7 @@ static uint64_t base_address;
 #define VmPub_DebugCode 0x28
 #define VmPub_AbortOnError 0x2a
 #define VmPub_TerminalError 0x2b
+#define VmPos_Size 0x70
 #define JmpBufs_Size 0x2594
 #define JmpBuf_Size 0x94
 
@@ -42,13 +43,20 @@ typedef struct {
     uint32_t shown;
     uint32_t hidden;     // since the last summary
     uint32_t hidden_map; // on this map
-    uint32_t pending;    // hidden errors whose report is still to come
     uint64_t summary_at;
     char message[96];    // the first hidden one's, for the map's summary
 } error_slot_t;
 static error_slot_t errors[Error_Slots];
+// per script instance, the message key of the error just thrown without a word, whose report comes next: the throw
+// longjmps straight to the VM's catch, which reports it before anything else runs on that instance
+static uint64_t hidden_report[2];
 static os_unfair_lock errors_lock = OS_UNFAIR_LOCK_INIT;
 static bool quiet_on;
+
+typedef void (*longjmp_t)(void *env, int value) __attribute__((noreturn));
+typedef void (*Com_Printf_t)(const char *format, ...);
+static Com_Printf_t print_script_error;
+static longjmp_t script_longjmp;
 
 static uint8_t *var_pub(int inst) {
     return (uint8_t *)(base_address + ADDR_scrVarPub) + (size_t)inst * VarPub_Size;
@@ -59,7 +67,7 @@ static uint8_t *vm_pub(int inst) {
 }
 
 // a message's key: which engine, and its text without the numbers in it (values and positions change between repeats)
-static uint64_t error_key(int inst, const char *message) {
+static uint64_t message_key(int inst, const char *message) {
     uint64_t hash = 0xcbf29ce484222325ULL ^ (uint64_t)inst;
     for (; *message != '\0'; message++) {
         char c = *message;
@@ -67,6 +75,16 @@ static uint64_t error_key(int inst, const char *message) {
             continue;
         hash = (hash ^ (uint8_t)c) * 0x100000001b3ULL;
     }
+    return hash != 0 ? hash : 1;
+}
+
+// an error's key: its message's, and its place, the code position the script engine had reached when it threw (the
+// same each time for the same place: the instruction, and what its handler had read of it), so a message seen 3 times
+// already still shows from somewhere else
+static uint64_t error_key(uint64_t message, uint64_t place) {
+    uint64_t hash = message;
+    for (int i = 0; i < 8; i++, place >>= 8)
+        hash = (hash ^ (place & 0xff)) * 0x100000001b3ULL;
     return hash != 0 ? hash : 1;
 }
 
@@ -81,9 +99,6 @@ static int error_slot(uint64_t key) {
     }
     return -1;
 }
-
-typedef void (*longjmp_t)(void *env, int value) __attribute__((noreturn));
-typedef void (*Com_Printf_t)(const char *format, ...);
 
 // Scr_ErrorInternal throws a runtime error to the script engine (a longjmp), printing it first while developer is on.
 // For a repeat, throw it without printing, the way it does with developer off.
@@ -100,7 +115,8 @@ install_hook_name(Scr_ErrorInternal, void, int inst) {
         orig_Scr_ErrorInternal(inst);
         return;
     }
-    uint64_t key = error_key(inst, message), now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    uint64_t text = message_key(inst, message), now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    uint64_t key = error_key(text, *(const uint64_t *)(base_address + ADDR_scrVmPos + (size_t)inst * VmPos_Size));
     uint32_t summary = 0;
     bool show = true;
     os_unfair_lock_lock(&errors_lock);
@@ -113,7 +129,6 @@ install_hook_name(Scr_ErrorInternal, void, int inst) {
             show = false;
             errors[slot].hidden++;
             errors[slot].hidden_map++;
-            errors[slot].pending++;
             if (errors[slot].message[0] == '\0')
                 strlcpy(errors[slot].message, message, sizeof(errors[slot].message));
             if (now >= errors[slot].summary_at) {
@@ -123,45 +138,34 @@ install_hook_name(Scr_ErrorInternal, void, int inst) {
             }
         }
     }
+    hidden_report[inst] = show ? 0 : text;
     os_unfair_lock_unlock(&errors_lock);
     if (show) {
         orig_Scr_ErrorInternal(inst);
         return;
     }
     if (summary > 0)
-        ((Com_Printf_t)(base_address + ADDR_Com_PrintScriptError))(
-            "BO3MacFix: %u more script errors like \"%s\" in the last minute, not shown (QuietScriptErrors shows each "
-            "message %d times)\n",
-            summary, message, Shown_Times);
+        print_script_error("BO3MacFix: %u more script errors like \"%s\" in the last minute, not shown (QuietScriptErrors "
+                           "shows each error %d times at each place)\n",
+                           summary, message, Shown_Times);
     int depth = *(int *)(base_address + ADDR_scrJmpBufDepth + (size_t)inst * 4);
-    ((longjmp_t)(base_address + ADDR_Stub_longjmp))(
-        (uint8_t *)(base_address + ADDR_scrJmpBufs) + (size_t)inst * JmpBufs_Size + (size_t)depth * JmpBuf_Size, -1);
+    script_longjmp((uint8_t *)(base_address + ADDR_scrJmpBufs) + (size_t)inst * JmpBufs_Size + (size_t)depth * JmpBuf_Size,
+                   -1);
 }
 
 // the error report with its call stack, which the script engine prints after catching the throw
 install_hook_name(Scr_RuntimeErrorInternal, void, int inst, const char *code_pos, unsigned int index,
                   const char *message, const char *dialog_message) {
-    if ((inst == 0 || inst == 1) && message != NULL) {
+    if (inst == 0 || inst == 1) {
+        // the report that comes after a hidden throw is that throw's, the same message (checked anyway); any report
+        // ends the wait for one, so a throw that somehow isn't reported can't hide another error's
+        os_unfair_lock_lock(&errors_lock);
+        uint64_t hidden = hidden_report[inst];
+        hidden_report[inst] = 0;
+        os_unfair_lock_unlock(&errors_lock);
         uint8_t *vm = vm_pub(inst);
-        bool hide = false;
-        if (!vm[VmPub_TerminalError] && !vm[VmPub_AbortOnError] && !vm[VmPub_DebugCode]) {
-            uint64_t key = error_key(inst, message);
-            os_unfair_lock_lock(&errors_lock);
-            for (int i = 0; i < Error_Probes; i++) {
-                int slot = (int)((key + (uint64_t)i) & (Error_Slots - 1));
-                if (errors[slot].key == key) {
-                    if (errors[slot].pending > 0) {
-                        errors[slot].pending--;
-                        hide = true;
-                    }
-                    break;
-                }
-                if (errors[slot].key == 0)
-                    break;
-            }
-            os_unfair_lock_unlock(&errors_lock);
-        }
-        if (hide)
+        if (hidden != 0 && message != NULL && !vm[VmPub_TerminalError] && !vm[VmPub_AbortOnError] &&
+            !vm[VmPub_DebugCode] && message_key(inst, message) == hidden)
             return;
     }
     orig_Scr_RuntimeErrorInternal(inst, code_pos, index, message, dialog_message);
@@ -182,10 +186,11 @@ static void summarize_and_forget(bool quitting) {
     if (copy != NULL)
         memcpy(copy, errors, sizeof(errors));
     memset(errors, 0, sizeof(errors));
+    memset(hidden_report, 0, sizeof(hidden_report));
     os_unfair_lock_unlock(&errors_lock);
     if (copy == NULL)
         return;
-    Com_Printf_t print = quitting ? print_log : (Com_Printf_t)(base_address + ADDR_Com_PrintScriptError);
+    Com_Printf_t print = quitting ? print_log : print_script_error;
     for (int i = 0; i < Error_Slots; i++) {
         const error_slot_t *e = &copy[i];
         if (e->hidden_map == 0)
@@ -250,6 +255,8 @@ static int env_override(const char *name, int value) {
 void script_errors_init(uint64_t game_base_address, int quiet) {
     base_address = game_base_address;
     Scr_FreeValuePair = (void *)(base_address + ADDR_Scr_FreeValuePair);
+    print_script_error = (Com_Printf_t)(base_address + ADDR_Com_PrintScriptError);
+    script_longjmp = (longjmp_t)(base_address + ADDR_Stub_longjmp);
     install_hook_Scr_EvalEquality((void *)(base_address + ADDR_Scr_EvalEquality));
     if (env_override("BO3MACFIX_QUIETSCRIPTERRORS", quiet) == 0)
         return;
