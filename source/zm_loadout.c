@@ -420,6 +420,7 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
     memset(result, 0, sizeof(*result));
     void *context = ops->context;
     uint64_t wanted[Loadout_Max_Guns] = { 0 };
+    bool back[Loadout_Max_Guns] = { false }; // held once the guns were given
     for (int i = 0; i < saved->gun_count; i++) {
         wanted[i] = ops->weapon_for_name(context, saved->guns[i].name);
         if (wanted[i] == 0)
@@ -456,11 +457,13 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
         const loadout_gun_t *gun = &saved->guns[i];
         if (wanted[i] == 0 || contains(wanted, i, wanted[i]))
             continue;
-        if (contains(held, held_count, wanted[i]))
+        if (contains(held, held_count, wanted[i])) {
             result->kept++;
-        else if (ops->give(context, wanted[i], gun->options, gun->acvi))
+            back[i] = true;
+        } else if (ops->give(context, wanted[i], gun->options, gun->acvi)) {
             result->given++;
-        else
+            back[i] = true;
+        } else
             note_failure(result, "couldn't give", gun->name);
     }
     for (int i = 0; i < saved->gun_count; i++) {
@@ -505,6 +508,18 @@ void loadout_restore(const loadout_t *saved, const loadout_ops_t *ops, loadout_r
             result->ammo++;
         else
             note_failure(result, "no ammo for", item->name);
+    }
+    // zm_weapons::weapon_give makes room for an item that isn't an offhand one (a shield) by taking the gun in hand
+    // when the guns are at the weapon limit (AAE's, as stock: before it gives the item, if the player didn't have it).
+    // The gun in hand is a saved one when it was kept from the start, so a saved gun such a give took goes back.
+    for (int i = 0; result->items > 0 && ops->holds != NULL && i < saved->gun_count; i++) {
+        const loadout_gun_t *gun = &saved->guns[i];
+        if (!back[i] || ops->holds(context, wanted[i]))
+            continue;
+        if (!ops->give(context, wanted[i], gun->options, gun->acvi))
+            note_failure(result, "an item's give took", gun->name);
+        else if (gun->aat[0] != '\0' && !ops->acquire_aat(context, wanted[i], gun->aat))
+            note_failure(result, "no ammo type", gun->aat);
     }
     // the guns' clip and stock, which came back as their start ammo
     for (int i = 0; i < saved->gun_count; i++) {
