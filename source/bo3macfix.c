@@ -1137,6 +1137,12 @@ __attribute__((constructor)) static void dylib_main() {
     // notices.lua sees, see gpu_tweaks.c
     gpu_tweaks_pause_menu_fps_init(read_int_setting_or_env("PauseMenuFPS", 30), checked_code_patch);
 
+    // limit it in the menus outside a match (MenuFPS, 40 by default), which notices.lua sees too, and while the game
+    // isn't the active app or can't be seen, with the menus or a match up (BackgroundFPS, 30 by default), see
+    // gpu_tweaks.c and app_focus.m
+    gpu_tweaks_menu_fps_init(read_int_setting_or_env("MenuFPS", 40), checked_code_patch);
+    gpu_tweaks_background_fps_init(read_int_setting_or_env("BackgroundFPS", 30), checked_code_patch);
+
     // quitting without Aspyr's shutdown crash, and game audio following the default output device (see qol.c)
     qol_init(read_int_setting("ExitFix", 1), read_int_setting("AudioFollowsDefault", 1));
 

@@ -1,7 +1,7 @@
 -- Runs source/notices.lua against a made-up LUI and Engine, with any Lua 5.x: lua tests/test_notices.lua
 -- Checks the toast's life (shown, faded, closed, one at a time), that it goes on the root of the latest menu and back
--- on top when a menu is made, when PauseOnDisconnect pauses, and when BO3MacFix is told the pause menu is open in a
--- match (PauseMenuFPS).
+-- on top when a menu is made, when PauseOnDisconnect pauses, when BO3MacFix is told the pause menu is open in a
+-- match (PauseMenuFPS), and when it's told the game is in the menus outside a match (MenuFPS).
 local failures = 0
 local function check(condition, what)
     if not condition then
@@ -41,6 +41,7 @@ local full, root0 = element(), element()
 local now = 0
 local queue, pause_request, pauses, logs = {}, nil, 0, {}
 local told = {} -- what PauseMenuOpen was told, in order
+local told_menus = {} -- what MenusOpen was told, in order
 local state = { in_game = true, can_pause = true, gamepad = true }
 BO3MacFix = {
     NoticeLog = function(text) table.insert(logs, text) end,
@@ -68,7 +69,7 @@ Engine = {
 
 local here = arg and arg[0] and arg[0]:match("^(.*)/[^/]*$") or "tests"
 local chunk = assert(loadfile(here .. "/../source/notices.lua"))
-chunk(false)
+chunk(false, function(open) table.insert(told_menus, open) end)
 
 local timer = nil
 for _, child in ipairs(full.children) do if child.timer then timer = child end end
@@ -290,6 +291,32 @@ local unsure = open_pause_menu(root0)
 tick(2)
 check(#told == 0, "not told it's open when Engine.IsInGame fails")
 unsure:close()
+Engine.IsInGame = is_in_game
+
+-- MenuFPS: told on every poll whether the game is in the menus outside a match
+local function all(list, value)
+    for _, v in ipairs(list) do if v ~= value then return false end end
+    return true
+end
+check(#told_menus > 0, "the polls above were told about the menus")
+told_menus = {}
+tick(3)
+check(#told_menus == 3 and all(told_menus, 0), "told on every poll in a match that it isn't in the menus")
+told_menus = {}
+state.in_game = false
+tick(4)
+check(#told_menus == 4 and all(told_menus, 1), "told on every poll outside a match that it is")
+state.in_game = true
+tick()
+check(#told_menus == 5 and told_menus[5] == 0, "and that it isn't as soon as a match starts")
+-- an Engine.IsInGame that fails or is missing counts as not in the menus
+told_menus = {}
+Engine.IsInGame = function() error("boom") end
+tick(2)
+check(#told_menus == 2 and all(told_menus, 0), "not in the menus when Engine.IsInGame fails")
+Engine.IsInGame = nil
+tick(2)
+check(#told_menus == 4 and all(told_menus, 0), "nor when there's no Engine.IsInGame")
 Engine.IsInGame = is_in_game
 
 if failures == 0 then print("test_notices.lua: all passed") end
