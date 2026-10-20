@@ -12,11 +12,13 @@
 // With every slot left at 0 the copy runs exactly like the original.
 #include <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
+#include <stddef.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
@@ -623,6 +625,76 @@ static int sha256_file(const char *path, uint8_t digest[CC_SHA256_DIGEST_LENGTH]
     return 0;
 }
 
+// The launcher checks the copy at every launch, and hashing the 37 MB original takes ~90 ms under Rosetta. So the
+// original's hash is kept in "<copy>.checked" with what identifies that version of the file (device, inode, size,
+// modification and change times, like make or git's index), and it's hashed again only when any of them changed. A
+// game update replaces or rewrites the file, which always sets a new change time.
+typedef struct {
+    char magic[8];
+    uint64_t device, inode, size;
+    int64_t mtime_sec, mtime_nsec, ctime_sec, ctime_nsec;
+    uint8_t sha256[CC_SHA256_DIGEST_LENGTH];
+} checked_t;
+
+static const char Checked_Magic[8] = { 'B', 'O', '3', 'M', 'F', 'c', 'h', '1' };
+
+static void checked_from_stat(checked_t *c, const struct stat *st) {
+    memset(c, 0, sizeof(*c));
+    memcpy(c->magic, Checked_Magic, sizeof(c->magic));
+    c->device = (uint64_t)st->st_dev;
+    c->inode = (uint64_t)st->st_ino;
+    c->size = (uint64_t)st->st_size;
+    c->mtime_sec = st->st_mtimespec.tv_sec;
+    c->mtime_nsec = st->st_mtimespec.tv_nsec;
+    c->ctime_sec = st->st_ctimespec.tv_sec;
+    c->ctime_nsec = st->st_ctimespec.tv_nsec;
+}
+
+// the original's hash from <copy>.checked, if it was taken from the file as it is now
+static bool read_checked(const char *copy, const struct stat *st, uint8_t digest[CC_SHA256_DIGEST_LENGTH]) {
+    char path[1024];
+    if (snprintf(path, sizeof(path), "%s.checked", copy) >= (int)sizeof(path))
+        return false;
+    FILE *fp = fopen(path, "rb");
+    if (fp == NULL)
+        return false;
+    checked_t stored, now;
+    bool whole = fread(&stored, sizeof(stored), 1, fp) == 1 && fgetc(fp) == EOF;
+    fclose(fp);
+    checked_from_stat(&now, st);
+    if (!whole || memcmp(&stored, &now, offsetof(checked_t, sha256)) != 0)
+        return false;
+    memcpy(digest, stored.sha256, CC_SHA256_DIGEST_LENGTH);
+    return true;
+}
+
+static void write_checked(const char *copy, const struct stat *st, const uint8_t digest[CC_SHA256_DIGEST_LENGTH]) {
+    // whole-second times can be a file system that can't tell two writes in the same second (or two) apart, so
+    // the hash isn't kept until the file is a few seconds old
+    if (st->st_mtimespec.tv_nsec == 0 && st->st_ctimespec.tv_nsec == 0 && time(NULL) - st->st_ctimespec.tv_sec < 3 &&
+        time(NULL) - st->st_mtimespec.tv_sec < 3)
+        return;
+    char path[1024], temp[1040];
+    if (snprintf(path, sizeof(path), "%s.checked", copy) >= (int)sizeof(path))
+        return;
+    snprintf(temp, sizeof(temp), "%s.tmp%d", path, (int)getpid());
+    checked_t c;
+    checked_from_stat(&c, st);
+    memcpy(c.sha256, digest, CC_SHA256_DIGEST_LENGTH);
+    FILE *fp = fopen(temp, "wb");
+    if (fp == NULL)
+        return;
+    bool written = fwrite(&c, sizeof(c), 1, fp) == 1;
+    if (fclose(fp) != 0 || !written || rename(temp, path) != 0)
+        unlink(temp);
+}
+
+static bool same_file_version(const struct stat *a, const struct stat *b) {
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_size == b->st_size &&
+           a->st_mtimespec.tv_sec == b->st_mtimespec.tv_sec && a->st_mtimespec.tv_nsec == b->st_mtimespec.tv_nsec &&
+           a->st_ctimespec.tv_sec == b->st_ctimespec.tv_sec && a->st_ctimespec.tv_nsec == b->st_ctimespec.tv_nsec;
+}
+
 EXPORT int BO3MacFix_PrepatchedIsCurrent(const char *original, const char *copy, char *message, size_t message_size) {
     prepatch_header_t h;
     FILE *fp = fopen(copy, "rb");
@@ -635,11 +707,21 @@ EXPORT int BO3MacFix_PrepatchedIsCurrent(const char *original, const char *copy,
     if (h.table_id != table_id())
         return fail(message, message_size, "the pre-patched executable was made by a different BO3MacFix");
     uint8_t digest[CC_SHA256_DIGEST_LENGTH];
-    if (sha256_file(original, digest, NULL, NULL) != 0)
+    struct stat before, after;
+    if (stat(original, &before) != 0)
         return fail(message, message_size, "couldn't read %s", original);
+    bool known = read_checked(copy, &before, digest);
+    if (!known) {
+        if (sha256_file(original, digest, NULL, NULL) != 0)
+            return fail(message, message_size, "couldn't read %s", original);
+        // kept only if the file didn't change while it was read
+        if (stat(original, &after) == 0 && same_file_version(&before, &after))
+            write_checked(copy, &before, digest);
+    }
     if (memcmp(digest, h.source_sha256, sizeof(digest)) != 0)
         return fail(message, message_size, "the game was updated since the pre-patched executable was made");
-    snprintf(message, message_size, "the pre-patched executable is up to date");
+    snprintf(message, message_size, "the pre-patched executable is up to date%s",
+             known ? " (the game's executable is unchanged since it was last hashed)" : "");
     return 0;
 }
 
