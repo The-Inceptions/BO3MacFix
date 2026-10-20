@@ -1,5 +1,6 @@
 // Tests gc_bridge.m's player slots as the game's XInputGetState and XInputSetState calls see them: the "found" line,
-// SDL taking and letting go of user indexes, bridged controllers moving, waiting and moving down, disconnects, when
+// SDL taking and letting go of user indexes, SDL's controllers moved off a bridged one's index (under Aspyr's lock), bridged
+// controllers moving, waiting and moving down, disconnects, when
 // the game is asked to look for controllers, and which disconnects PauseOnDisconnect pauses for. The controllers are
 // stand-ins (FakeController), and nothing here talks to the GameController daemon or a real controller.
 #include <sys/mman.h>
@@ -256,6 +257,44 @@ int main(void) {
     disconnect_pad(xbox_pad);
     run_main_queue();
     CHECK(lost == 3);
+
+    // Aspyr's lock is a real one from here (above, trylock refuses a zeroed one, and the bridged controller gives way).
+    // SDL puts a new controller (an Xbox one connecting) on the DualSense's player: while Aspyr holds its lock, nothing
+    // moves and the game reads SDL's this once. Then SDL's moves to the first free player with its rumble, the DualSense
+    // keeps player 1, and the game is asked to look for the moved one
+    *(pthread_mutex_t *)(base_address + ADDR_ASL_XInputMutex) = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    FakeController *kept = [FakeController new];
+    bridged_pad *f = bridge(kept, "DualSense");
+    CHECK(f->user_index == 0 && get(0) == ERROR_SUCCESS && f->found);
+    volatile uint64_t *slot0 = (volatile uint64_t *)(base_address + ADDR_ASL_XInputSlots), *slot1 = slot0 + 3;
+    static uint8_t haptic[8];
+    int asked_before = asked;
+    pthread_mutex_lock(asl_mutex());
+    set_sdl(0, xbox);
+    slot0[1] = (uint64_t)(uintptr_t)haptic;
+    slot0[2] = 5;
+    CHECK(get(0) == ERROR_SUCCESS); // SDL's, this once
+    CHECK(f->user_index == 0 && f->found && sdl_slot(0) == xbox && asked == asked_before);
+    pthread_mutex_unlock(asl_mutex());
+    CHECK(get(0) == ERROR_SUCCESS);
+    CHECK(f->user_index == 0 && f->found && gc_bridge_is_playstation_user(0));
+    CHECK(slot0[0] == 0 && slot0[1] == 0 && slot0[2] == 0);
+    CHECK(sdl_slot(1) == xbox && slot1[1] == (uint64_t)(uintptr_t)haptic && slot1[2] == 5);
+    CHECK(asked == asked_before + 1 && strcmp(asked_why, "an SDL controller moved to a free player") == 0);
+    CHECK(get(1) == ERROR_SUCCESS && !gc_bridge_is_playstation_user(1));
+
+    // another one on player 1 goes to player 3. With all four players used, the DualSense gives way, as before
+    set_sdl(0, xbox2);
+    get(0);
+    CHECK(f->user_index == 0 && sdl_slot(0) == NULL && sdl_slot(2) == xbox2);
+    set_sdl(3, xbox3);
+    set_sdl(0, sony);
+    get(0);
+    CHECK(f->user_index == -1 && sdl_slot(0) == sony);
+    for (int u = 0; u < 4; u++)
+        set_sdl(u, NULL);
+    get(0);
+    CHECK(f->user_index == 0);
 
     // the quick save looks at the states the game reads, bridged or SDL's (L3 + R3 in the pause menu)
     CHECK(quick_save_looks > 0);

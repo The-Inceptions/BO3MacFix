@@ -97,6 +97,8 @@
 #define ADDR_ASL_XInputGetState 0x1294a8 // func - DWORD XInputGetState(DWORD dwUserIndex, XINPUT_STATE *pState)
 #define ADDR_ASL_XInputSetState 0x1295ac // func - DWORD XInputSetState(DWORD dwUserIndex, XINPUT_VIBRATION *pVibration)
 #define ADDR_ASL_XInputEnabled 0x1b97300 // bool - XInputEnable state, starts true and nothing changes it - name is a guess
+#define ADDR_ASL_XInputRefresh 0x129170 // func - void (void), on SDL_CONTROLLERDEVICEADDED/REMOVED (its event filter at 0x129157): under ADDR_ASL_XInputMutex, closes detached controllers, then puts each newly opened game controller in the first slot whose controller is NULL - name is a guess
+#define ADDR_ASL_XInputMutex 0x1b972c0 // std::mutex (a pthread_mutex_t) - held by ASL_XInputRefresh and the two functions that empty the slots (0x129364, 0x12972c); the XInputGetState/SetState bodies read the slots without it - name is a guess
 #define ADDR_CFString_HIDVersionNumber 0x1b8b5e0 // CFStringRef - the "VersionNumber" key SDL 2.0.7 reads
 #define ADDR_GPad_DevicesChanged 0x122f77a // func - void (void), the main window's WM_DEVICECHANGE (DBT_DEVNODES_CHANGED) handler: Cbuf_InsertText(0, "wait; gpadupdate;wait 60; gpadupdate;\n") - name is a guess
 #define ADDR_dvar_gpadEnabled 0x14ce0a28 // dvar_t * - bool, gpadupdate only looks for controllers while it's set, NULL until GPad_Init registers it - name is a guess
