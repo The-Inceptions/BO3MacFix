@@ -26,9 +26,13 @@ void zm_inventory_install_hook(void);
 // address gives false, not a crash. False, with out empty, if there's no game hosted here or no player in it.
 bool zm_inventory_read(char *out, size_t out_size);
 
-// lets the local player's next count give and take commands through the cheat check, for 10 seconds; the other cheat
-// commands (noclip, god and the like) still need sv_cheats
-void zm_inventory_allow_cheats(int count);
+// lets the "give name" and "take name" lines of commands (BO3MacFix's own, as the game will run them) through the cheat
+// check, each once, for the local player, whenever the game runs it: it holds commands while it's paused. Replaces the
+// ones allowed before (none for an empty text); returns how many. The other cheat commands (noclip, god and the like)
+// and other names still need sv_cheats.
+int zm_inventory_allow_commands(const char *commands);
+// how many of those the game hasn't run yet
+int zm_inventory_allowed_left(void);
 
 // the local player's loadout: its primary weapons, with names that have their attachments, options, cosmetic variants
 // and ammo types, the one in hand, and its perks. note gets what couldn't be read from the script VM, if anything.

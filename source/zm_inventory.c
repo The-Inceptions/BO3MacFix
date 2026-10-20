@@ -2,7 +2,6 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <os/lock.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,11 +12,20 @@
 #include "zm_loadout.h"
 
 #define Weapon_Index_Mask 0x1ff // a Weapon's low 9 bits are its index in the weapon tables, 0 for none
-#define Allow_Ms 10000
+#define Allowed_Max 8            // give and take commands let through at once (a resume sends two or three)
 
 static uint64_t base;
-static atomic_int allowed;
-static atomic_llong allowed_until;
+static void (*SV_Cmd_ArgvBuffer)(int arg, char *buffer, int size); // the client command's arguments
+// BO3MacFix's own give and take commands, each let past the cheat check once, whenever the game runs it: it holds
+// them while it's paused (the pause menu open as the resume sends them), and they ran too late for a 10 s allowance
+typedef struct {
+    bool give;
+    char name[64];
+} allowed_command_t;
+static allowed_command_t allowed[Allowed_Max];
+static int allowed_count;      // how many of them the game hasn't run yet
+static long long allowed_at;   // when they were allowed, for the log
+static os_unfair_lock allowed_lock = OS_UNFAIR_LOCK_INIT;
 
 static long long now_ms(void) {
     struct timespec t;
@@ -128,25 +136,60 @@ bool zm_inventory_read(char *out, size_t out_size) {
     return true;
 }
 
-void zm_inventory_allow_cheats(int count) {
-    atomic_store(&allowed_until, now_ms() + Allow_Ms);
-    atomic_store(&allowed, count);
+int zm_inventory_allow_commands(const char *commands) {
+    os_unfair_lock_lock(&allowed_lock);
+    allowed_count = 0;
+    allowed_at = now_ms();
+    for (const char *line = commands; line != NULL && *line != '\0' && allowed_count < Allowed_Max;) {
+        size_t len = strcspn(line, "\n");
+        bool give = len > 5 && strncmp(line, "give ", 5) == 0, take = len > 5 && strncmp(line, "take ", 5) == 0;
+        size_t name_len = len - 5;
+        // "give name" or "take name", nothing after the name
+        if ((give || take) && name_len < sizeof(allowed[0].name) && memchr(line + 5, ' ', name_len) == NULL) {
+            allowed[allowed_count].give = give;
+            memcpy(allowed[allowed_count].name, line + 5, name_len);
+            allowed[allowed_count].name[name_len] = '\0';
+            allowed_count++;
+        }
+        line += len + (line[len] == '\n');
+    }
+    int count = allowed_count;
+    os_unfair_lock_unlock(&allowed_lock);
+    return count;
 }
 
-// whether CheatsOk(ent), returning to return_address, is for one of BO3MacFix's own commands, and takes one of those
-// zm_inventory_allow_cheats let through if so: the give or take command asks (not noclip, god or the other cheat
-// commands, which a player could type meanwhile), for the local player, alive, in time
-static bool let_through(void *ent, uint64_t return_address) {
-    if ((return_address != base + ADDR_CheatsOk_From_Give && return_address != base + ADDR_CheatsOk_From_Take) ||
-        ent == NULL || (uint64_t)ent != entities() || now_ms() >= atomic_load(&allowed_until))
+int zm_inventory_allowed_left(void) {
+    os_unfair_lock_lock(&allowed_lock);
+    int count = allowed_count;
+    os_unfair_lock_unlock(&allowed_lock);
+    return count;
+}
+
+// whether CheatsOk(ent), returning to return_address, is for one of the commands zm_inventory_allow_commands let
+// through, and takes it if so: the give or take command asks (not noclip, god or the other cheat commands, which a
+// player could type meanwhile), with that name, for the local player. One the game runs while the player isn't alive
+// is used up too, and refused, as the game's check refuses it; *held gets how long after it was allowed it ran.
+static bool let_through(void *ent, uint64_t return_address, long long *held) {
+    bool give = return_address == base + ADDR_CheatsOk_From_Give;
+    if ((!give && return_address != base + ADDR_CheatsOk_From_Take) || ent == NULL ||
+        (uint64_t)ent != entities() || SV_Cmd_ArgvBuffer == NULL)
         return false;
-    int health = 0;
-    if (!safe_read((uint64_t)ent + gentity_Health, &health, sizeof(health)) || health <= 0)
-        return false;
-    int left = atomic_load(&allowed);
-    while (left > 0 && !atomic_compare_exchange_weak(&allowed, &left, left - 1)) {
+    char name[sizeof(allowed[0].name)];
+    name[0] = '\0';
+    SV_Cmd_ArgvBuffer(1, name, sizeof(name));
+    bool found = false;
+    os_unfair_lock_lock(&allowed_lock);
+    for (int i = 0; i < allowed_count && !found; i++) {
+        if (allowed[i].give == give && strcasecmp(allowed[i].name, name) == 0) {
+            allowed[i] = allowed[--allowed_count];
+            found = true;
+        }
     }
-    return left > 0;
+    if (held != NULL)
+        *held = now_ms() - allowed_at;
+    os_unfair_lock_unlock(&allowed_lock);
+    int health = 0;
+    return found && safe_read((uint64_t)ent + gentity_Health, &health, sizeof(health)) && health > 0;
 }
 
 // ---- the full loadout (zm_loadout.c): recorded from the player state and the server script VM's variables, and
@@ -178,7 +221,6 @@ static void (*G_SwitchToWeapon)(void *ent, int immediate, uint64_t weapon);
 static uint64_t (*BG_GetWeaponForName)(const char *name);
 static int (*BG_GetPerkIndexForName)(const char *name);
 static bool (*BG_HasPerk)(void *client, int index);
-static void (*SV_Cmd_ArgvBuffer)(int arg, char *buffer, int size);
 static script_handle_t *(*Scr_GetFunctionHandle)(script_handle_t *out, int inst, const char *script, uint32_t ns,
                                                  uint32_t name, int *checksum, bool required);
 static unsigned int (*Scr_ExecEntThread)(void *ent, int params, script_handle_t handle);
@@ -813,7 +855,7 @@ const char *zm_inventory_switch_poll(void) {
 }
 
 // CheatsOk(ent): whether ent may use cheat commands (sv_cheats is on and it's alive). BO3MacFix's own give and take
-// commands for the local player get through while zm_inventory_allow_cheats says so; "give bo3macfix_restore"
+// commands for the local player get through as zm_inventory_allow_commands says; "give bo3macfix_restore"
 // restores the loadout zm_inventory_set_restore set up, and then tells give it's done; everything else is the game's.
 // The hook is reached by a jump (the pre-patched copy's stub or Dobby's), so the return address is the game's caller.
 install_hook_name(CheatsOk, int, void *ent) {
@@ -825,8 +867,10 @@ install_hook_name(CheatsOk, int, void *ent) {
         run_switch(ent);
     if (command != 0)
         return 0;
-    if (let_through(ent, from)) {
-        printf("BO3MacFix: zm inventory: let BO3MacFix's command past the cheat check\n");
+    long long held = 0;
+    if (let_through(ent, from, &held)) {
+        printf("BO3MacFix: zm inventory: let BO3MacFix's %s command past the cheat check (%.1f s after it was sent)\n",
+               from == base + ADDR_CheatsOk_From_Give ? "give" : "take", held / 1000.0);
         return 1;
     }
     return orig_CheatsOk(ent);

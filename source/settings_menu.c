@@ -26,6 +26,12 @@ static int lua_log(lua_State *s) {
 // as BO3MacFix.SaveCheckpoint and the rest
 static const checkpoint_paths_t checkpoint_paths = { Checkpoint_File, Checkpoint_Players_Folder };
 
+// the argument at index if it's a string, else NULL (without the Lua error hks_check_string raises)
+static const char *string_arg(lua_State *s, int index) {
+    HksObject *arg = HKS_BASE(s) + (index - 1);
+    return arg < HKS_TOP(s) && (arg->t & 0xF) == HKS_TSTRING ? hks_check_string(s, index) : NULL;
+}
+
 // SaveCheckpoint("Key=value" lines): whether it was saved
 static int lua_checkpoint_save(lua_State *s) {
     bool saved = checkpoint_save(&checkpoint_paths, hks_check_string(s, 1), (long)time(NULL));
@@ -99,14 +105,19 @@ static int lua_checkpoint_weapon_commands(lua_State *s) {
     return 1;
 }
 
-// CheckpointAllowCheats(count): lets the next count give and take commands past the game's cheat check
+// CheckpointAllowCheats(commands): lets the give and take lines of commands past the game's cheat check, each once,
+// whenever the game runs it, and returns how many; with no argument, how many of them the game hasn't run yet
 static int lua_checkpoint_allow_cheats(lua_State *s) {
-    float count = 0;
-    if (hks_number_arg(s, 1, &count) && count > 0 && count <= 32) {
-        zm_inventory_allow_cheats((int)count);
-        printf("BO3MacFix: checkpoint: letting %d give and take commands through\n", (int)count);
+    const char *commands = string_arg(s, 1);
+    if (commands == NULL) {
+        hks_push_number(s, (float)zm_inventory_allowed_left());
+        return 1;
     }
-    return 0;
+    int count = zm_inventory_allow_commands(commands);
+    if (count > 0)
+        printf("BO3MacFix: checkpoint: letting %d give and take commands through\n", count);
+    hks_push_number(s, (float)count);
+    return 1;
 }
 
 // CheckpointLoadout(): the local player's full loadout as "Guns=...\nGunInHand=...\nPerkList=..." lines (zm_loadout.h),
@@ -258,12 +269,6 @@ static int locked_checkpoint_restore_loadout(lua_State *s) {
     int results = lua_checkpoint_restore_loadout(s);
     checkpoint_unlock();
     return results;
-}
-
-// the argument at index if it's a string, else NULL (without the Lua error hks_check_string raises)
-static const char *string_arg(lua_State *s, int index) {
-    HksObject *arg = HKS_BASE(s) + (index - 1);
-    return arg < HKS_TOP(s) && (arg->t & 0xF) == HKS_TSTRING ? hks_check_string(s, index) : NULL;
 }
 
 // CheckpointSavedWhen(saved): the checkpoint's Saved time as the page shows it ("3 h ago"), "" without one
