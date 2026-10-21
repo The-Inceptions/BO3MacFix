@@ -87,6 +87,10 @@ AAE shows the game's messages (the bank's "Current Balance", deposits, the answe
 `printsubtitle` console command that it has on Windows and the Mac build doesn't. BO3MacFix adds it, so those
 messages show up on the left of the screen, as on Windows.
 
+AAE's key binds (the pause menu's "Enhanced Controls": flashlight, ping, third person, the overhead map, hiding
+the HUD...) run a `SendMenuResponse` console command the Mac build doesn't have either. BO3MacFix adds it, so those
+keys work.
+
 ## Credits
 
 - [Alyssa / alltheamps](https://github.com/shiversoftdev) - guidance, help, t7patch and the cod2map64 patch DLL.
