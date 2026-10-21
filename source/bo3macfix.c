@@ -1053,6 +1053,8 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_hks_load_dll((void *)(game_base_address + ADDR_hks_load_dll));
     // T7Overcharged's script functions, which All-around Enhancement's client scripts call every frame
     t7o_install_script_functions();
+    // and its printsubtitle command, which All-around Enhancement's HUD prints every game message with
+    t7o_install_commands();
     install_hook_hksf_fopen_internal((void *)(game_base_address + ADDR_hksf_fopen_internal));
     install_hook_CL_FirstSnapshot((void *)(game_base_address + ADDR_CL_FirstSnapshot));
     install_hook_DB_GetStreamFraction((void *)(game_base_address + ADDR_DB_GetStreamFraction));

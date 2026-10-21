@@ -9,3 +9,6 @@ void t7o_push_init(lua_State *s, const char *dll_path);
 void t7o_set_online(int enabled);
 // T7Overcharged's script natives (GSC/CSC calls through isprofilebuild), see t7overcharged.c
 void t7o_install_script_functions(void);
+// at start-up, before the game's threads run: T7Overcharged's printsubtitle console command, which prints AAE's game
+// messages, see t7overcharged.c
+void t7o_install_commands(void);

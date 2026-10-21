@@ -58,6 +58,10 @@
 #define ADDR_SDL_PrivateGameControllerAddMapping 0x13cff0 // func
 #define ADDR_SDL_GameControllerInitMappings 0x13d450 // func
 #define ADDR_Cbuf_AddText 0xf754aa // func
+#define ADDR_Cmd_FindCommand 0xf764e8 // func - cmd_function_s *(const char *name), NULL if there's no such console command
+#define ADDR_Cmd_AddCommandInternal 0xf7651d // func - void (const char *name, void (*function)(void), cmd_function_s *alloc), puts alloc (0x30 bytes: next at 0, name at 8, function at 0x20) first in the command list, unless the name is taken
+#define ADDR_Sys_GetTLS 0xd0604f // func - the thread's own block, whose pointer at +0x18 is the arguments the running console command reads (the same layout as ADDR_cmd_args) - name is a guess
+#define ADDR_CL_ConsolePrint 0x11ca87b // func - void (int localClientNum, int channel, const char *text, int duration, int pixelWidth, int flags), queues text for the console and for the game message windows whose filter takes the channel (window 0's is "gamenotify obituary"); Com_PrintMessage calls it with 0, 0 for the window's own time and width
 #define ADDR_ChatClient_Send 0x13bef1c // func - void (int localClientNum, const char *text, int channel), what the chat box calls on enter: sends chat "<channel> <text>" (or say "<text>") to the server; name is a guess
 #define ADDR_GScr_IsProfileBuild 0x1205df7 // func - void (scriptInstance_t inst), the GSC/CSC builtin isprofilebuild(): Scr_AddInt(inst, 0)
 #define ADDR_Scr_GetInt 0x11a1e78 // func - int (scriptInstance_t inst, unsigned int index), takes int and hash params

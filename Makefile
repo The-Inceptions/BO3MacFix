@@ -5,7 +5,8 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_settings_ini tests/test_notice_queue tests/test_controllers tests/test_gc_bridge tests/test_frame_limit \
 	tests/test_players_cfg tests/test_aae_build tests/test_notch tests/test_notch_hooks tests/test_checkpoint \
 	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan \
-	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag
+	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag \
+	tests/test_t7o_subtitle
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -49,6 +50,8 @@ SOURCES += source/prepatch.c
 SOURCES += source/aae_build.c
 # a map started with AAE keeping cheats off, so its bank and weapon locker load (aae_cheats.c)
 SOURCES += source/aae_cheats.c
+# the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
+SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
 # weapons back with their camo, attachments and ammo types, and its perks (zm_inventory.c, zm_loadout.c)
 SOURCES += source/checkpoint.c source/zm_inventory.c source/zm_loadout.c
@@ -174,6 +177,11 @@ tests/test_aae_cheats: tests/test_aae_cheats.c source/aae_cheats.c source/aae_ch
 		source/dobby.h source/zm_loadout.c source/zm_loadout.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_aae_cheats.c \
 		source/zm_loadout.c
+
+# printsubtitle's arguments (t7o_subtitle.c), as AAE's HUD gives them
+tests/test_t7o_subtitle: tests/test_t7o_subtitle.c source/t7o_subtitle.c source/t7o_subtitle.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_t7o_subtitle.c \
+		source/t7o_subtitle.c
 
 # script_errors.c's QuietScriptErrors: which script errors it shows, against made-up script engine memory (the test
 # includes the source itself)

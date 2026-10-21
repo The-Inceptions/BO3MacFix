@@ -83,6 +83,10 @@ aren't on the in-game page set the values by hand:
 | `AAEChangelist` | `13892626` | The changelist AAE checks for. |
 | `AAEBuildTime` | `Wed Dec 10 17:10:46 2025` | The build time AAE checks for, the rest of the line (quotes are optional). |
 
+AAE shows the game's messages (the bank's "Current Balance", deposits, the answers to its chat commands) through a
+`printsubtitle` console command that it has on Windows and the Mac build doesn't. BO3MacFix adds it, so those
+messages show up on the left of the screen, as on Windows.
+
 ## Credits
 
 - [Alyssa / alltheamps](https://github.com/shiversoftdev) - guidance, help, t7patch and the cod2map64 patch DLL.
