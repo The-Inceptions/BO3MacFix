@@ -7,6 +7,7 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_zm_inventory tests/test_zm_loadout tests/test_checkpoint_autosave tests/test_checkpoint_autosave_tsan \
 	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag \
 	tests/test_t7o_subtitle
+TEST_TARGETS += tests/test_launch_args
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -45,6 +46,8 @@ SOURCES += source/metalfx.m source/gpu_diag.m
 
 # the pre-patched executable (prepatch.c), the launcher builds it with BO3MacFix_BuildPrepatched
 SOURCES += source/prepatch.c
+# whether the command line starts a map at launch, for SkipIntro (launch_args.c)
+SOURCES += source/launch_args.c
 
 # the build All-around Enhancement checks for, read from its fastfile (aae_build.c)
 SOURCES += source/aae_build.c
@@ -145,6 +148,10 @@ tests/test_prepatch: tests/test_prepatch.c source/prepatch.c source/prepatch.h s
 # quick_save_rules.c: when L3 + R3 count as held, and the request waiting for checkpoint.lua
 tests/test_dynres: tests/test_dynres.c source/dynres.c source/dynres.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_dynres.c source/dynres.c
+
+tests/test_launch_args: tests/test_launch_args.c source/launch_args.c source/launch_args.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_launch_args.c \
+		source/launch_args.c
 
 tests/test_quick_save: tests/test_quick_save.c source/quick_save_rules.c source/quick_save_rules.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_quick_save.c source/quick_save_rules.c

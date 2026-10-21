@@ -40,3 +40,4 @@ tests/test_quick_save
 tests/test_dynres
 tests/test_gpu_diag
 tests/test_t7o_subtitle
+tests/test_launch_args

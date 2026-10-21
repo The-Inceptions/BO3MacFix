@@ -25,7 +25,7 @@
 #define ADDR_hks_load_dll 0x148460d // func
 #define ADDR_hksf_fopen_internal 0xfb503 // func - name is a guess, called by hksf_fopen
 #define ADDR_CL_FirstSnapshot 0xe2f0be // func
-#define ADDR_CL_PlayLogoMovies 0xe752d6 // func - void (void), starts "BO3_Global_Logo_LogoSequence;AspyrLogo" once while ui_playLogoMovie (0xb3b9dc1f) is set, which defaults to 0 when the command line has a map or connect - name is a guess
+#define ADDR_CL_PlayLogoMovies 0xe752d6 // func - void (void), starts "BO3_Global_Logo_LogoSequence;AspyrLogo" once while ui_playLogoMovie (0xb3b9dc1f) is set, which defaults to 0 only when the command line has devmap (a +map start plays them during the load) - name is a guess
 #define ADDR_CL_SetCGameTime 0xe2fbe8 // func
 #define ADDR_DB_GetStreamFraction 0x127c182 // func - name is a guess
 #define ADDR_Com_GetBuildIntField 0xf16d9a // func
