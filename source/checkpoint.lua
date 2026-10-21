@@ -632,11 +632,12 @@ end
 -- ---- Quick save: the QuickSave key (F5) in a match, or L3 + R3 held for a second while the pause menu is open
 -- (quick_save.m), saves like the settings page's Save game row (save_game, so with the same checks and lock) and says
 -- how it went in a notice. Replacing a game saved at a higher round that this one didn't resume takes a second press
--- within 5 seconds, since one key is easy to hit by mistake; the page's row, three menus deep, doesn't ask.
+-- within 5 seconds, since one key is easy to hit by mistake; the page's row, three menus deep, doesn't ask. Only the input
+-- that asked confirms (the key the key's question, L3 + R3 the controller's): the other one asks its own question.
 local QUICK_CONFIRM_SECONDS = 5
 local QUICK_REASONS = { menus = "start a solo zombies game first", not_zombies = "quick save is for zombies games",
     unread = "couldn't read this game's round and points", unwritten = "couldn't write BO3MacFix/checkpoint.ini" }
-local quick_armed = nil -- a first press over a deeper saved game: { time } by the notices' clock
+local quick_armed = nil -- a first press over a deeper saved game: { time, by the notices' clock; source }
 local start_menu = nil  -- the pause menu (StartMenu_Main) made last
 -- menus made while the pause menu was open (Options, say), and whether it has been: one it opens might take its place
 -- on the root, and the game stays paused until the last of them has gone
@@ -690,8 +691,9 @@ local function quick_save(controller, source, key)
         local round = played ~= nil and played - 1 or nil
         if kept ~= nil and round ~= nil and kept > round and (call(bo3macfix.CheckpointResume, 0) or 0) < 2 then
             local now = tonumber(call(bo3macfix.NoticeClock))
-            if quick_armed == nil or (now ~= nil and quick_armed.time ~= nil and now - quick_armed.time > QUICK_CONFIRM_SECONDS) then
-                quick_armed = { time = now }
+            if quick_armed == nil or quick_armed.source ~= source or
+                (now ~= nil and quick_armed.time ~= nil and now - quick_armed.time > QUICK_CONFIRM_SECONDS) then
+                quick_armed = { time = now, source = source }
                 local map = checkpoint.Map ~= nil and checkpoint.Map ~= "" and " on " .. map_name(checkpoint.Map) or ""
                 log("checkpoint: quick save asks again before replacing the game saved at round " .. kept)
                 -- the question is only logged with Notices off: a second press then can't have seen it, so it
