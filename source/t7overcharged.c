@@ -209,7 +209,7 @@ void t7o_push_init(lua_State *s, const char *dll_path) {
 // DLL's code isn't in the mod. They get the 0 the game's isprofilebuild gave them, without the missing line; the
 // callers start them as threads or statements and don't use the result (inferred from the import flags).
 // - startweaponanim(localclientnum, state, hand): with the WeaponAnims setting on (BO3MACFIX_WEAPONANIMS=1), the
-//   client's viewmodel update starts that weapon animation state (weapon_anim.h); off by default for now. Otherwise
+//   client's viewmodel update starts that weapon animation state (weapon_anim.h); on by default. Otherwise
 //   the weapon just keeps its usual animation.
 // - anim_event(x, event): the event is one of the player's third-person anim script events (15 FIRSTRAISEWEAPON,
 //   17 RELOAD_EMPTY, 101 FLOURISH in the game's table at 0x1020fba20), which first person doesn't show: still a no-op.
@@ -459,7 +459,7 @@ void t7o_install_script_functions(bool weapon_anims) {
     for (int native = 0; native < Native_Count; native++)
         native_hashes[native] = script_hash(native_names[native]);
     install_hook_GScr_IsProfileBuild((void *)(game_base_address + ADDR_GScr_IsProfileBuild));
-    // WeaponAnims (BO3MACFIX_WEAPONANIMS, off by default): startweaponanim plays the animation. The hook has a slot
+    // WeaponAnims (BO3MACFIX_WEAPONANIMS, on by default): startweaponanim plays the animation. The hook has a slot
     // in the pre-patched copy, and is only installed with the setting on
     if (weapon_anims) {
         weapon_anims_enabled = true;
