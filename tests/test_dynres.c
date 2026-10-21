@@ -1,5 +1,6 @@
 // Tests for dynres.c, DynamicResolution's controller: its floor, when it steps down and up, and that it settles
 // without going back and forth, against a model of a GPU-bound game at 120 Hz.
+#include <dispatch/dispatch.h>
 #include <stdio.h>
 #include "../source/dynres.h"
 
@@ -250,6 +251,31 @@ static void test_keep(void) {
     CHECK(dynres_set_for_percent(no_set0, 100, 95) == -1);
 }
 
+// memory pressure: letting go of the kept sets while macOS reports it, keeping them again once it's back to normal
+static void test_pressure(void) {
+    dynres_keep_t k = {{0}};
+    uint32_t s95 = dynres_size(2496, 1616), s90 = dynres_size(2368, 1528), s85 = dynres_size(2232, 1448);
+    dynres_keep_add(&k, s85);
+    dynres_keep_add(&k, s90);
+    dynres_keep_add(&k, s95);
+    uint32_t sizes[Dynres_Sets] = {dynres_size(2624, 1696), s95, s90, s85};
+    uint64_t used[Dynres_Sets] = {100, 100, 100, 100};
+    CHECK(dynres_keep_mask(&k, sizes, used, 100) == 0xe);
+    CHECK(dynres_keep_release(&k));
+    CHECK(dynres_keep_mask(&k, sizes, used, 100) == 0); // nothing refreshed: the engine frees them at 11 frames
+    CHECK(!dynres_keep_release(&k));                     // nothing left to let go
+    dynres_keep_add(&k, s90);                            // learned again after the pressure
+    CHECK(dynres_keep_mask(&k, sizes, used, 100) == 0x4);
+    // the dispatch source's events
+    CHECK(dynres_pressure_after(DISPATCH_MEMORYPRESSURE_WARN, false));
+    CHECK(dynres_pressure_after(DISPATCH_MEMORYPRESSURE_CRITICAL, false));
+    CHECK(dynres_pressure_after(DISPATCH_MEMORYPRESSURE_CRITICAL, true));
+    CHECK(!dynres_pressure_after(DISPATCH_MEMORYPRESSURE_NORMAL, true));
+    CHECK(!dynres_pressure_after(DISPATCH_MEMORYPRESSURE_NORMAL, false));
+    CHECK(dynres_pressure_after(0, true)); // no level in the event: as before
+    CHECK(!dynres_pressure_after(0, false));
+}
+
 // warming up at a match start: which sizes, in which order, one frame each, and back to the user's value
 static void test_prewarm(void) {
     int out[Dynres_Keep_Max];
@@ -314,6 +340,7 @@ int main(void) {
     test_hold_after_down();
     test_swings();
     test_keep();
+    test_pressure();
     test_prewarm();
     if (failures == 0)
         printf("test_dynres: all passed\n");

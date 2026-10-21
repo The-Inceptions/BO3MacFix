@@ -71,6 +71,16 @@ void dynres_keep_add(dynres_keep_t *keep, uint32_t size);
 unsigned dynres_keep_mask(const dynres_keep_t *keep, const uint32_t sizes[Dynres_Sets],
                           const uint64_t last_use[Dynres_Sets], uint64_t frame);
 
+// forget every kept size, so dynres_keep_mask gives 0 and the engine frees those sets itself 11 frames after their last
+// use (the one in use stays). Returns whether any size was kept.
+bool dynres_keep_release(dynres_keep_t *keep);
+
+// The kept sets cost memory: about 0.9 GB for the 95/90/85% sets of a 2624x1696 scene (wip/night/dynres-mem.md). So
+// while macOS reports memory pressure (warn or critical), nothing is kept and no warm-up starts; once it's back to
+// normal, the steps learn the sizes again. events: the DISPATCH_MEMORYPRESSURE_* bits of a memory pressure dispatch
+// source's event. Returns whether there's pressure from then on (before: whether there was).
+bool dynres_pressure_after(unsigned long events, bool before);
+
 // Warming up at a match start. The kept sets go when a map loads, so the first step to each size in a match still
 // allocated its set: one frame of 25-58 ms each, in the middle of the play. The match's first frames, while the screen
 // is still black and the players can't move, render one frame at each size the controller can reach instead, then go
