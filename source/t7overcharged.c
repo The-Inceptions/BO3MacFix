@@ -15,6 +15,7 @@
 #include "offsets.h"
 #include "t7overcharged.h"
 #include "t7overcharged_lua.h"
+#include "t7o_subtitle.h"
 #include "utilities.h"
 
 // defined in bo3macfix.c
@@ -364,4 +365,59 @@ void t7o_install_script_functions(void) {
     for (int native = 0; native < Native_Count; native++)
         native_hashes[native] = script_hash(native_names[native]);
     install_hook_GScr_IsProfileBuild((void *)(game_base_address + ADDR_GScr_IsProfileBuild));
+}
+
+#pragma mark - printsubtitle
+
+// All-around Enhancement shows the game's messages (iprintln: the bank's "Current Balance", its deposits, the chat
+// commands' answers...) in a game message window of its own HUD (window 0, in its own font). With T7Overcharged there
+// (its DiscordRPC table, which ours has too), AAE's HUD takes each new line from the game's list and runs
+//     printsubtitle "<message>" 1 5000 <controller> 730 0
+// to print it there, then empties the line in the list. The Mac build has no printsubtitle command, so every one of
+// those messages was lost: "Unknown command" in the console, nothing on screen. Ours prints the message the way its
+// arguments read for the game's CL_ConsolePrint: channel 1 (gamenotify) is what window 0 shows, for 5 seconds, 730
+// pixels wide.
+static void (*CL_ConsolePrint)(int local_client, int channel, const char *text, int duration, int pixel_width,
+                                int flags);
+static void *(*Cmd_FindCommand)(const char *name);
+static void (*Cmd_AddCommandInternal)(const char *name, void (*function)(void), void *command);
+static uint8_t *(*Sys_GetTLS)(void);
+// the game's cmd_function_s for it, which Cmd_AddCommandInternal links into its list
+static _Alignas(8) uint8_t printsubtitle_command[0x30];
+static atomic_bool printsubtitle_logged;
+
+#define TLS_CmdArgs 0x18
+#define CmdArgs_Argc 0x64
+#define CmdArgs_Argv 0x88
+#define CmdArgs_Nesting_Max 8
+
+static void printsubtitle_f(void) {
+    // the arguments of the command being run, read like the game's own commands do
+    uint8_t *tls = Sys_GetTLS();
+    const uint8_t *args = tls != NULL ? *(const uint8_t *const *)(tls + TLS_CmdArgs) : NULL;
+    if (args == NULL)
+        return;
+    int nesting = *(const int *)args;
+    if (nesting < 0 || nesting >= CmdArgs_Nesting_Max)
+        return;
+    int argc = *(const int *)(args + CmdArgs_Argc + 4 * (size_t)nesting);
+    const char *const *argv = *(const char *const *const *)(args + CmdArgs_Argv + 8 * (size_t)nesting);
+    t7o_subtitle message;
+    if (argv == NULL ||
+        !t7o_parse_printsubtitle(argc, argv, *(const int *)(game_base_address + ADDR_LOCAL_CLIENT_COUNT), &message))
+        return;
+    if (!atomic_load_explicit(&printsubtitle_logged, memory_order_relaxed) &&
+        !atomic_exchange_explicit(&printsubtitle_logged, true, memory_order_relaxed))
+        printf("T7Overcharged: printsubtitle shows the mod's messages\n");
+    CL_ConsolePrint(message.local_client, message.channel, message.text, message.duration, message.pixel_width,
+                    message.flags);
+}
+
+void t7o_install_commands(void) {
+    CL_ConsolePrint = (void *)(game_base_address + ADDR_CL_ConsolePrint);
+    Cmd_FindCommand = (void *)(game_base_address + ADDR_Cmd_FindCommand);
+    Cmd_AddCommandInternal = (void *)(game_base_address + ADDR_Cmd_AddCommandInternal);
+    Sys_GetTLS = (void *)(game_base_address + ADDR_Sys_GetTLS);
+    if (Cmd_FindCommand("printsubtitle") == NULL)
+        Cmd_AddCommandInternal("printsubtitle", printsubtitle_f, printsubtitle_command);
 }

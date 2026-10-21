@@ -39,3 +39,4 @@ tests/test_script_errors
 tests/test_quick_save
 tests/test_dynres
 tests/test_gpu_diag
+tests/test_t7o_subtitle
