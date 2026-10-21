@@ -5,6 +5,8 @@
 //   com.bo3macfix.test.activate      brings the game to the front again, after the test switched to another app
 //   com.bo3macfix.test.quit          quits through the game's own quit path, which saves config.ini
 //   com.bo3macfix.test.key           presses the key with the state's macOS virtual key code (kVK_*)
+//   com.bo3macfix.test.click         clicks the left mouse button in the middle of the game's window (fires a weapon:
+//                                    the console's +attack doesn't, and AAE takes some free keys for its own binds)
 //   com.bo3macfix.test.restart       restarts the game through Steam, as the settings page's restart does
 //   com.bo3macfix.test.gpadscan      asks the game to look for controllers, as a controller connecting does
 //   com.bo3macfix.test.command       runs the console commands in the file BO3MACFIX_TESTTEXT names (read when posted)
@@ -90,6 +92,24 @@ void display_testhooks_init(uint64_t game_base_address) {
         // released a few frames later, so a game that reads the key's state each frame sees it down
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
             [NSApp postEvent:key_event(NSEventTypeKeyUp) atStart:NO];
+        });
+    });
+    // the same for the left mouse button, at the middle of the window's content: SDL's window listener takes the
+    // press as a click in the window, as it does a real one
+    on_notification("com.bo3macfix.test.click", ^(int token) {
+        NSWindow *window = [NSApp keyWindow] ?: [NSApp mainWindow];
+        NSRect content = window.contentView.frame;
+        NSPoint middle = NSMakePoint(NSMidX(content), NSMidY(content));
+        NSEvent *(^mouse_event)(NSEventType) = ^(NSEventType type) {
+            return [NSEvent mouseEventWithType:type location:middle modifierFlags:0
+                                     timestamp:[[NSProcessInfo processInfo] systemUptime]
+                                  windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:1
+                                      pressure:(type == NSEventTypeLeftMouseDown ? 1 : 0)];
+        };
+        printf("display tests: click\n");
+        [NSApp postEvent:mouse_event(NSEventTypeLeftMouseDown) atStart:NO];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            [NSApp postEvent:mouse_event(NSEventTypeLeftMouseUp) atStart:NO];
         });
     });
     on_notification("com.bo3macfix.test.restart", ^(int token) {
