@@ -91,6 +91,8 @@ test: $(TEST_TARGETS)
 	sh tests/test_env_overrides.sh
 	@# notices.lua against a made-up LUI, with any Lua 5.x
 	if command -v lua >/dev/null; then lua tests/test_notices.lua; else echo "no lua, skipping tests/test_notices.lua"; fi
+	@# the T7Overcharged stand-in's watch for missing Engine and CoD functions (BO3MACFIX_LUAMISSING)
+	if command -v lua >/dev/null; then lua tests/test_t7overcharged.lua; else echo "no lua, skipping tests/test_t7overcharged.lua"; fi
 	@# checkpoint.lua (saving and resuming a zombies game) against a made-up Engine and AAE
 	if command -v lua >/dev/null; then lua tests/test_checkpoint.lua; else echo "no lua, skipping tests/test_checkpoint.lua"; fi
 	@# AutoSave's round trigger and the Delete saved game row in checkpoint.lua

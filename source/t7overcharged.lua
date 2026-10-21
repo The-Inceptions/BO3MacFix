@@ -2,7 +2,7 @@
 -- (e.g. All-around Enhancement) load for extra Lua libraries.
 -- BO3MacFix runs this when a mod loads the DLL, passing in a few native helpers.
 local nativeCreateDirectory, nativeDirectoryExists, nativeClipboardGet, nativeClipboardSet, nativePrint,
-    nativeHttpGet, nativeHttpResult = ...
+    nativeHttpGet, nativeHttpResult, logMissing = ...
 
 if EnableGlobals then
     EnableGlobals()
@@ -194,6 +194,43 @@ local function setup()
         }) do
             if Engine[name] == nil then
                 Engine[name] = implementation
+            end
+        end
+    end
+
+    -- BO3MACFIX_LUAMISSING=1 (a debugging aid): the first time a script looks up an Engine or CoD function the Mac game
+    -- doesn't have, it's logged by name, so a mod calling one of the Windows game's newer functions shows even where
+    -- the game doesn't report the error. A check like `if Engine.X then`, or CoD.X read before the mod sets it, is
+    -- logged the same way.
+    if logMissing then
+        for libraryName, library in pairs({ Engine = Engine, CoD = CoD }) do
+            local meta = type(library) == "table" and getmetatable(library)
+            if meta == nil then
+                meta = {}
+                setmetatable(library, meta)
+            end
+            if type(meta) ~= "table" then
+                if meta ~= false then
+                    log("can't watch " .. libraryName .. " for missing functions")
+                end
+            elseif not rawget(meta, "BO3MacFixWatcher") then
+                -- the game's Engine has a metatable of its own: whatever its __index answers is passed on unchanged,
+                -- and only a name it has no answer for is logged, once per Lua state
+                local logged, previous = {}, rawget(meta, "__index")
+                rawset(meta, "BO3MacFixWatcher", true)
+                rawset(meta, "__index", function(table, name)
+                    local value
+                    if type(previous) == "function" then
+                        value = previous(table, name)
+                    elseif type(previous) == "table" then
+                        value = previous[name]
+                    end
+                    if value == nil and not logged[name] then
+                        logged[name] = true
+                        log("no " .. libraryName .. "." .. tostring(name) .. " here")
+                    end
+                    return value
+                end)
             end
         end
     end
