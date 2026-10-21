@@ -8,6 +8,8 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag \
 	tests/test_t7o_subtitle
 TEST_TARGETS += tests/test_launch_args
+# startweaponanim's weapAnim value (weapon_anim.h)
+TEST_TARGETS += tests/test_weapon_anim
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -105,6 +107,9 @@ test: $(TEST_TARGETS)
 	if command -v lua >/dev/null; then lua tests/test_autosave.lua; else echo "no lua, skipping tests/test_autosave.lua"; fi
 	@# the quick save (a key, or L3 + R3 in the pause menu) and the saved game's details on the settings page
 	if command -v lua >/dev/null; then lua tests/test_quick_save.lua; else echo "no lua, skipping tests/test_quick_save.lua"; fi
+
+tests/test_weapon_anim: tests/test_weapon_anim.c source/weapon_anim.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_weapon_anim.c
 
 tests/test_stream_stall_recovery: tests/test_stream_stall_recovery.c source/stream_stall_recovery.c source/stream_stall_recovery.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_stream_stall_recovery.c source/stream_stall_recovery.c
