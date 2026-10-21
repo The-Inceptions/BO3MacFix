@@ -10,6 +10,7 @@
 #include <stdatomic.h>
 #include <ctype.h>
 #include <time.h>
+#include <crt_externs.h>
 #include <mach-o/dyld.h>
 #include <mach-o/getsect.h>
 #include "dyld-interposing.h"
@@ -55,6 +56,7 @@
 #include "script_errors.h"
 #include "controllers.h"
 #include "gc_bridge.h"
+#include "launch_args.h"
 
 #include "versioninfo.h"
 
@@ -926,7 +928,10 @@ install_hook_name(Lua_GetBuildIntField, int, lua_State *s) {
 
 // SkipIntro: the logo movies at start-up (BO3_Global_Logo_LogoSequence, then AspyrLogo, about 31 s, while the title
 // screen is ready about 12 s in) don't start. The function returns before starting them, as it does itself when
-// ui_playLogoMovie is 0, which is its default when the command line has a map or connect.
+// ui_playLogoMovie is 0. Only at a launch to the title screen: when the command line starts a map, the logos play
+// during the map's load as they always did, and the map's own loading movie doesn't play. Skipping them there let that
+// movie play instead, and the match waits for it to end: 30 s for Kino, 214 s for Shadows of Evil.
+// The game calls this at start-up and when a mod restarts the game, not when a map loads.
 install_hook_name(CL_PlayLogoMovies, void, void) {
     static bool logged = false;
     if (!logged) {
@@ -1061,8 +1066,12 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_Lua_GetBuildIntField((void *)(game_base_address + ADDR_Lua_GetBuildIntField));
     install_hook_Lua_GetBuildStringField((void *)(game_base_address + ADDR_Lua_GetBuildStringField));
     install_hook_Lua_Exec((void *)(game_base_address + ADDR_Lua_Exec));
-    if (read_int_setting_or_env("SkipIntro", 0))
-        install_hook_CL_PlayLogoMovies((void *)(game_base_address + ADDR_CL_PlayLogoMovies));
+    if (read_int_setting_or_env("SkipIntro", 0)) {
+        if (launch_args_start_game(*_NSGetArgc(), *_NSGetArgv()))
+            printf("BO3MacFix: the command line starts a map, so the intro movies play as usual (SkipIntro)\n");
+        else
+            install_hook_CL_PlayLogoMovies((void *)(game_base_address + ADDR_CL_PlayLogoMovies));
+    }
     //install_hook_SDL_GameControllerInitMappings((void *)(game_base_address + ADDR_SDL_GameControllerInitMappings));
 
     // set up functions that we later call
