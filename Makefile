@@ -97,6 +97,8 @@ test: $(TEST_TARGETS)
 	for test in $(TEST_TARGETS); do ./$$test || exit 1; done
 	@# every setting can be overridden at env (BO3MACFIX_<NAME>)
 	sh tests/test_env_overrides.sh
+	@# each setting's default agrees in the code, its settings page row (settings.c) and README.md
+	python3 tests/test_settings_defaults.py
 	@# notices.lua against a made-up LUI, with any Lua 5.x
 	if command -v lua >/dev/null; then lua tests/test_notices.lua; else echo "no lua, skipping tests/test_notices.lua"; fi
 	@# the T7Overcharged stand-in's watch for missing Engine and CoD functions (BO3MACFIX_LUAMISSING)
