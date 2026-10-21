@@ -13,6 +13,8 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <time.h>
 #include "gpu_diag.h"
 #include "metalfx.h"
 
@@ -113,16 +115,27 @@ static os_unfair_lock busy_lock = OS_UNFAIR_LOCK_INIT;
 static double busy_seconds = 0, busy_last_end = 0, busy_total = 0; // busy_total is never reset (DynamicResolution)
 static uint64_t busy_buffers = 0;
 static IMP orig_commit = NULL;
+// DynamicResolution's step trace (BO3MACFIX_DYNRESTRACE=1): when the next command buffers to complete were committed,
+// and when the GPU started and finished them, in seconds of CLOCK_UPTIME_RAW (the clock of GPUStartTime)
+static double trace_times[Gpu_Diag_Trace_Max][3];
+static int trace_count = 0, trace_want = 0;
 
 // GPUStartTime and GPUEndTime need macOS 10.15, gpu_diag_watch_command_buffers checks before it swizzles
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunguarded-availability-new"
 static void commit_new(id self, SEL sel) {
+    double committed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
     [(id<MTLCommandBuffer>)self addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
         CFTimeInterval start = buffer.GPUStartTime, end = buffer.GPUEndTime;
         if (start <= 0 || end <= start)
             return;
         os_unfair_lock_lock(&busy_lock);
+        if (trace_count < trace_want) {
+            trace_times[trace_count][0] = committed;
+            trace_times[trace_count][1] = start;
+            trace_times[trace_count][2] = end;
+            trace_count++;
+        }
         if (start < busy_last_end)
             start = busy_last_end;
         if (end > start) {
@@ -169,4 +182,20 @@ double gpu_diag_busy_total(void) {
     double seconds = busy_total;
     os_unfair_lock_unlock(&busy_lock);
     return seconds;
+}
+
+void gpu_diag_trace_begin(int buffers) {
+    os_unfair_lock_lock(&busy_lock);
+    trace_count = 0;
+    trace_want = buffers < Gpu_Diag_Trace_Max ? buffers : Gpu_Diag_Trace_Max;
+    os_unfair_lock_unlock(&busy_lock);
+}
+
+int gpu_diag_trace_take(double times[][3], int max) {
+    os_unfair_lock_lock(&busy_lock);
+    int count = trace_count < max ? trace_count : max;
+    memcpy(times, trace_times, sizeof(trace_times[0]) * count);
+    trace_count = trace_want = 0;
+    os_unfair_lock_unlock(&busy_lock);
+    return count;
 }
