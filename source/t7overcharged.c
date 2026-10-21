@@ -16,6 +16,7 @@
 #include "t7overcharged.h"
 #include "t7overcharged_lua.h"
 #include "t7o_subtitle.h"
+#include "weapon_anim.h"
 #include "utilities.h"
 
 // defined in bo3macfix.c
@@ -202,12 +203,17 @@ void t7o_push_init(lua_State *s, const char *dll_path) {
 // about 2,000 script errors a second in a match, each one a call stack in console_mp.log. We answer hash and the
 // natives below; any other call still gets 0, and is logged once as missing.
 //
-// AAE's other three, startweaponanim, playanim and anim_event, play viewmodel animations (inferred from aae_core.csc:
+// AAE's other three, startweaponanim, playanim and anim_event, play weapon animations (inferred from aae_core.csc:
 // the server sends "firstraise", "reloadempty" and "lowready" on its "deadshot_keyline" client system, and the client
 // starts the weapon's animation and its event; a debug loop also plays any set in the anim2 and anim3 dvars). The real
-// DLL's code isn't in the mod, and the game has no script call for a viewmodel animation, so they stay no-ops here:
-// they get the 0 the game's isprofilebuild gave them, without the missing line. The callers start them as threads or
-// statements and don't use the result (inferred from the import flags), so the weapon just keeps its usual animation.
+// DLL's code isn't in the mod. They get the 0 the game's isprofilebuild gave them, without the missing line; the
+// callers start them as threads or statements and don't use the result (inferred from the import flags).
+// - startweaponanim(localclientnum, state, hand): with BO3MACFIX_WEAPONANIMS=1, the client's viewmodel update starts
+//   that weapon animation state (weapon_anim.h); off by default until it's been seen working in a match. Otherwise
+//   the weapon just keeps its usual animation.
+// - anim_event(x, event): the event is one of the player's third-person anim script events (15 FIRSTRAISEWEAPON,
+//   17 RELOAD_EMPTY, 101 FLOURISH in the game's table at 0x1020fba20), which first person doesn't show: still a no-op.
+// - playanim: only AAE's debug loop calls it, still a no-op.
 #define Hash_Native 0x22ea46c7u
 
 typedef struct {
@@ -318,6 +324,88 @@ static const uint8_t *local_client_cg(int inst) {
     return cg + (size_t)local_client * Cg_Size;
 }
 
+#pragma mark - startweaponanim
+
+#define WeaponAnim_LocalClients 4
+#define Cg_PredictedWeapAnim0 0x11a934
+#define Cg_PredictedWeapAnim1 0x11a950
+#define ViewWeaponState_Size 0x3a0
+#define ViewWeaponState_LastWeapAnim0 0x36c
+#define ViewWeaponState_LastWeapAnim1 0x374
+#define WeaponAnim_LogLines 12
+
+static bool weapon_anims_enabled;
+// the state each local client's hand is to start at its next viewmodel update, 0 for none
+static atomic_int weapon_anim_requests[WeaponAnim_LocalClients][2];
+static atomic_int weapon_anim_log_count;
+
+static void log_weapon_anim(const char *what, int local_client, int hand, int state) {
+    if (atomic_fetch_add_explicit(&weapon_anim_log_count, 1, memory_order_relaxed) < WeaponAnim_LogLines)
+        printf("T7Overcharged: startweaponanim %s (local client %d, hand %d, state %d)\n", what, local_client, hand,
+               state);
+}
+
+// startweaponanim(localclientnum, state, hand), from the client's scripts: for its next viewmodel update
+static void request_weapon_anim(int inst) {
+    if (inst != Script_Client || !param_is_int(inst, 1) || !param_is_int(inst, 2) || !param_is_int(inst, 3))
+        return;
+    int local_client = Scr_GetInt(inst, 1), state = Scr_GetInt(inst, 2), hand = Scr_GetInt(inst, 3);
+    if (local_client < 0 || local_client >= WeaponAnim_LocalClients || !weapon_anim_request_valid(hand, state)) {
+        log_weapon_anim("ignored", local_client, hand, state);
+        return;
+    }
+    atomic_store_explicit(&weapon_anim_requests[local_client][hand], state, memory_order_relaxed);
+}
+
+// the client's viewmodel update, both hands: a requested state is put in the predicted player state for this one call,
+// so the engine starts it its own way (blend, notetracks, sounds), then the real value goes back in both places
+install_hook_name(CG_UpdateViewWeaponAnim, uint64_t, int local_client, int arg) {
+    int states[2] = { 0, 0 };
+    if (local_client >= 0 && local_client < WeaponAnim_LocalClients) {
+        for (int hand = 0; hand < 2; hand++) {
+            if (atomic_load_explicit(&weapon_anim_requests[local_client][hand], memory_order_relaxed) != 0)
+                states[hand] =
+                    atomic_exchange_explicit(&weapon_anim_requests[local_client][hand], 0, memory_order_relaxed);
+        }
+    }
+    if (states[0] == 0 && states[1] == 0)
+        return orig_CG_UpdateViewWeaponAnim(local_client, arg);
+    uint8_t *cg = *(uint8_t **)(game_base_address + ADDR_cgArray);
+    uint8_t *views = *(uint8_t **)(game_base_address + ADDR_cgViewWeaponStates);
+    if (cg == NULL || views == NULL || local_client >= *(const int *)(game_base_address + ADDR_LOCAL_CLIENT_COUNT))
+        return orig_CG_UpdateViewWeaponAnim(local_client, arg);
+    cg += (size_t)local_client * Cg_Size;
+    uint8_t *view = views + (size_t)local_client * ViewWeaponState_Size;
+    // the update leaves at once without the viewmodel's object (0x100d8734a)
+    if (*(void **)view == NULL)
+        return orig_CG_UpdateViewWeaponAnim(local_client, arg);
+    static const size_t predicted[2] = { Cg_PredictedWeapAnim0, Cg_PredictedWeapAnim1 };
+    static const size_t last[2] = { ViewWeaponState_LastWeapAnim0, ViewWeaponState_LastWeapAnim1 };
+    uint16_t real[2] = { 0, 0 };
+    bool injected[2] = { false, false };
+    for (int hand = 0; hand < 2; hand++) {
+        if (states[hand] == 0)
+            continue;
+        real[hand] = *(uint16_t *)(cg + predicted[hand]);
+        uint16_t last_started = *(uint16_t *)(view + last[hand]);
+        if (!weapon_anim_can_inject(real[hand], last_started)) {
+            log_weapon_anim("left to the engine's own new one", local_client, hand, states[hand]);
+            continue;
+        }
+        *(uint16_t *)(cg + predicted[hand]) = weapon_anim_injected(real[hand], last_started, states[hand]);
+        injected[hand] = true;
+        log_weapon_anim("started", local_client, hand, states[hand]);
+    }
+    uint64_t result = orig_CG_UpdateViewWeaponAnim(local_client, arg);
+    for (int hand = 0; hand < 2; hand++) {
+        if (injected[hand]) {
+            *(uint16_t *)(cg + predicted[hand]) = real[hand];
+            *(uint16_t *)(view + last[hand]) = real[hand];
+        }
+    }
+    return result;
+}
+
 // answers a native, returns false to leave it to the game
 static bool call_native(int inst, uint32_t hash) {
     if (hash == Hash_Native) {
@@ -339,10 +427,13 @@ static bool call_native(int inst, uint32_t hash) {
         // a plain load once it's logged; the exchange makes only one thread log it
         if (!atomic_load_explicit(&native_logged[native], memory_order_relaxed) &&
             !atomic_exchange_explicit(&native_logged[native], true, memory_order_relaxed)) {
+            bool played = native == Native_StartWeaponAnim && weapon_anims_enabled;
             printf("T7Overcharged: scripts use %s%s\n", native_names[native],
-                   no_op ? " (no weapon animations here, they get 0)" : "");
+                   no_op && !played ? " (no weapon animations here, they get 0)" : "");
         }
         if (no_op) {
+            if (native == Native_StartWeaponAnim && weapon_anims_enabled)
+                request_weapon_anim(inst);
             Scr_AddInt(inst, 0);
             return true;
         }
@@ -368,6 +459,13 @@ void t7o_install_script_functions(void) {
     for (int native = 0; native < Native_Count; native++)
         native_hashes[native] = script_hash(native_names[native]);
     install_hook_GScr_IsProfileBuild((void *)(game_base_address + ADDR_GScr_IsProfileBuild));
+    // BO3MACFIX_WEAPONANIMS=1: startweaponanim plays the animation (off by default, not yet seen working in a match)
+    const char *weapon_anims = getenv("BO3MACFIX_WEAPONANIMS");
+    if (weapon_anims != NULL && strcmp(weapon_anims, "1") == 0) {
+        weapon_anims_enabled = true;
+        install_hook_CG_UpdateViewWeaponAnim((void *)(game_base_address + ADDR_CG_UpdateViewWeaponAnim));
+        printf("T7Overcharged: BO3MACFIX_WEAPONANIMS=1, startweaponanim plays through the viewmodel update\n");
+    }
 }
 
 #pragma mark - printsubtitle
