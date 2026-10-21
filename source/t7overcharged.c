@@ -173,7 +173,10 @@ static int t7o_init(lua_State *s) {
         hks_push_cfunction(s, lua_print, "Print");
         hks_push_cfunction(s, lua_http_get, "HttpGet");
         hks_push_cfunction(s, lua_http_result, "HttpResult");
-        hks_pcall(s, 7, 0);
+        // BO3MACFIX_LUAMISSING=1: log the Engine and CoD functions scripts look for that this game doesn't have
+        const char *log_missing = getenv("BO3MACFIX_LUAMISSING");
+        hks_push_boolean(s, log_missing != NULL && atoi(log_missing) != 0);
+        hks_pcall(s, 8, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;
