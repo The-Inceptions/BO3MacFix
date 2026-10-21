@@ -212,6 +212,26 @@ check(#saves == 9, "the pause menu closed: nothing")
 BO3MacFix.CheckpointMenuCreated("SomeOtherMenu", { getParent = function() return root end })
 check(#saves == 9, "still nothing")
 
+-- only the input that asked confirms: L3 + R3 doesn't answer F5's question, nor F5 the controller's
+menu_parent = { getParent = function() return root end }
+clock_now = 400
+last = press()
+check(#saves == 9 and last == "Saved game is round 38 on Der Riese: press F5 again to replace it",
+    "the key asks: " .. tostring(last))
+clock_now = 401
+last = press("pad")
+check(#saves == 9 and store.Round == "38" and
+    last == "Saved game is round 38 on Der Riese: hold L3 + R3 again to replace it",
+    "L3 + R3 doesn't confirm the key's question, it asks its own: " .. tostring(last))
+clock_now = 402
+last = press()
+check(#saves == 9 and store.Round == "38" and last == "Saved game is round 38 on Der Riese: press F5 again to replace it",
+    "nor does the key confirm the controller's: " .. tostring(last))
+clock_now = 403
+last = press()
+check(#saves == 10 and store.Round == "3", "the key again replaces it: " .. tostring(last))
+menu_parent = nil
+
 -- ---- the settings page's rows: map, round, points and when it was saved
 local resume_row, delete_row = rows[2], rows[3]
 store = { Map = "zm_der_riese", Round = "38", Points = "105660", Saved = "1000" }
