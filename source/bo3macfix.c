@@ -1057,7 +1057,7 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_dwInstantDispatchMessage((void *)(game_base_address + ADDR_dwInstantMessageDispatch));
     install_hook_hks_load_dll((void *)(game_base_address + ADDR_hks_load_dll));
     // T7Overcharged's script functions, which All-around Enhancement's client scripts call every frame
-    t7o_install_script_functions();
+    t7o_install_script_functions(read_int_setting_or_env("WeaponAnims", 0) != 0);
     // and its printsubtitle command, which All-around Enhancement's HUD prints every game message with
     t7o_install_commands();
     install_hook_hksf_fopen_internal((void *)(game_base_address + ADDR_hksf_fopen_internal));
