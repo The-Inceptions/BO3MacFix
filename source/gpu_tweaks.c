@@ -195,6 +195,63 @@ static void scene_multiplier_set(char *dvar, int percent) {
     *(volatile int *)(dvar + dvar_Value) = percent;
 }
 
+// the sets of DynamicResolution's sizes, kept in the engine's render target cache (dynres.h)
+static dynres_keep_t dynres_keep;
+static int dynres_learn_frames = 0;           // frames after a step in which a new set is one of ours
+static uint32_t dynres_learn_from[Dynres_Sets]; // the sets' sizes before
+
+// the engine's 8 render target sets: their sizes and last uses; false before the renderer made its table
+static bool rt_sets_read(uint32_t sizes[Dynres_Sets], uint64_t last_use[Dynres_Sets]) {
+    char *table = *(char *volatile *)(game_base_address + ADDR_rt_table);
+    if (table == NULL)
+        return false;
+    volatile uint64_t *use = (volatile uint64_t *)(game_base_address + ADDR_rt_set_last_use);
+    for (int i = 0; i < Dynres_Sets; i++) {
+        volatile uint16_t *size = (volatile uint16_t *)(table + rt_set_size + i * rt_set_stride);
+        sizes[i] = dynres_size(size[0], size[1]);
+        last_use[i] = use[i];
+    }
+    return true;
+}
+
+// each frame: learn the sets that appear right after a step, and set the last use of those sizes' sets to the frame
+// counter, so the engine's lookup doesn't free them after 11 frames. Only the last use is written, never a size or a
+// render target: which sets are valid stays the engine's own (a set is in use while its size isn't 0).
+static void dynres_keep_tick(void) {
+    uint32_t sizes[Dynres_Sets];
+    uint64_t last_use[Dynres_Sets];
+    if (!rt_sets_read(sizes, last_use))
+        return;
+    if (dynres_learn_frames > 0) {
+        dynres_learn_frames--;
+        for (int i = 1; i < Dynres_Sets; i++) {
+            if (sizes[i] == 0 || sizes[i] == dynres_learn_from[i])
+                continue;
+            bool known = false;
+            for (int k = 0; k < Dynres_Keep_Max; k++)
+                known |= dynres_keep.size[k] == sizes[i];
+            if (!known)
+                printf("dynamic resolution: keeping the %ix%i render targets (set %i)\n", sizes[i] >> 16,
+                       sizes[i] & 0xffff, i);
+            dynres_keep_add(&dynres_keep, sizes[i]);
+            dynres_learn_from[i] = sizes[i];
+        }
+    }
+    uint64_t frame = *(volatile uint64_t *)(game_base_address + ADDR_rt_frame_counter);
+    unsigned mask = dynres_keep_mask(&dynres_keep, sizes, last_use, frame);
+    volatile uint64_t *use = (volatile uint64_t *)(game_base_address + ADDR_rt_set_last_use);
+    for (int i = 1; i < Dynres_Sets; i++)
+        if (mask & (1u << i))
+            use[i] = frame;
+}
+
+// a step: the sets as they are now, to tell the new one
+static void dynres_keep_step(void) {
+    uint64_t last_use[Dynres_Sets];
+    if (rt_sets_read(dynres_learn_from, last_use))
+        dynres_learn_frames = 12;
+}
+
 // the frame rate to reach: the display's refresh rate, or a lower limit (ours, or MaxFPS)
 static int dynres_target_fps(int frame_limit_fps) {
     static void *maxfps = NULL;
@@ -228,6 +285,7 @@ static void dynres_tick(int frame_limit_fps) {
     char *dvar = scene_multiplier_dvar();
     if (dvar == NULL)
         return;
+    dynres_keep_tick();
     int current = *(volatile int *)(dvar + dvar_Value), latched = *(volatile int *)(dvar + dvar_Latched);
     int written = atomic_load(&dynres_written), setting = atomic_load(&dynres_setting);
     bool reconfigure = atomic_exchange(&dynres_reconfigure, false);
@@ -288,6 +346,7 @@ static void dynres_tick(int frame_limit_fps) {
     from = value;
     to = percent;
     logging = 4;
+    dynres_keep_step();
     scene_multiplier_set(dvar, percent);
     atomic_store(&dynres_written, percent == dynres.base ? 0 : percent);
 }

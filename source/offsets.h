@@ -181,6 +181,15 @@
 // allocates a set on a miss and frees sets 1-7 after 11 frames unused. A latched value instead makes R_CheckVidRestart
 // (0x100dce192) apply it and rebuild every render target (R_ResizeBackBuffer).
 #define ADDR_dvar_r_sceneResolutionMultiplier 0x159adce8 // dvar_t * - hash 0xbb27457f, NULL until registered
+// the render target sets' cache, read by the lookup at 0x100e8d843 (w, h): a pointer to the render target table (0x6e
+// entries of 0xae0 bytes); the size of set i (0-7) is the 16-bit width and height at +0x6cc0 + i * 0x150 (0 when free).
+// At each lookup the engine frees sets 1-7 last used 11 or more frames before the frame counter (and sets their last
+// use to 0); a miss takes a free set, or the least recently used one when all 8 are in use.
+#define ADDR_rt_table 0x118fb5e8         // render target table pointer
+#define rt_set_size 0x6cc0               // + set * rt_set_stride: uint16 width, uint16 height
+#define rt_set_stride 0x150
+#define ADDR_rt_set_last_use 0x03519f70  // uint64[8]: the frame counter at each set's last use
+#define ADDR_rt_frame_counter 0x113b7b30 // uint64 (0x1113b7880 + 0x2b0), what the lookup compares the last use with
 #define Hash_com_maxfps 0x29b732e8 // MaxFPS
 #define ADDR_dvar_r_fullscreenLast 0x159ad090 // dvar_t * - int 0-2, r_fullscreen's value before it last changed from non-zero (hash 0x847596d0, name unknown)
 #define ADDR_R_RestoreFullscreen 0x113c0df4 // bool - fullscreen was left on deactivate (alt-tab) and comes back on activate

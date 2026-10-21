@@ -159,6 +159,35 @@ static void test_settles(void) {
     CHECK(settle(&d, empty) == 0);
 }
 
+// keeping the sets of DynamicResolution's sizes past the engine's 11 frames
+static void test_keep(void) {
+    dynres_keep_t k = {{0}};
+    uint32_t s95 = dynres_size(2496, 1616), s90 = dynres_size(2368, 1528), s85 = dynres_size(2232, 1448),
+             s80 = dynres_size(2104, 1360), cam = dynres_size(512, 512);
+    dynres_keep_add(&k, 0);
+    CHECK(k.size[0] == 0);
+    dynres_keep_add(&k, s95);
+    dynres_keep_add(&k, s90);
+    dynres_keep_add(&k, s95); // again: moves first, no duplicate
+    CHECK(k.size[0] == s95 && k.size[1] == s90 && k.size[2] == 0);
+    dynres_keep_add(&k, s85);
+    dynres_keep_add(&k, s80); // a 4th: the oldest (s90) goes
+    CHECK(k.size[0] == s80 && k.size[1] == s85 && k.size[2] == s95);
+    uint32_t sizes[Dynres_Sets] = {dynres_size(2624, 1696), s95, cam, s85, 0, s90, s80, s95};
+    uint64_t used[Dynres_Sets] = {100, 99, 100, 95, 100, 100, 94, 101};
+    unsigned mask = dynres_keep_mask(&k, sizes, used, 100);
+    CHECK(mask & (1u << 1));    // kept size, used a frame ago
+    CHECK(!(mask & (1u << 0))); // set 0 is the engine's own
+    CHECK(!(mask & (1u << 2))); // another view's set: the engine's to free
+    CHECK(mask & (1u << 3));    // 5 frames ago: still fresh
+    CHECK(!(mask & (1u << 4))); // free
+    CHECK(!(mask & (1u << 5))); // a size no longer kept
+    CHECK(!(mask & (1u << 6))); // 6 frames ago: left to the engine
+    CHECK(!(mask & (1u << 7))); // last use after the frame read: left alone
+    dynres_keep_t none = {{0}};
+    CHECK(dynres_keep_mask(&none, sizes, used, 100) == 0);
+}
+
 int main(void) {
     test_lowest_for();
     test_reset();
@@ -169,6 +198,7 @@ int main(void) {
     test_steps_up_after_headroom();
     test_no_targets();
     test_settles();
+    test_keep();
     if (failures == 0)
         printf("test_dynres: all passed\n");
     return failures != 0;
