@@ -280,9 +280,9 @@ static void test_in_match(void) {
     frame_limits_t limits = { 0 };
     CHECK(!frame_limit_in_match(&limits, Second)); // the game starting: no UI yet
     frame_limit_set_menus(&limits, true, 2 * Second);
-    CHECK(!frame_limit_in_match(&limits, 2 * Second)); // the menus
+    CHECK(!frame_limit_in_match(&limits, 2 * Second) && frame_limit_in_menus(&limits, 2 * Second)); // the menus
     frame_limit_ui_gone(&limits);
-    CHECK(!frame_limit_in_match(&limits, 3 * Second)); // a map loading
+    CHECK(!frame_limit_in_match(&limits, 3 * Second) && !frame_limit_in_menus(&limits, 3 * Second)); // a map loading
     frame_limit_set_menus(&limits, false, 20 * Second);
     CHECK(frame_limit_in_match(&limits, 20 * Second)); // the match's UI polls
     CHECK(!frame_limit_in_match(&limits, 20 * Second + Pause_Menu_Timeout_NS)); // its polls stopped

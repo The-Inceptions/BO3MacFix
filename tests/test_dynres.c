@@ -186,6 +186,15 @@ static void test_keep(void) {
     CHECK(!(mask & (1u << 7))); // last use after the frame read: left alone
     dynres_keep_t none = {{0}};
     CHECK(dynres_keep_mask(&none, sizes, used, 100) == 0);
+    // the set of a percent, from set 0's size: the engine's 95/90/85% of 2624x1696
+    uint32_t table[Dynres_Sets] = {dynres_size(2624, 1696), cam, s85, 0, s95, s90, 0, 0};
+    CHECK(dynres_set_for_percent(table, 100, 95) == 4);
+    CHECK(dynres_set_for_percent(table, 100, 90) == 5);
+    CHECK(dynres_set_for_percent(table, 100, 85) == 2);
+    CHECK(dynres_set_for_percent(table, 100, 80) == -1);
+    CHECK(dynres_set_for_percent(table, 100, 100) == -1); // set 0 isn't one to keep
+    uint32_t no_set0[Dynres_Sets] = {0, s95};
+    CHECK(dynres_set_for_percent(no_set0, 100, 95) == -1);
 }
 
 // warming up at a match start: which sizes, in which order, one frame each, and back to the user's value

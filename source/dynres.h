@@ -87,11 +87,15 @@ int dynres_prewarm_sizes(int base, int lowest, int out[Dynres_Keep_Max]);
 // not warming up, and armed: a map is about to load (the game's start counts as one)
 void dynres_prewarm_init(dynres_prewarm_t *p);
 
-// each frame: ready when a match runs and the engine rendered its 3D view this frame, new_set when a render target set
-// appeared since the last write. Starts when armed and ready, then goes on to the next size once the set of the size
+// each frame: ready when a match runs and the engine rendered its 3D view this frame, new_set when the set of the size
+// it's at is there (it appeared since the last write, or was there before). Starts when armed and ready, then goes on to the next size once the set of the size
 // it's at appeared (or after Dynres_Prewarm_Wait frames), and back to base after the last. Returns the
 // ResolutionPercent to write now, or 0 for none.
 int dynres_prewarm_frame(dynres_prewarm_t *p, int base, int lowest, bool ready, bool new_set);
+
+// the set (1-7) of the size the engine renders at percent, from set 0's size at base (each side scaled and rounded up to
+// 8 by the engine, so within 8 pixels), or -1 for none. Finds a set the warm-up visits that was there before it.
+int dynres_set_for_percent(const uint32_t sizes[Dynres_Sets], int base, int percent);
 
 static inline bool dynres_prewarm_running(const dynres_prewarm_t *p) {
     return p->index >= 0;

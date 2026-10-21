@@ -121,3 +121,15 @@ int dynres_prewarm_frame(dynres_prewarm_t *p, int base, int lowest, bool ready, 
     p->index = -1;
     return p->base;
 }
+
+int dynres_set_for_percent(const uint32_t sizes[Dynres_Sets], int base, int percent) {
+    if (sizes[0] == 0 || base <= 0)
+        return -1;
+    int width = (int)(sizes[0] >> 16) * percent / base, height = (int)(sizes[0] & 0xffff) * percent / base;
+    for (int set = 1; set < Dynres_Sets; set++) {
+        int w = (int)(sizes[set] >> 16), h = (int)(sizes[set] & 0xffff);
+        if (sizes[set] != 0 && w >= width && w <= width + 8 && h >= height && h <= height + 8)
+            return set;
+    }
+    return -1;
+}

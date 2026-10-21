@@ -33,6 +33,10 @@ bool frame_limit_in_match(frame_limits_t *limits, uint64_t now) {
     return lasts(&limits->ui_until, now) && !lasts(&limits->menus_until, now);
 }
 
+bool frame_limit_in_menus(frame_limits_t *limits, uint64_t now) {
+    return lasts(&limits->menus_until, now);
+}
+
 int frame_limit_for_frame(frame_limits_t *limits, uint64_t now, int *started, int *stopped) {
     frame_limit_t all[] = {
         { atomic_load(&limits->pacing_fps), true },

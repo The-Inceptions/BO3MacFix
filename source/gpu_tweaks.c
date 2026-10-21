@@ -244,6 +244,9 @@ static int dynres_keep_tick(bool *view_3d) {
             if (!known)
                 printf("dynamic resolution: keeping the %ix%i render targets (set %i)\n", sizes[i] >> 16,
                        sizes[i] & 0xffff, i);
+            else // a kept size's set the engine had freed: what keeping should prevent
+                printf("dynamic resolution: the engine made the %ix%i render targets again (set %i)\n", sizes[i] >> 16,
+                       sizes[i] & 0xffff, i);
             dynres_keep_add(&dynres_keep, sizes[i]);
             dynres_learn_from[i] = sizes[i];
             appeared++;
@@ -264,32 +267,102 @@ static void dynres_keep_step(void) {
     uint64_t last_use[Dynres_Sets];
     if (rt_sets_read(dynres_learn_from, last_use))
         dynres_learn_frames = 12;
+    static int debug = -1;
+    if (debug < 0)
+        debug = getenv("BO3MACFIX_DYNRESDEBUG") != NULL;
+    if (debug && dynres_learn_frames == 12) {
+        uint64_t frame = *(volatile uint64_t *)(game_base_address + ADDR_rt_frame_counter);
+        char line[400] = "";
+        for (int i = 0, n = 0; i < Dynres_Sets && n < (int)sizeof(line); i++)
+            if (dynres_learn_from[i] != 0)
+                n += snprintf(line + n, sizeof(line) - n, " %i:%ix%i@%lld", i, dynres_learn_from[i] >> 16,
+                              dynres_learn_from[i] & 0xffff, (long long)(frame - last_use[i]));
+        printf("dynamic resolution: sets (frames since used)%s\n", line);
+    }
+}
+
+// the warm-up is at percent: keep the set of that size even if it was there before the warm-up (the match started at a
+// value the controller had lowered), so it doesn't "appear" after a step. Whether that set is there (warmed up).
+static bool dynres_keep_visited(int percent) {
+    uint32_t sizes[Dynres_Sets];
+    uint64_t last_use[Dynres_Sets];
+    if (!rt_sets_read(sizes, last_use))
+        return false;
+    int set = dynres_set_for_percent(sizes, dynres.base, percent);
+    if (set < 0)
+        return false;
+    for (int k = 0; k < Dynres_Keep_Max; k++)
+        if (dynres_keep.size[k] == sizes[set])
+            return true;
+    printf("dynamic resolution: keeping the %ix%i render targets (set %i)\n", sizes[set] >> 16, sizes[set] & 0xffff, set);
+    dynres_keep_add(&dynres_keep, sizes[set]);
+    return true;
+}
+
+// whether the local player's controls are frozen, as in a match's intro before the players can move: 1 yes, 0 no, -1
+// unknown (this Mac doesn't run the server, or there's no player yet). Reads through mach_vm_read_overwrite, so a
+// stale pointer can't crash; without sv_running, g_entities is what the last game here left, so it isn't read.
+static int player_frozen(void) {
+    uint64_t dvar = 0, entities = 0, client = 0;
+    uint32_t type = 0, flags = 0;
+    uint8_t running = 0;
+    mach_vm_size_t got = 0;
+#define READ(address, out) (mach_vm_read_overwrite(mach_task_self(), (address), sizeof(out), (mach_vm_address_t)&(out), &got) == KERN_SUCCESS && got == sizeof(out))
+    if (!READ(game_base_address + ADDR_sv_running, dvar) || dvar == 0 || !READ(dvar + dvar_Type, type) || type != 1 ||
+        !READ(dvar + dvar_Value, running) || running == 0)
+        return -1;
+    if (!READ(game_base_address + ADDR_g_entities_Ptr, entities) || entities == 0 ||
+        !READ(entities + gentity_Client, client) || client == 0 || !READ(client + gclient_Flags, flags))
+        return -1;
+#undef READ
+    return (flags & gclient_Frozen) != 0;
+}
+
+static const char *frozen_text(int frozen) {
+    return frozen > 0 ? "frozen" : frozen == 0 ? "free" : "unknown";
 }
 
 // a match's first frames: one frame at each size the controller can reach, then back to the user's value (dynres.h).
 // True while it warms up (the controller waits, and starts again from the user's value after it). A map loading arms
 // it again.
 static bool dynres_prewarm_tick(char *dvar, uint64_t now, bool view_3d, int appeared) {
-    static uint64_t started = 0, last = 0;
+    static uint64_t started = 0, last = 0, ended = 0;
     static float frame_ms[24];
-    static int frames = 0, visited = 0;
+    static int frames = 0, visited = 0, debug = -1, watch = 0;
+    if (debug < 0)
+        debug = getenv("BO3MACFIX_DYNRESDEBUG") != NULL;
     if (atomic_exchange(&dynres_prewarm_arm, false))
         dynres_prewarm.armed = true;
+    // debug: when the player gets control after the warm-up (looked at every 6th frame for 60 s)
+    if (watch > 0 && --watch % 6 == 0) {
+        int frozen = player_frozen();
+        if (frozen == 0 || watch == 0) {
+            printf("dynamic resolution: the player's controls are %s %.2f s after the warm-up\n", frozen_text(frozen),
+                   (now - ended) / 1e9);
+            watch = 0;
+        }
+    }
     bool running = dynres_prewarm_running(&dynres_prewarm);
     if (!running && !dynres_prewarm.armed)
         return false;
     if (running && frames < (int)(sizeof(frame_ms) / sizeof(frame_ms[0])))
         frame_ms[frames++] = (float)((now - last) / 1e6);
+    bool warmed = running && dynres_keep_visited(dynres_prewarm.percent[dynres_prewarm.index]);
     last = now;
-    bool ready = view_3d && frame_limit_in_match(&limits, now);
-    int percent = dynres_prewarm_frame(&dynres_prewarm, dynres.base, dynres.lowest, ready, appeared > 0);
+    // the 3D view renders outside the menus, and the player's controls are frozen (the intro), or else the match's UI
+    // polls (a game this Mac doesn't host, or a map whose intro doesn't freeze the player)
+    bool ready = false;
+    if (!running && dynres_prewarm.armed && view_3d && !frame_limit_in_menus(&limits, now))
+        ready = player_frozen() == 1 || frame_limit_in_match(&limits, now);
+    int percent = dynres_prewarm_frame(&dynres_prewarm, dynres.base, dynres.lowest, ready, warmed || appeared > 0);
     if (percent == 0)
         return running;
     if (!running) {
         started = now;
         frames = 0;
         visited = 0;
-        printf("dynamic resolution: the match started, warming up %i sizes\n", dynres_prewarm.count);
+        printf("dynamic resolution: the match started, warming up %i sizes%s%s\n", dynres_prewarm.count,
+               debug ? ", the player's controls are " : "", debug ? frozen_text(player_frozen()) : "");
     }
     dynres_keep_step();
     scene_multiplier_set(dvar, percent);
@@ -305,6 +378,12 @@ static bool dynres_prewarm_tick(char *dvar, uint64_t now, bool view_3d, int appe
         n += snprintf(times + n, sizeof(times) - n, i == 0 ? "%.1f" : ", %.1f", frame_ms[i]);
     printf("dynamic resolution: warmed up %i sizes in %i frames (%.0f ms), back to %i%%; the frames took %s ms\n",
            visited, frames, (now - started) / 1e6, dynres.base, times);
+    if (debug) {
+        int frozen = player_frozen();
+        printf("dynamic resolution: the player's controls are %s at the end of the warm-up\n", frozen_text(frozen));
+        ended = now;
+        watch = frozen > 0 ? 60 * 120 : 0;
+    }
     return true;
 }
 
