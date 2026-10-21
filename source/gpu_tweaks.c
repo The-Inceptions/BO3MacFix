@@ -30,6 +30,8 @@
 #include <IOKit/ps/IOPSKeys.h>
 #include <mach/mach_time.h>
 #include <mach/mach_vm.h>
+#include <notify.h>
+#include <sys/sysctl.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
 
@@ -202,6 +204,42 @@ static dynres_prewarm_t dynres_prewarm = {.index = -1, .armed = true};
 static atomic_bool dynres_prewarm_arm = false;
 static int dynres_learn_frames = 0;           // frames after a step in which a new set is one of ours
 static uint32_t dynres_learn_from[Dynres_Sets]; // the sets' sizes before
+// while macOS reports memory pressure, nothing is kept and no warm-up starts (dynres.h)
+static atomic_bool dynres_pressure = false;
+
+static void dynres_pressure_event(unsigned long events) {
+    atomic_store(&dynres_pressure, dynres_pressure_after(events, atomic_load(&dynres_pressure)));
+}
+
+// macOS's memory pressure events, from the first frame DynamicResolution runs. With BO3MACFIX_TESTHOOKS=1, also
+// com.bo3macfix.test.mempressure: `notifyutil -s com.bo3macfix.test.mempressure 2` (warn; 1 normal) then `notifyutil -p`
+// it, as if macOS sent that event.
+static void dynres_pressure_watch(void) {
+    // the level now (the source only tells changes): 1 normal, 2 warn, 4 critical, the DISPATCH_MEMORYPRESSURE_* bits
+    int level = 0;
+    size_t length = sizeof(level);
+    if (sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &length, NULL, 0) == 0)
+        dynres_pressure_event((unsigned long)level);
+    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
+    static dispatch_source_t source;
+    source = dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
+                                    DISPATCH_MEMORYPRESSURE_NORMAL | DISPATCH_MEMORYPRESSURE_WARN |
+                                        DISPATCH_MEMORYPRESSURE_CRITICAL, queue);
+    if (source != NULL) {
+        dispatch_source_set_event_handler(source, ^{
+            dynres_pressure_event(dispatch_source_get_data(source));
+        });
+        dispatch_resume(source);
+    }
+    const char *env = getenv("BO3MACFIX_TESTHOOKS");
+    int token;
+    if (env != NULL && atoi(env) != 0)
+        notify_register_dispatch("com.bo3macfix.test.mempressure", &token, queue, ^(int t) {
+            uint64_t state = 0;
+            notify_get_state(t, &state);
+            dynres_pressure_event((unsigned long)state);
+        });
+}
 
 // the engine's 8 render target sets: their sizes and last uses; false before the renderer made its table
 static bool rt_sets_read(uint32_t sizes[Dynres_Sets], uint64_t last_use[Dynres_Sets]) {
@@ -252,6 +290,19 @@ static int dynres_keep_tick(bool *view_3d) {
             appeared++;
         }
     }
+    static dispatch_once_t watching;
+    dispatch_once(&watching, ^{
+        dynres_pressure_watch();
+    });
+    static bool was_pressure = false;
+    bool pressure = atomic_load(&dynres_pressure);
+    if (pressure != was_pressure)
+        printf(pressure ? "dynamic resolution: macOS reports memory pressure, keeping no render targets until it's over\n"
+                        : "dynamic resolution: the memory pressure is over, keeping render targets again\n");
+    was_pressure = pressure;
+    // the engine frees what isn't refreshed any more after 11 frames; the steps learn the sizes again afterwards
+    if (pressure && dynres_keep_release(&dynres_keep))
+        printf("dynamic resolution: letting the engine free the kept render targets\n");
     unsigned mask = dynres_keep_mask(&dynres_keep, sizes, last_use, frame);
     volatile uint64_t *use = (volatile uint64_t *)(game_base_address + ADDR_rt_set_last_use);
     for (int i = 1; i < Dynres_Sets; i++) {
@@ -354,6 +405,12 @@ static bool dynres_prewarm_tick(char *dvar, uint64_t now, bool view_3d, int appe
     bool ready = false;
     if (!running && dynres_prewarm.armed && view_3d && !frame_limit_in_menus(&limits, now))
         ready = player_frozen() == 1 || frame_limit_in_match(&limits, now);
+    if (ready && atomic_load(&dynres_pressure)) {
+        // its sets wouldn't be kept: no warm-up for this map
+        printf("dynamic resolution: the match started under memory pressure, no warm-up\n");
+        dynres_prewarm.armed = false;
+        return false;
+    }
     int percent = dynres_prewarm_frame(&dynres_prewarm, dynres.base, dynres.lowest, ready, warmed || appeared > 0);
     if (percent == 0)
         return running;

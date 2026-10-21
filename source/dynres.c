@@ -1,5 +1,6 @@
 // See dynres.h.
 #include "dynres.h"
+#include <dispatch/dispatch.h> // DISPATCH_MEMORYPRESSURE_*
 
 void dynres_reset(dynres_t *d, int base, int lowest) {
     d->base = base;
@@ -79,6 +80,23 @@ unsigned dynres_keep_mask(const dynres_keep_t *keep, const uint32_t sizes[Dynres
                 mask |= 1u << set;
     }
     return mask;
+}
+
+bool dynres_keep_release(dynres_keep_t *keep) {
+    bool kept = false;
+    for (int i = 0; i < Dynres_Keep_Max; i++) {
+        kept |= keep->size[i] != 0;
+        keep->size[i] = 0;
+    }
+    return kept;
+}
+
+bool dynres_pressure_after(unsigned long events, bool before) {
+    if (events & (DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL))
+        return true;
+    if (events & DISPATCH_MEMORYPRESSURE_NORMAL)
+        return false;
+    return before;
 }
 
 int dynres_prewarm_sizes(int base, int lowest, int out[Dynres_Keep_Max]) {
