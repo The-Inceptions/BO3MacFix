@@ -401,6 +401,50 @@ static int dynres_target_fps(int frame_limit_fps) {
     return target;
 }
 
+// BO3MACFIX_DYNRESTRACE=1: a step's next presents and the command buffers that complete around them, in ms from the
+// write, to tell a long frame's GPU work from a wait on the CPU side. Diagnostics only.
+enum { Dynres_Trace_Presents = 12, Dynres_Trace_Wait = 6 };
+static int dynres_trace = -1, dynres_traced = -1; // presents recorded since the step, -1 = not tracing
+static double dynres_trace_at[Dynres_Trace_Presents], dynres_trace_t0;
+static uint64_t dynres_trace_frame[Dynres_Trace_Presents + 1];
+
+static void dynres_trace_step(uint64_t now) {
+    if (dynres_trace < 0)
+        dynres_trace = getenv("BO3MACFIX_DYNRESTRACE") != NULL;
+    if (!dynres_trace)
+        return;
+    dynres_trace_t0 = now / 1e9;
+    dynres_trace_frame[Dynres_Trace_Presents] = *(volatile uint64_t *)(game_base_address + ADDR_rt_frame_counter);
+    dynres_traced = 0;
+    gpu_diag_trace_begin(Gpu_Diag_Trace_Max);
+}
+
+static void dynres_trace_present(uint64_t now) {
+    if (dynres_traced < 0)
+        return;
+    if (dynres_traced < Dynres_Trace_Presents) {
+        dynres_trace_at[dynres_traced] = now / 1e9 - dynres_trace_t0;
+        dynres_trace_frame[dynres_traced] = *(volatile uint64_t *)(game_base_address + ADDR_rt_frame_counter);
+        dynres_traced++;
+        return;
+    }
+    if (++dynres_traced < Dynres_Trace_Presents + Dynres_Trace_Wait)
+        return;
+    dynres_traced = -1;
+    static double times[Gpu_Diag_Trace_Max][3];
+    int count = gpu_diag_trace_take(times, Gpu_Diag_Trace_Max);
+    static char line[6000];
+    int n = snprintf(line, sizeof(line), "dynamic resolution: trace (ms from the write): presents");
+    for (int i = 0; i < Dynres_Trace_Presents && n < (int)sizeof(line) - 40; i++)
+        n += snprintf(line + n, sizeof(line) - n, " %.1f(f+%lld)", dynres_trace_at[i] * 1e3,
+                      (long long)(dynres_trace_frame[i] - dynres_trace_frame[Dynres_Trace_Presents]));
+    n += snprintf(line + n, sizeof(line) - n, "; %i buffers committed@GPU start-end:", count);
+    for (int i = 0; i < count && n < (int)sizeof(line) - 40; i++)
+        n += snprintf(line + n, sizeof(line) - n, " %.1f@%.1f-%.1f", (times[i][0] - dynres_trace_t0) * 1e3,
+                      (times[i][1] - dynres_trace_t0) * 1e3, (times[i][2] - dynres_trace_t0) * 1e3);
+    printf("%s\n", line);
+}
+
 // from the render thread, for each frame
 static void dynres_tick(int frame_limit_fps) {
     static uint64_t window_start = 0, last_present = 0, test_start = 0;
@@ -408,6 +452,7 @@ static void dynres_tick(int frame_limit_fps) {
     static double busy_start = 0, window_fps = 0, window_busy = 0;
     static float after[4];
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    dynres_trace_present(now);
     // the frames right after a change show what it cost: the engine allocates render targets for the new size
     if (logging > 0 && last_present != 0) {
         after[4 - logging] = (float)((now - last_present) / 1e6);
@@ -487,6 +532,7 @@ static void dynres_tick(int frame_limit_fps) {
     to = percent;
     logging = 4;
     dynres_keep_step();
+    dynres_trace_step(now);
     scene_multiplier_set(dvar, percent);
     atomic_store(&dynres_written, percent == dynres.base ? 0 : percent);
 }

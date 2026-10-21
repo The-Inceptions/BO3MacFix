@@ -98,6 +98,29 @@ int main(void) {
         CHECK(buffers == 1);
         CHECK(fabs(gpu_diag_busy_total() - total_before - 0.004) < 1e-6);
 
+        // the step trace: the next 2 buffers to complete, with their own start and end (not the busy total's overlap
+        // clamp) and when they were committed (CLOCK_UPTIME_RAW, GPUStartTime's clock), then nothing after the take
+        double times[Gpu_Diag_Trace_Max][3];
+        CHECK(gpu_diag_trace_take(times, Gpu_Diag_Trace_Max) == 0);
+        gpu_diag_trace_begin(2);
+        double committed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
+        for (int i = 0; i < 3; i++) {
+            [buffer commit];
+            buffer.GPUStartTime = 2e9 + i * 0.010 - 0.002; // overlaps the one before it by 2 ms
+            buffer.GPUEndTime = 2e9 + i * 0.010 + 0.008;
+            if (last_handler != nil)
+                last_handler(buffer);
+        }
+        int count = gpu_diag_trace_take(times, Gpu_Diag_Trace_Max);
+        CHECK(count == 2);
+        CHECK(fabs(times[0][0] - committed) < 1.0);
+        CHECK(times[1][1] == 2e9 + 0.010 - 0.002 && times[1][2] == 2e9 + 0.010 + 0.008);
+        CHECK(gpu_diag_trace_take(times, Gpu_Diag_Trace_Max) == 0);
+        [buffer commit];
+        if (last_handler != nil)
+            last_handler(buffer);
+        CHECK(gpu_diag_trace_take(times, Gpu_Diag_Trace_Max) == 0);
+
         // only the first call swizzles
         gpu_diag_watch_command_buffers(buffer);
         CHECK(orig_commit == original);
