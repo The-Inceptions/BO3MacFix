@@ -62,6 +62,10 @@
 #define ADDR_Cmd_AddCommandInternal 0xf7651d // func - void (const char *name, void (*function)(void), cmd_function_s *alloc), puts alloc (0x30 bytes: next at 0, name at 8, function at 0x20) first in the command list, unless the name is taken
 #define ADDR_Sys_GetTLS 0xd0604f // func - the thread's own block, whose pointer at +0x18 is the arguments the running console command reads (the same layout as ADDR_cmd_args) - name is a guess
 #define ADDR_CL_ConsolePrint 0x11ca87b // func - void (int localClientNum, int channel, const char *text, int duration, int pixelWidth, int flags), queues text for the console and for the game message windows whose filter takes the channel (window 0's is "gamenotify obituary"); Com_PrintMessage calls it with 0, 0 for the window's own time and width
+#define ADDR_CL_ControllerToLocalClient 0xeae875 // func - int (int controller), the local client a controller plays as, -1 for none; Engine.SendMenuResponse (0x1318856) starts with it
+#define ADDR_CL_MenuIndex 0x12a6969 // func - int (int instance, const char *menu), the menu's config string index (kind 0x11, 64 of them), 0 if none; instance 1 is the client
+#define ADDR_CL_MenuResponseIndex 0x12a6d5b // func - int (int instance, const char *response), the menu response's config string index (kind 0x15, 256), 0 if none
+#define ADDR_CL_SERVER_ID 0x117f3678 // int - the server id Engine.SendMenuResponse puts in "cmd mr(p) <server id> <menu> <response>" (0x1115345b0 + 0x2bf0c8)
 #define ADDR_ChatClient_Send 0x13bef1c // func - void (int localClientNum, const char *text, int channel), what the chat box calls on enter: sends chat "<channel> <text>" (or say "<text>") to the server; name is a guess
 #define ADDR_GScr_IsProfileBuild 0x1205df7 // func - void (scriptInstance_t inst), the GSC/CSC builtin isprofilebuild(): Scr_AddInt(inst, 0)
 #define ADDR_Scr_GetInt 0x11a1e78 // func - int (scriptInstance_t inst, unsigned int index), takes int and hash params

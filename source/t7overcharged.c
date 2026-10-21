@@ -416,11 +416,66 @@ static void printsubtitle_f(void) {
                     message.flags);
 }
 
+#pragma mark - SendMenuResponse
+
+// All-around Enhancement's key binds ("Enhanced Controls" in its pause menu: flashlight, ping, third person, the
+// overhead map, hiding the HUD...) are console binds like
+//     bind Y "SendMenuResponse StartMenu_Main aae_flashlight 200"
+// and its GSC waits for those menu responses. The Mac build has no SendMenuResponse console command (only the Lua
+// function), so every one of those keys printed "Unknown command" and did nothing. Ours sends the response the way
+// Engine.SendMenuResponse does for controller 0: the menu's and the response's indexes in the client's config
+// strings, then "cmd mrp"/"cmd mr" queued for the server. The number after the response is left alone.
+static int (*CL_ControllerToLocalClient)(int controller);
+static int (*CL_MenuIndex)(int instance, const char *menu);
+static int (*CL_MenuResponseIndex)(int instance, const char *response);
+static void (*Cbuf_AddText)(int local_client, const char *text);
+static _Alignas(8) uint8_t sendmenuresponse_command[0x30];
+static atomic_bool sendmenuresponse_logged;
+
+static void sendmenuresponse_f(void) {
+    uint8_t *tls = Sys_GetTLS();
+    const uint8_t *args = tls != NULL ? *(const uint8_t *const *)(tls + TLS_CmdArgs) : NULL;
+    if (args == NULL)
+        return;
+    int nesting = *(const int *)args;
+    if (nesting < 0 || nesting >= CmdArgs_Nesting_Max)
+        return;
+    int argc = *(const int *)(args + CmdArgs_Argc + 4 * (size_t)nesting);
+    const char *const *argv = *(const char *const *const *)(args + CmdArgs_Argv + 8 * (size_t)nesting);
+    t7o_menu_response response;
+    if (argv == NULL || !t7o_parse_sendmenuresponse(argc, argv, &response))
+        return;
+    int local_client = CL_ControllerToLocalClient(0);
+    if (local_client < 0 || local_client >= *(const int *)(game_base_address + ADDR_LOCAL_CLIENT_COUNT))
+        local_client = 0;
+    // 1 is the client's config strings, as in Engine.SendMenuResponse; 0 means the menu isn't there (not in a game)
+    int menu_index = CL_MenuIndex(1, response.menu);
+    if (menu_index == 0) {
+        printf("T7Overcharged: SendMenuResponse: no menu %s here\n", response.menu);
+        return;
+    }
+    int response_index = CL_MenuResponseIndex(1, response.response);
+    char line[320];
+    if (!t7o_format_menu_response(line, sizeof(line), *(const int *)(game_base_address + ADDR_CL_SERVER_ID), menu_index,
+                                  response_index, response.response))
+        return;
+    if (!atomic_load_explicit(&sendmenuresponse_logged, memory_order_relaxed) &&
+        !atomic_exchange_explicit(&sendmenuresponse_logged, true, memory_order_relaxed))
+        printf("T7Overcharged: SendMenuResponse sends the mod's key binds (%s)\n", response.response);
+    Cbuf_AddText(local_client, line);
+}
+
 void t7o_install_commands(void) {
     CL_ConsolePrint = (void *)(game_base_address + ADDR_CL_ConsolePrint);
+    CL_ControllerToLocalClient = (void *)(game_base_address + ADDR_CL_ControllerToLocalClient);
+    CL_MenuIndex = (void *)(game_base_address + ADDR_CL_MenuIndex);
+    CL_MenuResponseIndex = (void *)(game_base_address + ADDR_CL_MenuResponseIndex);
+    Cbuf_AddText = (void *)(game_base_address + ADDR_Cbuf_AddText);
     Cmd_FindCommand = (void *)(game_base_address + ADDR_Cmd_FindCommand);
     Cmd_AddCommandInternal = (void *)(game_base_address + ADDR_Cmd_AddCommandInternal);
     Sys_GetTLS = (void *)(game_base_address + ADDR_Sys_GetTLS);
     if (Cmd_FindCommand("printsubtitle") == NULL)
         Cmd_AddCommandInternal("printsubtitle", printsubtitle_f, printsubtitle_command);
+    if (Cmd_FindCommand("SendMenuResponse") == NULL)
+        Cmd_AddCommandInternal("SendMenuResponse", sendmenuresponse_f, sendmenuresponse_command);
 }
