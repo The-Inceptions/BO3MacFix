@@ -46,10 +46,13 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `ControllerBridge` | 0 | Reads DualShock 4 and DualSense controllers through macOS instead: Bluetooth and USB, rumble and lightbar. Turn Steam Input off for the game. Needs macOS 11.3. |
 | `ButtonPrompts` | 0 | 0 shows PlayStation buttons with a PlayStation controller, 1 always Xbox, 2 always PlayStation. |
 | `LightbarColor` | -1 | The lightbar colour as RRGGBB, with `ControllerBridge`. -1 leaves it alone. |
-| `GyroAim` | 0 | Experimental: aims with the DualSense's gyro on top of the right stick, 1 always, 2 while L2 is held. With `ControllerBridge`. `GyroSensitivity` (percent) and `GyroInvert` (1 vertical, 2 horizontal, 3 both) tune it. |
+| `GyroAim` | 0 | Experimental: aims with the DualSense's gyro on top of the right stick, 1 always, 2 while L2 is held. With `ControllerBridge`. `GyroSensitivity` and `GyroInvert` tune it. |
+| `GyroSensitivity` | 100 | How strongly the gyro turns the view with `GyroAim`, in percent. |
+| `GyroInvert` | 0 | Inverts the gyro's direction with `GyroAim`: 1 vertical, 2 horizontal, 3 both. |
 | `AdaptiveTriggers` | 0 | Experimental: gives the DualSense's R2 a weapon-style break and L2 light resistance. With `ControllerBridge`. |
 | `PauseOnDisconnect` | 0 | Opens the pause menu when the controller you're playing with disconnects mid-match (a Bluetooth dropout, a flat battery), in games that can pause: solo and offline. With `ControllerBridge`. |
-| `RawMouse` | 0 | Experimental: aims with raw mouse counts instead of macOS's accelerated movement. `RawMouseScale` (percent) sets the speed. |
+| `RawMouse` | 0 | Experimental: aims with raw mouse counts instead of macOS's accelerated movement. `RawMouseScale` sets the speed. |
+| `RawMouseScale` | 100 | The speed of `RawMouse` aiming, in percent. |
 | `AAEOnline` | 0 | Lets All-around Enhancement fetch its version notes and weather (HTTPS GET only, to raw.githubusercontent.com and wttr.in). |
 | `AAEBankFix` | 1 | Keeps cheats (`sv_cheats`) off as a map starts with All-around Enhancement loaded, so its bank, weapon locker and saved bank balance load. The game turns cheats on for any map started with a mod, and AAE's bank checks before AAE turns them off again. `devmap`, AAE's own `elmg_cheats` and other mods keep the game's behaviour. Applies after a restart. |
 | `WeaponAnims` | 1 | Plays the weapon animations All-around Enhancement asks for through T7Overcharged's `startweaponanim`: the first raise when you inspect a weapon that has no inspect animation of its own (press reload with a full magazine) and after its ammo refill, and the low-ready pose. Without it they're skipped, as before. Applies after a restart. |
