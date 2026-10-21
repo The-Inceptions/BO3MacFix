@@ -109,7 +109,7 @@ static void test_steps_up_after_headroom(void) {
     for (int i = 0; i < 50; i++)
         dynres_window(&d, 80, 0.99, 120);
     CHECK(d.percent == 70);
-    // at 120 fps with the GPU busy 60%: a step up (75%, x1.15 the pixels) still fits under 88%
+    // at 120 fps with the GPU busy 60%: a step up (75%, x1.15 the pixels) still fits under 80%
     for (int i = 0; i < Dynres_Hold_Up - 1; i++)
         CHECK(dynres_window(&d, 120, 0.60, 120) == 70);
     CHECK(dynres_window(&d, 120, 0.60, 120) == 75);
@@ -133,6 +133,61 @@ static void test_no_targets(void) {
         dynres_window(&d, 0, 0.99, 120);
         dynres_window(&d, 60, 0.99, 0);
     }
+    CHECK(d.percent == 100);
+}
+
+// behind because of the CPU, with the GPU half idle: no step up (it would be undone once the game catches up)
+static void test_no_up_when_cpu_bound(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 85);
+    for (int i = 0; i < 50; i++)
+        dynres_window(&d, 100, 0.99, 120);
+    CHECK(d.percent == 85);
+    for (int i = 0; i < 200; i++)
+        dynres_window(&d, 105, 0.55, 120); // 105 fps (under 95% of 120), GPU busy 55%
+    CHECK(d.percent == 85);
+    // a CPU-bound window in a calm stretch starts the count again
+    for (int i = 0; i < Dynres_Hold_Up - 1; i++)
+        dynres_window(&d, 120, 0.60, 120);
+    dynres_window(&d, 105, 0.55, 120);
+    for (int i = 0; i < Dynres_Hold_Up - 1; i++)
+        CHECK(dynres_window(&d, 120, 0.60, 120) == 85);
+    CHECK(dynres_window(&d, 120, 0.60, 120) == 90);
+}
+
+// after a step down, no step up for Dynres_Hold_Up windows, however light the scene gets
+static void test_hold_after_down(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 85);
+    for (int i = 0; i <= Dynres_Hold_Down; i++)
+        dynres_window(&d, 110, 0.98, 120);
+    CHECK(d.percent == 95);
+    for (int i = 0; i < Dynres_Hold_Up - 1; i++)
+        CHECK(dynres_window(&d, 120, 0.40, 120) == 95);
+    CHECK(dynres_window(&d, 120, 0.40, 120) == 100);
+    CHECK(Dynres_Hold_Up * Dynres_Window_Frames >= 120 * 5); // at least 5 s at 120 fps
+}
+
+// play: the scene turns light for a few seconds at a time between the zombies. It comes down for the zombies once and
+// stays there instead of going up for each lull and down again; a long calm brings it back up.
+static void test_swings(void) {
+    gpu_model_t zombies = { 2.0, 7.8 }, lull = { 2.0, 4.0 };
+    dynres_t d;
+    dynres_reset(&d, 100, 85);
+    int changes = 0, before = d.percent;
+    int lull_windows = 4 * 120 / Dynres_Window_Frames; // 4 s at 120 fps
+    for (int cycle = 0; cycle < 15; cycle++) {          // 15 x (4 s of zombies, 4 s of lull) = 2 minutes
+        for (int i = 0; i < 2 * lull_windows; i++) {
+            window(&d, i < lull_windows ? zombies : lull);
+            changes += d.percent != before;
+            before = d.percent;
+        }
+    }
+    CHECK(changes <= 2); // down for the first zombies, then nothing
+    CHECK(gpu_ms(zombies, d.percent) <= 1000.0 / 120);
+    // a calm of 30 s: back up to the base
+    for (int i = 0; i < 30 * 120 / Dynres_Window_Frames; i++)
+        window(&d, lull);
     CHECK(d.percent == 100);
 }
 
@@ -257,6 +312,9 @@ int main(void) {
     test_steps_up_after_headroom();
     test_no_targets();
     test_settles();
+    test_no_up_when_cpu_bound();
+    test_hold_after_down();
+    test_swings();
     test_keep();
     test_prewarm();
     if (failures == 0)

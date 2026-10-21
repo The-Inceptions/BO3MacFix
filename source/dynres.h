@@ -15,9 +15,14 @@
 #define Dynres_Missed 0.95      // a window misses the target below 95% of its frame rate (114 fps at 120: two late
                                 // frames in 30, one is often a hitch that a lower resolution wouldn't prevent)
 #define Dynres_GPU_Bound 0.90   // and is GPU-bound when the GPU was busy 90% of its time or more
-#define Dynres_Headroom 0.88    // a step up fits when the GPU would be busy less than 88% of the frame time
+// Raising is slow on purpose: every step costs one frame of extra GPU work (dynres-step: +0 to +20 ms, unavoidable),
+// and in play the load swings every few seconds, so a quick step up was mostly undone a second later (the user's log:
+// steps up at 69-79% GPU busy, then down again). A step up needs a window that held the frame rate (not a CPU-bound
+// one, where the GPU's room says nothing) and in which the next size would keep the GPU under 80% busy, for 8 s in a
+// row. The count starts again at every change, so after coming down it stays down for 8 s at least.
+#define Dynres_Headroom 0.80    // a step up fits when the GPU would be busy less than 80% of the frame time
 #define Dynres_Hold_Down 2      // windows after a change before it lowers again (the GPU time settles)
-#define Dynres_Hold_Up 8        // windows in a row with headroom before it raises (2 s at 120 fps)
+#define Dynres_Hold_Up 32       // windows in a row with headroom before it raises (8 s at 120 fps)
 #define Dynres_Far_Behind 0.85  // below 85% of the target frame rate it takes two steps down at once
 
 typedef struct {
