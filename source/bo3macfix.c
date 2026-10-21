@@ -1066,7 +1066,7 @@ __attribute__((constructor)) static void dylib_main() {
     install_hook_Lua_GetBuildIntField((void *)(game_base_address + ADDR_Lua_GetBuildIntField));
     install_hook_Lua_GetBuildStringField((void *)(game_base_address + ADDR_Lua_GetBuildStringField));
     install_hook_Lua_Exec((void *)(game_base_address + ADDR_Lua_Exec));
-    if (read_int_setting_or_env("SkipIntro", 0)) {
+    if (read_int_setting_or_env("SkipIntro", 1)) {
         if (launch_args_start_game(*_NSGetArgc(), *_NSGetArgv()))
             printf("BO3MacFix: the command line starts a map, so the intro movies play as usual (SkipIntro)\n");
         else
