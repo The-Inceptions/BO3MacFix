@@ -186,6 +186,65 @@ static void test_keep(void) {
     CHECK(!(mask & (1u << 7))); // last use after the frame read: left alone
     dynres_keep_t none = {{0}};
     CHECK(dynres_keep_mask(&none, sizes, used, 100) == 0);
+    // the set of a percent, from set 0's size: the engine's 95/90/85% of 2624x1696
+    uint32_t table[Dynres_Sets] = {dynres_size(2624, 1696), cam, s85, 0, s95, s90, 0, 0};
+    CHECK(dynres_set_for_percent(table, 100, 95) == 4);
+    CHECK(dynres_set_for_percent(table, 100, 90) == 5);
+    CHECK(dynres_set_for_percent(table, 100, 85) == 2);
+    CHECK(dynres_set_for_percent(table, 100, 80) == -1);
+    CHECK(dynres_set_for_percent(table, 100, 100) == -1); // set 0 isn't one to keep
+    uint32_t no_set0[Dynres_Sets] = {0, s95};
+    CHECK(dynres_set_for_percent(no_set0, 100, 95) == -1);
+}
+
+// warming up at a match start: which sizes, in which order, one frame each, and back to the user's value
+static void test_prewarm(void) {
+    int out[Dynres_Keep_Max];
+    CHECK(dynres_prewarm_sizes(100, 85, out) == 3 && out[0] == 95 && out[1] == 90 && out[2] == 85);
+    CHECK(dynres_prewarm_sizes(100, 75, out) == 3 && out[2] == 85); // the 3 nearest: as many as stay kept
+    CHECK(dynres_prewarm_sizes(100, 95, out) == 1 && out[0] == 95);
+    CHECK(dynres_prewarm_sizes(87, 70, out) == 3 && out[0] == 82 && out[1] == 77 && out[2] == 72);
+    CHECK(dynres_prewarm_sizes(80, 72, out) == 2 && out[0] == 75 && out[1] == 72); // the floor, not below
+    CHECK(dynres_prewarm_sizes(60, 60, out) == 0);
+
+    dynres_prewarm_t p;
+    dynres_prewarm_init(&p);
+    CHECK(!dynres_prewarm_running(&p));
+    CHECK(dynres_prewarm_frame(&p, 100, 85, false, false) == 0); // the load, the menus: waits
+    CHECK(dynres_prewarm_frame(&p, 100, 85, false, true) == 0);
+    CHECK(dynres_prewarm_frame(&p, 100, 85, true, false) == 95); // the match's first 3D frame
+    CHECK(dynres_prewarm_running(&p));
+    CHECK(dynres_prewarm_frame(&p, 100, 85, true, false) == 0); // 95's set not there yet
+    CHECK(dynres_prewarm_frame(&p, 100, 85, true, true) == 90); // it appeared: the next size
+    CHECK(dynres_prewarm_frame(&p, 100, 85, true, true) == 85);
+    CHECK(dynres_prewarm_frame(&p, 100, 85, true, true) == 100); // back to the user's value
+    CHECK(!dynres_prewarm_running(&p));
+    CHECK(dynres_prewarm_frame(&p, 100, 85, true, true) == 0); // once per arming
+    for (int i = 0; i < 100; i++)
+        CHECK(dynres_prewarm_frame(&p, 100, 85, true, false) == 0);
+
+    // a size whose set doesn't appear (already there): goes on after Dynres_Prewarm_Wait frames
+    p.armed = true; // the next map
+    CHECK(dynres_prewarm_frame(&p, 100, 85, true, false) == 95);
+    int frames = 0, value = 0;
+    while (value == 0 && frames < 100) {
+        value = dynres_prewarm_frame(&p, 100, 85, true, false);
+        frames++;
+    }
+    CHECK(value == 90 && frames == Dynres_Prewarm_Wait);
+    // ready no longer matters once it runs (the 3D view at a lower size doesn't use set 0)
+    CHECK(dynres_prewarm_frame(&p, 100, 85, false, true) == 85);
+    CHECK(dynres_prewarm_frame(&p, 100, 85, false, true) == 100);
+    CHECK(!dynres_prewarm_running(&p) && !p.armed);
+
+    // the user's value changed between the start and the end: goes back to the one it started from
+    p.armed = true;
+    CHECK(dynres_prewarm_frame(&p, 100, 95, true, false) == 95);
+    CHECK(dynres_prewarm_frame(&p, 90, 85, true, true) == 100);
+    // nothing to visit (the floor is the user's value): nothing written, disarmed
+    p.armed = true;
+    CHECK(dynres_prewarm_frame(&p, 60, 60, true, false) == 0);
+    CHECK(!dynres_prewarm_running(&p) && !p.armed);
 }
 
 int main(void) {
@@ -199,6 +258,7 @@ int main(void) {
     test_no_targets();
     test_settles();
     test_keep();
+    test_prewarm();
     if (failures == 0)
         printf("test_dynres: all passed\n");
     return failures != 0;
