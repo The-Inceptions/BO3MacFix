@@ -55,3 +55,28 @@ int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps) {
         return d->percent;
     return change(d, up);
 }
+
+void dynres_keep_add(dynres_keep_t *keep, uint32_t size) {
+    if (size == 0)
+        return;
+    int at = Dynres_Keep_Max - 1; // not kept yet: the oldest goes
+    for (int i = 0; i < Dynres_Keep_Max; i++)
+        if (keep->size[i] == size)
+            at = i;
+    for (int i = at; i > 0; i--)
+        keep->size[i] = keep->size[i - 1];
+    keep->size[0] = size;
+}
+
+unsigned dynres_keep_mask(const dynres_keep_t *keep, const uint32_t sizes[Dynres_Sets],
+                          const uint64_t last_use[Dynres_Sets], uint64_t frame) {
+    unsigned mask = 0;
+    for (int set = 1; set < Dynres_Sets; set++) {
+        if (sizes[set] == 0 || last_use[set] > frame || frame - last_use[set] > Dynres_Keep_Fresh)
+            continue;
+        for (int i = 0; i < Dynres_Keep_Max; i++)
+            if (keep->size[i] == sizes[set])
+                mask |= 1u << set;
+    }
+    return mask;
+}

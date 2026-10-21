@@ -8,6 +8,7 @@
 // (and free the old ones 11 frames later), so it changes the resolution at most every few windows.
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 
 #define Dynres_Window_Frames 30 // frames per window (0.25 s at 120 fps): one decision per window
 #define Dynres_Step 5           // percentage points per step
@@ -37,3 +38,29 @@ int dynres_lowest_for(int base, int setting);
 // one window: its frame rate, the share of its time the GPU was busy (0 to 1), and the frame rate to reach. Returns the
 // ResolutionPercent to render the next frames at.
 int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps);
+
+// Keeping the render targets of DynamicResolution's sizes. The engine's cache of render target sets (offsets.h) frees
+// sets 1-7 once they haven't been used for 11 frames (set 0, ResolutionPercent's own, stays), so every step to a size
+// other than the user's allocated its set again: one frame of 25-67 ms each time, 2-4 frames after the step. The glue
+// learns the size of each set that appears right after a step and, every frame, sets those sets' last use to the
+// engine's frame counter, so a step back to a size it used before finds its set in the cache.
+#define Dynres_Sets 8      // the engine's sets; 0 is never freed
+#define Dynres_Keep_Max 3  // sizes kept (the steps from 95% to 85%), the oldest goes when a 4th comes
+#define Dynres_Keep_Fresh 5 // only a set used in the last 5 frames is kept (the engine frees at 11): one the engine
+                            // already let go is left alone
+
+typedef struct {
+    uint32_t size[Dynres_Keep_Max]; // width << 16 | height, most recent first; 0 for none
+} dynres_keep_t;
+
+static inline uint32_t dynres_size(uint16_t width, uint16_t height) {
+    return (uint32_t)width << 16 | height;
+}
+
+// a set of this size appeared after a step: keep it (0, or one already kept, only moves it first)
+void dynres_keep_add(dynres_keep_t *keep, uint32_t size);
+
+// the sets (bit i for set i, 1-7) whose last use to set to the frame counter: in use (size not 0), of a kept size,
+// and used within the last Dynres_Keep_Fresh frames
+unsigned dynres_keep_mask(const dynres_keep_t *keep, const uint32_t sizes[Dynres_Sets],
+                          const uint64_t last_use[Dynres_Sets], uint64_t frame);
