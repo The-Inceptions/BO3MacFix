@@ -136,23 +136,21 @@ static void test_no_targets(void) {
     CHECK(d.percent == 100);
 }
 
-// behind because of the CPU, with the GPU half idle: no step up (it would be undone once the game catches up)
-static void test_no_up_when_cpu_bound(void) {
+// behind because of the CPU: the GPU's share is scaled to the target's frame time first. With room even then, it comes
+// back up after the hold (a CPU-bound match mustn't stay at a low resolution for good); without room, it stays.
+static void test_up_when_cpu_bound(void) {
     dynres_t d;
     dynres_reset(&d, 100, 85);
     for (int i = 0; i < 50; i++)
         dynres_window(&d, 100, 0.99, 120);
     CHECK(d.percent == 85);
+    // 105 fps (under 95% of 120), GPU busy 40%: 0.40 * 120/105 * (90/85)^2 = 0.51, room for 90%
+    for (int i = 0; i < Dynres_Hold_Up - 1; i++)
+        CHECK(dynres_window(&d, 105, 0.40, 120) == 85);
+    CHECK(dynres_window(&d, 105, 0.40, 120) == 90);
+    // 105 fps, GPU busy 70%: 0.70 * 120/105 * (95/90)^2 = 0.89, no room for 95%, however long
     for (int i = 0; i < 200; i++)
-        dynres_window(&d, 105, 0.55, 120); // 105 fps (under 95% of 120), GPU busy 55%
-    CHECK(d.percent == 85);
-    // a CPU-bound window in a calm stretch starts the count again
-    for (int i = 0; i < Dynres_Hold_Up - 1; i++)
-        dynres_window(&d, 120, 0.60, 120);
-    dynres_window(&d, 105, 0.55, 120);
-    for (int i = 0; i < Dynres_Hold_Up - 1; i++)
-        CHECK(dynres_window(&d, 120, 0.60, 120) == 85);
-    CHECK(dynres_window(&d, 120, 0.60, 120) == 90);
+        CHECK(dynres_window(&d, 105, 0.70, 120) == 90);
 }
 
 // after a step down, no step up for Dynres_Hold_Up windows, however light the scene gets
@@ -312,7 +310,7 @@ int main(void) {
     test_steps_up_after_headroom();
     test_no_targets();
     test_settles();
-    test_no_up_when_cpu_bound();
+    test_up_when_cpu_bound();
     test_hold_after_down();
     test_swings();
     test_keep();

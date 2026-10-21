@@ -43,11 +43,6 @@ int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps) {
     // a step up, once it would have fit for a while: the GPU's work grows with the pixels, the square of the scale
     if (d->percent >= d->base)
         return d->percent;
-    // behind but not because of the GPU (the CPU): no step up now, it would be undone once the game catches up
-    if (fps < target_fps * Dynres_Missed) {
-        d->headroom_windows = 0;
-        return d->percent;
-    }
     int up = d->percent + Dynres_Step < d->base ? d->percent + Dynres_Step : d->base;
     double scale = (double)up / d->percent;
     // at a frame rate under the target the GPU time per frame counts, not its share of the slower frames

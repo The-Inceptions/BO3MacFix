@@ -17,9 +17,10 @@
 #define Dynres_GPU_Bound 0.90   // and is GPU-bound when the GPU was busy 90% of its time or more
 // Raising is slow on purpose: every step costs one frame of extra GPU work (dynres-step: +0 to +20 ms, unavoidable),
 // and in play the load swings every few seconds, so a quick step up was mostly undone a second later (the user's log:
-// steps up at 69-79% GPU busy, then down again). A step up needs a window that held the frame rate (not a CPU-bound
-// one, where the GPU's room says nothing) and in which the next size would keep the GPU under 80% busy, for 8 s in a
-// row. The count starts again at every change, so after coming down it stays down for 8 s at least.
+// steps up at 69-79% GPU busy, then down again). A step up needs windows in which the next size would keep the GPU
+// under 80% busy, for 8 s in a row; under the target frame rate (CPU-bound) the busy share is first scaled to the
+// target's frame time, so a CPU-bound match still comes back up once the GPU has room. The count starts again at every
+// change, so after coming down it stays down for 8 s at least.
 #define Dynres_Headroom 0.80    // a step up fits when the GPU would be busy less than 80% of the frame time
 #define Dynres_Hold_Down 2      // windows after a change before it lowers again (the GPU time settles)
 #define Dynres_Hold_Up 32       // windows in a row with headroom before it raises (8 s at 120 fps)
