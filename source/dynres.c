@@ -80,3 +80,44 @@ unsigned dynres_keep_mask(const dynres_keep_t *keep, const uint32_t sizes[Dynres
     }
     return mask;
 }
+
+int dynres_prewarm_sizes(int base, int lowest, int out[Dynres_Keep_Max]) {
+    int count = 0;
+    for (int percent = base - Dynres_Step; count < Dynres_Keep_Max; percent -= Dynres_Step) {
+        int size = percent > lowest ? percent : lowest; // the controller's steps stop at the floor
+        if (size >= base || (count > 0 && size == out[count - 1]))
+            break;
+        out[count++] = size;
+    }
+    return count;
+}
+
+void dynres_prewarm_init(dynres_prewarm_t *p) {
+    p->count = 0;
+    p->index = -1;
+    p->frames = 0;
+    p->base = 0;
+    p->armed = true;
+}
+
+int dynres_prewarm_frame(dynres_prewarm_t *p, int base, int lowest, bool ready, bool new_set) {
+    if (p->index < 0) {
+        if (!p->armed || !ready)
+            return 0;
+        p->armed = false;
+        p->count = dynres_prewarm_sizes(base, lowest, p->percent);
+        if (p->count == 0)
+            return 0;
+        p->base = base;
+        p->index = 0;
+        p->frames = 0;
+        return p->percent[0];
+    }
+    if (!new_set && ++p->frames < Dynres_Prewarm_Wait)
+        return 0;
+    p->frames = 0;
+    if (++p->index < p->count)
+        return p->percent[p->index];
+    p->index = -1;
+    return p->base;
+}

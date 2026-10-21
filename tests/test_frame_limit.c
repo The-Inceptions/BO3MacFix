@@ -275,6 +275,19 @@ static void test_background_not_loading(void) {
           stopped == Limit_Background);
 }
 
+// whether a match runs (DynamicResolution warms up there): the UI polls and doesn't say the game is in the menus
+static void test_in_match(void) {
+    frame_limits_t limits = { 0 };
+    CHECK(!frame_limit_in_match(&limits, Second)); // the game starting: no UI yet
+    frame_limit_set_menus(&limits, true, 2 * Second);
+    CHECK(!frame_limit_in_match(&limits, 2 * Second)); // the menus
+    frame_limit_ui_gone(&limits);
+    CHECK(!frame_limit_in_match(&limits, 3 * Second)); // a map loading
+    frame_limit_set_menus(&limits, false, 20 * Second);
+    CHECK(frame_limit_in_match(&limits, 20 * Second)); // the match's UI polls
+    CHECK(!frame_limit_in_match(&limits, 20 * Second + Pause_Menu_Timeout_NS)); // its polls stopped
+}
+
 int main(void) {
     test_lowest();
     test_lowest_limit();
@@ -284,6 +297,7 @@ int main(void) {
     test_menus();
     test_background();
     test_background_not_loading();
+    test_in_match();
     if (failures == 0)
         printf("test_frame_limit: all passed\n");
     return failures == 0 ? 0 : 1;

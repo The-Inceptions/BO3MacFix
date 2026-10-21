@@ -197,6 +197,9 @@ static void scene_multiplier_set(char *dvar, int percent) {
 
 // the sets of DynamicResolution's sizes, kept in the engine's render target cache (dynres.h)
 static dynres_keep_t dynres_keep;
+// warming those sizes up in a match's first frames (dynres.h); armed again by each map load (gpu_tweaks_ui_gone)
+static dynres_prewarm_t dynres_prewarm = {.index = -1, .armed = true};
+static atomic_bool dynres_prewarm_arm = false;
 static int dynres_learn_frames = 0;           // frames after a step in which a new set is one of ours
 static uint32_t dynres_learn_from[Dynres_Sets]; // the sets' sizes before
 
@@ -216,12 +219,20 @@ static bool rt_sets_read(uint32_t sizes[Dynres_Sets], uint64_t last_use[Dynres_S
 
 // each frame: learn the sets that appear right after a step, and set the last use of those sizes' sets to the frame
 // counter, so the engine's lookup doesn't free them after 11 frames. Only the last use is written, never a size or a
-// render target: which sets are valid stays the engine's own (a set is in use while its size isn't 0).
-static void dynres_keep_tick(void) {
+// render target: which sets are valid stays the engine's own (a set is in use while its size isn't 0). Returns how
+// many sets appeared; *view_3d says whether the engine's lookup used a set in the last 2 frames (the 3D view renders),
+// not counting the last uses this wrote itself.
+static int dynres_keep_tick(bool *view_3d) {
+    static uint64_t written_use[Dynres_Sets]; // the last use this wrote to each set, 0 for none
     uint32_t sizes[Dynres_Sets];
     uint64_t last_use[Dynres_Sets];
+    int appeared = 0;
+    *view_3d = false;
     if (!rt_sets_read(sizes, last_use))
-        return;
+        return 0;
+    uint64_t frame = *(volatile uint64_t *)(game_base_address + ADDR_rt_frame_counter);
+    for (int i = 0; i < Dynres_Sets; i++)
+        *view_3d |= sizes[i] != 0 && last_use[i] <= frame && frame - last_use[i] <= 2 && last_use[i] != written_use[i];
     if (dynres_learn_frames > 0) {
         dynres_learn_frames--;
         for (int i = 1; i < Dynres_Sets; i++) {
@@ -235,14 +246,17 @@ static void dynres_keep_tick(void) {
                        sizes[i] & 0xffff, i);
             dynres_keep_add(&dynres_keep, sizes[i]);
             dynres_learn_from[i] = sizes[i];
+            appeared++;
         }
     }
-    uint64_t frame = *(volatile uint64_t *)(game_base_address + ADDR_rt_frame_counter);
     unsigned mask = dynres_keep_mask(&dynres_keep, sizes, last_use, frame);
     volatile uint64_t *use = (volatile uint64_t *)(game_base_address + ADDR_rt_set_last_use);
-    for (int i = 1; i < Dynres_Sets; i++)
+    for (int i = 1; i < Dynres_Sets; i++) {
         if (mask & (1u << i))
             use[i] = frame;
+        written_use[i] = mask & (1u << i) ? frame : 0;
+    }
+    return appeared;
 }
 
 // a step: the sets as they are now, to tell the new one
@@ -250,6 +264,48 @@ static void dynres_keep_step(void) {
     uint64_t last_use[Dynres_Sets];
     if (rt_sets_read(dynres_learn_from, last_use))
         dynres_learn_frames = 12;
+}
+
+// a match's first frames: one frame at each size the controller can reach, then back to the user's value (dynres.h).
+// True while it warms up (the controller waits, and starts again from the user's value after it). A map loading arms
+// it again.
+static bool dynres_prewarm_tick(char *dvar, uint64_t now, bool view_3d, int appeared) {
+    static uint64_t started = 0, last = 0;
+    static float frame_ms[24];
+    static int frames = 0, visited = 0;
+    if (atomic_exchange(&dynres_prewarm_arm, false))
+        dynres_prewarm.armed = true;
+    bool running = dynres_prewarm_running(&dynres_prewarm);
+    if (!running && !dynres_prewarm.armed)
+        return false;
+    if (running && frames < (int)(sizeof(frame_ms) / sizeof(frame_ms[0])))
+        frame_ms[frames++] = (float)((now - last) / 1e6);
+    last = now;
+    bool ready = view_3d && frame_limit_in_match(&limits, now);
+    int percent = dynres_prewarm_frame(&dynres_prewarm, dynres.base, dynres.lowest, ready, appeared > 0);
+    if (percent == 0)
+        return running;
+    if (!running) {
+        started = now;
+        frames = 0;
+        visited = 0;
+        printf("dynamic resolution: the match started, warming up %i sizes\n", dynres_prewarm.count);
+    }
+    dynres_keep_step();
+    scene_multiplier_set(dvar, percent);
+    if (dynres_prewarm_running(&dynres_prewarm)) {
+        atomic_store(&dynres_written, percent);
+        visited++;
+        return true;
+    }
+    atomic_store(&dynres_written, 0);
+    dynres_reset(&dynres, dynres.base, dynres.lowest);
+    char times[24 * 8] = "";
+    for (int i = 0, n = 0; i < frames && n < (int)sizeof(times); i++)
+        n += snprintf(times + n, sizeof(times) - n, i == 0 ? "%.1f" : ", %.1f", frame_ms[i]);
+    printf("dynamic resolution: warmed up %i sizes in %i frames (%.0f ms), back to %i%%; the frames took %s ms\n",
+           visited, frames, (now - started) / 1e6, dynres.base, times);
+    return true;
 }
 
 // the frame rate to reach: the display's refresh rate, or a lower limit (ours, or MaxFPS)
@@ -285,7 +341,8 @@ static void dynres_tick(int frame_limit_fps) {
     char *dvar = scene_multiplier_dvar();
     if (dvar == NULL)
         return;
-    dynres_keep_tick();
+    bool view_3d;
+    int appeared = dynres_keep_tick(&view_3d);
     int current = *(volatile int *)(dvar + dvar_Value), latched = *(volatile int *)(dvar + dvar_Latched);
     int written = atomic_load(&dynres_written), setting = atomic_load(&dynres_setting);
     bool reconfigure = atomic_exchange(&dynres_reconfigure, false);
@@ -313,6 +370,10 @@ static void dynres_tick(int frame_limit_fps) {
         atomic_store(&dynres_base, current);
         window_start = 0;
         printf("dynamic resolution: between %i%% and %i%%\n", dynres.lowest, dynres.base);
+    }
+    if (dynres_prewarm_tick(dvar, now, view_3d, appeared)) {
+        window_start = 0; // the controller's first window starts after it
+        return;
     }
     if (window_start == 0) {
         window_start = now;
@@ -616,6 +677,7 @@ void gpu_tweaks_menus_open(bool in_menus) {
 
 void gpu_tweaks_ui_gone(void) {
     frame_limit_ui_gone(&limits);
+    atomic_store(&dynres_prewarm_arm, true); // a map loads: warm DynamicResolution's sizes up when its match starts
 }
 
 // from the main thread (app_focus.m)
