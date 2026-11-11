@@ -25,6 +25,7 @@
 
 #include "aae_build.h"
 #include "aae_cheats.h"
+#include "gsc_detours.h"
 #include "bo3macnative.h"
 #include "codhavoktypes.h"
 #include "cpu_tuning.h"
@@ -1160,6 +1161,9 @@ __attribute__((constructor)) static void dylib_main() {
                     read_int_setting("FastScriptErrors", 1));
     // repeated script errors are shown 3 times, then counted, see script_errors.c
     script_errors_init(game_base_address, read_int_setting("QuietScriptErrors", 1));
+    // All-around Enhancement 4's patch scripts load with the scripts they patch (AAEScriptPatches, on by default),
+    // see gsc_detours.c
+    gsc_detours_init(game_base_address, read_int_setting_or_env("AAEScriptPatches", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);

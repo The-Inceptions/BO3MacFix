@@ -67,6 +67,12 @@
 #define ADDR_CL_MenuResponseIndex 0x12a6d5b // func - int (int instance, const char *response), the menu response's config string index (kind 0x15, 256), 0 if none
 #define ADDR_CL_SERVER_ID 0x117f3678 // int - the server id Engine.SendMenuResponse puts in "cmd mr(p) <server id> <menu> <response>" (0x1115345b0 + 0x2bf0c8)
 #define ADDR_ChatClient_Send 0x13bef1c // func - void (int localClientNum, const char *text, int channel), what the chat box calls on enter: sends chat "<channel> <text>" (or say "<text>") to the server; name is a guess
+#define ADDR_Scr_LoadScript 0x140a337 // func - int (scriptInstance_t inst, const char *name), loads the scriptparsetree asset <name>.gsc (.csc for the client's) through the loader at 0x149293c (its includes first, then the linker at 0x1492536) - "Script file not found: '%s'", "Error linking script '%s'%s%s"
+#define ADDR_Scr_GetBuiltinFunction 0x14904c4 // func - void *(inst, uint32_t name, int *kind, int *minParams, int *maxParams), a builtin function by name hash, as the linker's import resolver (0x1491852) asks; kind 1 is dev-only, 2 is closed to scripts with flag 2 - name is a guess
+#define ADDR_Scr_GetBuiltinMethod 0x14904ee // func - the same for builtin methods - name is a guess
+#define ADDR_Scr_LinkerSkipsDevCalls 0xe4962f // func - bool (), when true the import resolver leaves the /# #/ imports of a script without flag 2 unlinked - name is a guess
+#define ADDR_scrObjTable 0x199a62e0 // the loaded scripts, 500 entries of 0x60 bytes per script instance: the script's bytes at +0 and +8, its name at +0x10, its code's start and end at +0x18 and +0x20 - name is a guess
+#define ADDR_scrObjCount 0x199bd9e0 // uint32_t[2]: how many of them per script instance - name is a guess
 #define ADDR_GScr_IsProfileBuild 0x1205df7 // func - void (scriptInstance_t inst), the GSC/CSC builtin isprofilebuild(): Scr_AddInt(inst, 0)
 #define ADDR_Scr_GetInt 0x11a1e78 // func - int (scriptInstance_t inst, unsigned int index), takes int and hash params
 #define ADDR_Scr_GetString 0x11a2281 // func - const char * (scriptInstance_t inst, unsigned int index)

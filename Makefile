@@ -8,6 +8,10 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag \
 	tests/test_t7o_subtitle
 TEST_TARGETS += tests/test_launch_args
+# compiled scripts and All-around Enhancement 4's patch scripts (gsc_obj.c)
+TEST_TARGETS += tests/test_gsc_obj
+# loading them and redirecting calls, against a made-up game (gsc_detours.c)
+TEST_TARGETS += tests/test_gsc_detours
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
 
@@ -55,6 +59,8 @@ SOURCES += source/launch_args.c
 SOURCES += source/aae_build.c
 # a map started with AAE keeping cheats off, so its bank and weapon locker load (aae_cheats.c)
 SOURCES += source/aae_cheats.c
+# All-around Enhancement 4's patch scripts: the compiled script format (gsc_obj.c) and loading them (gsc_detours.c)
+SOURCES += source/gsc_obj.c source/gsc_detours.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -122,6 +128,18 @@ tests/test_stream_stall_recovery: tests/test_stream_stall_recovery.c source/stre
 tests/test_aae_build: tests/test_aae_build.c source/aae_build.c source/aae_build.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_aae_build.c \
 		source/aae_build.c -lz
+
+# gsc_obj.c against made-up scripts and patch scripts, and the installed All-around Enhancement's core_mod.ff if
+# there is one, with the address and undefined behaviour sanitizers since it parses files
+tests/test_gsc_obj: tests/test_gsc_obj.c tests/fake_gsc.h source/gsc_obj.c source/gsc_obj.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_gsc_obj.c \
+		source/gsc_obj.c -lz
+
+# gsc_detours.c against a made-up game: script assets, the table of loaded scripts, a loader and linker, mapname
+tests/test_gsc_detours: tests/test_gsc_detours.c tests/fake_gsc.h source/gsc_detours.c source/gsc_detours.h \
+		source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_gsc_detours.c \
+		source/gsc_obj.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h
