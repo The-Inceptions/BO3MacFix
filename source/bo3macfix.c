@@ -846,7 +846,11 @@ install_hook_name(hksf_fopen_internal, void *, char *filename, char *opentype, i
 }
 
 static bool shown_dll_warning = false;
-install_hook_name(hks_load_dll, bool, void *s, const char *filename, const char *func_name) {
+// Returns an int, not a bool: Lua's package.loadlib (0x1014844c2) ends by jumping here, so what this returns is
+// loadlib's number of results, 1 (the function it pushed) or 0. A bool only sets the low byte of eax, and the bytes
+// above it kept whatever the last call left there. With All-around Enhancement 4.1.7 that was no longer zero, so
+// loadlib gave its Lua nothing back, the mod took T7Overcharged as missing, opened its guide and quit the game.
+install_hook_name(hks_load_dll, int, void *s, const char *filename, const char *func_name) {
     printf("Lua loadlib with '%s' (func: '%s')\n", filename, func_name);
     char newpath[4096];
     lua_correct_path(filename, newpath, sizeof(newpath));
@@ -872,7 +876,7 @@ install_hook_name(hks_load_dll, bool, void *s, const char *filename, const char 
     if (t7o_is_overcharged_dll(newpath) && strcmp(func_name, "init") == 0) {
         printf("--> BO3MacFix T7Overcharged\n");
         t7o_push_init(s, newpath);
-        return true;
+        return 1;
     }
 
     // tell the user (once a launch) that the DLL load has failed: in the log and as an on-screen notice that waits for
