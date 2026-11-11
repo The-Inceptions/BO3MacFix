@@ -13,6 +13,7 @@
 // and the display scale that the rest of the way, as they would any drawable smaller than the window.
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
 #import <Metal/Metal.h>
 #import <MetalFX/MetalFX.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -24,6 +25,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "display_follow.h"
@@ -360,11 +362,102 @@ static void enlarge_unforced_drawable(NSUInteger width, NSUInteger height) {
     layer.drawableSize = CGSizeMake(native_width, native_height);
 }
 
+// ---- the tests' screenshot: a copy of the game's backbuffer, written out when its command buffer is done
+#define Screenshot_Max_Width 1600
+static atomic_int screenshot_wanted;
+static char screenshot_path[1024];
+static id<MTLTexture> pending_screenshot; // render thread, between Aspyr's copy and the present
+
+void metalfx_request_screenshot(const char *path) {
+    if (atomic_load(&screenshot_wanted) != 0) {
+        printf("display tests: the last screenshot isn't written yet\n");
+        return;
+    }
+    strlcpy(screenshot_path, path, sizeof(screenshot_path));
+    atomic_store(&screenshot_wanted, 1);
+}
+
+// adds a copy of the frame to Aspyr's blit encoder, into a texture the CPU can read
+static id<MTLTexture> copy_for_screenshot(id<MTLBlitCommandEncoder> encoder, id<MTLTexture> source, NSUInteger slice,
+                                          NSUInteger level, MTLOrigin origin, MTLSize size) {
+    id<MTLDevice> device = encoder.device;
+    MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:source.pixelFormat
+                                                                                    width:size.width
+                                                                                   height:size.height
+                                                                                mipmapped:NO];
+    desc.storageMode = device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
+    desc.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> copy = [device newTextureWithDescriptor:desc];
+    if (copy == nil)
+        return nil;
+    [encoder copyFromTexture:source sourceSlice:slice sourceLevel:level sourceOrigin:origin sourceSize:size toTexture:copy
+            destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+    if (copy.storageMode == MTLStorageModeManaged)
+        [encoder synchronizeResource:copy];
+    return copy;
+}
+
+// on Metal's completion thread: the copy's pixels as a PNG
+static void write_screenshot(id<MTLTexture> texture, const char *path) {
+    MTLPixelFormat format = texture.pixelFormat;
+    BOOL bgra = format == MTLPixelFormatBGRA8Unorm || format == MTLPixelFormatBGRA8Unorm_sRGB;
+    BOOL rgba = format == MTLPixelFormatRGBA8Unorm || format == MTLPixelFormatRGBA8Unorm_sRGB;
+    NSUInteger width = texture.width, height = texture.height;
+    uint8_t *pixels = (bgra || rgba) ? malloc(width * height * 4) : NULL;
+    if (pixels == NULL) {
+        printf("display tests: no screenshot, the frame's pixel format %lu isn't one this reads\n", (unsigned long)format);
+        return;
+    }
+    [texture getBytes:pixels bytesPerRow:width * 4 fromRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0];
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGBitmapInfo info = bgra ? (CGBitmapInfo)kCGBitmapByteOrder32Little | (CGBitmapInfo)kCGImageAlphaNoneSkipFirst
+                             : (CGBitmapInfo)kCGBitmapByteOrder32Big | (CGBitmapInfo)kCGImageAlphaNoneSkipLast;
+    CGContextRef full = CGBitmapContextCreate(pixels, width, height, 8, width * 4, space, info);
+    CGImageRef image = full != NULL ? CGBitmapContextCreateImage(full) : NULL;
+    if (image != NULL && width > Screenshot_Max_Width) {
+        size_t small_width = Screenshot_Max_Width, small_height = (size_t)llround((double)height * small_width / width);
+        CGContextRef small = CGBitmapContextCreate(NULL, small_width, small_height, 8, 0, space, info);
+        if (small != NULL) {
+            CGContextSetInterpolationQuality(small, kCGInterpolationHigh);
+            CGContextDrawImage(small, CGRectMake(0, 0, small_width, small_height), image);
+            CGImageRelease(image);
+            image = CGBitmapContextCreateImage(small);
+            CGContextRelease(small);
+        }
+    }
+    bool written = false;
+    if (image != NULL) {
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+        CGImageDestinationRef destination = CGImageDestinationCreateWithURL((CFURLRef)url, CFSTR("public.png"), 1, NULL);
+        if (destination != NULL) {
+            CGImageDestinationAddImage(destination, image, NULL);
+            written = CGImageDestinationFinalize(destination);
+            CFRelease(destination);
+        }
+        CGImageRelease(image);
+    }
+    printf(written ? "display tests: screenshot of the %lux%lu frame written to %s\n"
+                   : "display tests: couldn't write the screenshot of the %lux%lu frame to %s\n",
+           (unsigned long)width, (unsigned long)height, path);
+    if (full != NULL)
+        CGContextRelease(full);
+    CGColorSpaceRelease(space);
+    free(pixels);
+}
+
 // called instead of objc_msgSend for Aspyr's [blitEncoder copyFromTexture:backbuffer ... toTexture:drawable.texture ...]
 static void copy_to_drawable(id<MTLBlitCommandEncoder> encoder, SEL sel, id<MTLTexture> source, NSUInteger source_slice,
                              NSUInteger source_level, MTLOrigin source_origin, MTLSize size, id<MTLTexture> drawable_texture,
                              NSUInteger destination_slice, NSUInteger destination_level, MTLOrigin destination_origin) {
     pending_input = pending_drawable_texture = nil;
+    // 1 asked for, 2 while this frame's copy is on its way, 0 once it's written: one frame for each request
+    int asked = 1;
+    if (atomic_load_explicit(&screenshot_wanted, memory_order_relaxed) == 1 &&
+        atomic_compare_exchange_strong(&screenshot_wanted, &asked, 2)) {
+        pending_screenshot = copy_for_screenshot(encoder, source, source_slice, source_level, source_origin, size);
+        if (pending_screenshot == nil)
+            atomic_store(&screenshot_wanted, 0);
+    }
     NSUInteger drawable_width = drawable_texture.width, drawable_height = drawable_texture.height;
     atomic_store(&frame_drawable_size, (unsigned int)(drawable_width & 0xFFFF) << 16 | (unsigned int)(drawable_height & 0xFFFF));
     // when Aspyr letterboxes, its drawable is the frame with a black bar on each side and the frame goes in the middle.
@@ -443,6 +536,18 @@ void metalfx_before_present(void *command_buffer) {
         [retired removeAllObjects];
         [cb addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
             [objects release];
+        }];
+    }
+    if (pending_screenshot != nil) {
+        id<MTLTexture> screenshot = pending_screenshot;
+        pending_screenshot = nil;
+        char *path = strdup(screenshot_path);
+        [cb addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+            if (path != NULL)
+                write_screenshot(screenshot, path);
+            free(path);
+            [screenshot release];
+            atomic_store(&screenshot_wanted, 0);
         }];
     }
     id<MTLTexture> input = pending_input, drawable_texture = pending_drawable_texture;

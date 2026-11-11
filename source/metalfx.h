@@ -15,6 +15,11 @@ void *metalfx_copy_function(void);
 // encodes the upscale of this frame, call right before [commandBuffer presentDrawable:]
 void metalfx_before_present(void *command_buffer);
 
+// for the tests (com.bo3macfix.test.screenshot): writes the next frame the game hands to its drawable to a PNG at
+// path, at most 1600 pixels wide. The frame is read from the game's own backbuffer inside the game, so it needs no
+// Screen Recording permission. Only frames that go through metalfx_copy_function are seen, so MetalFXUpscale must be on.
+void metalfx_request_screenshot(const char *path);
+
 // the highest frame rate of the display the game is on, from display_follow_current() when it has the display, else
 // from the game window's screen (only seen while MetalFX is on), 0 if not known. Any thread.
 int present_display_max_fps(void);

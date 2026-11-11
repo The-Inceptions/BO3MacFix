@@ -10,6 +10,8 @@
 //   com.bo3macfix.test.restart       restarts the game through Steam, as the settings page's restart does
 //   com.bo3macfix.test.gpadscan      asks the game to look for controllers, as a controller connecting does
 //   com.bo3macfix.test.command       runs the console commands in the file BO3MACFIX_TESTTEXT names (read when posted)
+//   com.bo3macfix.test.screenshot    writes the game's next frame to the PNG that file names (metalfx.h): the picture
+//                                    from inside the game, for when the test's own app can't record the screen
 //   com.bo3macfix.test.chat          sends that file's text as a chat message to everyone, through the chat box's own
 //                                    send function, so mods that watch the chat (All-around Enhancement's /dep, /bal
 //                                    and /save) see it as typed. Sent on the game's next client frame: that function
@@ -24,6 +26,7 @@
 #include "controllers.h"
 #include "display_follow.h"
 #include "display_testhooks.h"
+#include "metalfx.h"
 #include "offsets.h"
 #include "settings.h"
 
@@ -136,6 +139,13 @@ void display_testhooks_init(uint64_t game_base_address) {
         }
         if (read_test_text(pending_chat, sizeof(pending_chat)))
             atomic_store_explicit(&chat_pending, true, memory_order_release);
+    });
+    on_notification("com.bo3macfix.test.screenshot", ^(int token) {
+        char path[1024];
+        if (!read_test_text(path, sizeof(path)))
+            return;
+        printf("display tests: screenshot to %s\n", path);
+        metalfx_request_screenshot(path);
     });
     printf("display tests: test hooks on (com.bo3macfix.test.*)\n");
 }
