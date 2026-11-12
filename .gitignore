@@ -48,3 +48,4 @@ tests/test_script_vars
 tests/test_font_resolution
 tests/test_lua_heap
 tests/test_lua_unref
+tests/test_pmem_spill

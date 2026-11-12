@@ -112,6 +112,11 @@
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
+// the game's memory for what it loads (pmem_spill.c)
+#define ADDR_PMem_Alloc 0xd32be1 // func - void *(size, alignment, type of address space 0-4, stack 0-10, tag)
+#define ADDR_PMem_Stacks 0x2522a18 // 11 stacks of 0xf68 bytes: the fill of their 5 address spaces at +0x10, the pools' pointers at +0xf40
+#define ADDR_AddressSpace_Create 0xe47989 // func - bool (name, flags, size, address space *): reserves it and adds it to the game's list - name is a guess
+
 // the Lua VMs' memory (lua_heap.c) - names are guesses
 #define ADDR_Lua_HeapCreate 0x144849f // func - heap *(init): a dlmalloc heap in the block init's callback gives it, for a Lua VM
 #define ADDR_LUI_HeapAlloc 0xd4d640 // func - the UI VM's callback for its heap's block: void *(user, block, old_size, new_size), gives the 60 MB "LUI_Main" block once

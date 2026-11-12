@@ -20,6 +20,8 @@ TEST_TARGETS += tests/test_font_resolution
 TEST_TARGETS += tests/test_lua_heap
 # releases of Lua reference 0 (lua_unref.c)
 TEST_TARGETS += tests/test_lua_unref
+# the second address space for loaded files (pmem_spill.c)
+TEST_TARGETS += tests/test_pmem_spill
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
 
@@ -77,6 +79,8 @@ SOURCES += source/font_resolution.c
 SOURCES += source/lua_heap.c
 # LuaUnrefFix: releasing Lua reference 0 does nothing (lua_unref.c)
 SOURCES += source/lua_unref.c
+# MoreMapMemory: 2 GB more address space for loaded files (pmem_spill.c)
+SOURCES += source/pmem_spill.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -174,6 +178,10 @@ tests/test_lua_heap: tests/test_lua_heap.c source/lua_heap.c source/lua_heap.h s
 # lua_unref.c: which releases reach the game's luaL_unref
 tests/test_lua_unref: tests/test_lua_unref.c source/lua_unref.c source/lua_unref.h source/offsets.h source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_lua_unref.c
+
+# pmem_spill.c against a made-up PMem: stacks, address spaces and the game's own allocation
+tests/test_pmem_spill: tests/test_pmem_spill.c source/pmem_spill.c source/pmem_spill.h source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_pmem_spill.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h
