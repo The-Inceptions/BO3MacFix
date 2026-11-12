@@ -86,6 +86,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_R_SetWndParms, Push_R15 },
     { ADDR_Scr_ErrorInternal, Push_R15 },
     { ADDR_Scr_EvalEquality, Push_R15 },
+    { ADDR_Scr_InitVariables, Push_R15 },
     { ADDR_Scr_LoadScript, Push_R15 },
     { ADDR_Scr_LoadSourceText, Push_R15 },
     { ADDR_Scr_RuntimeErrorInternal, Push_R15 },

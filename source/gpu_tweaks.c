@@ -43,6 +43,7 @@
 #include "prepatch.h"
 #include "offsets.h"
 #include "script_errors.h"
+#include "script_vars.h"
 #include "gpu_diag.h"
 
 extern uint64_t game_base_address;

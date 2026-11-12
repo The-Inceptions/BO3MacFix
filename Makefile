@@ -12,6 +12,8 @@ TEST_TARGETS += tests/test_launch_args
 TEST_TARGETS += tests/test_gsc_obj
 # loading them and redirecting calls, against a made-up game (gsc_detours.c)
 TEST_TARGETS += tests/test_gsc_detours
+# the script variable table's free list and the bigger table for the server (script_vars.c)
+TEST_TARGETS += tests/test_script_vars
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
 
@@ -61,6 +63,8 @@ SOURCES += source/aae_build.c
 SOURCES += source/aae_cheats.c
 # All-around Enhancement 4's patch scripts: the compiled script format (gsc_obj.c) and loading them (gsc_detours.c)
 SOURCES += source/gsc_obj.c source/gsc_detours.c
+# the server's script variables: counting them and a higher limit (script_vars.c)
+SOURCES += source/script_vars.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -140,6 +144,10 @@ tests/test_gsc_detours: tests/test_gsc_detours.c tests/fake_gsc.h source/gsc_det
 		source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_gsc_detours.c \
 		source/gsc_obj.c
+
+# script_vars.c against a made-up game that sets up, takes from and returns to the variable table as the game does
+tests/test_script_vars: tests/test_script_vars.c source/script_vars.c source/script_vars.h source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_script_vars.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

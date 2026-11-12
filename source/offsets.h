@@ -73,6 +73,7 @@
 #define ADDR_Scr_LinkerSkipsDevCalls 0xe4962f // func - bool (), when true the import resolver leaves the /# #/ imports of a script without flag 2 unlinked - name is a guess
 #define ADDR_scrObjTable 0x199a62e0 // the loaded scripts, 500 entries of 0x60 bytes per script instance: the script's bytes at +0 and +8, its name at +0x10, its code's start and end at +0x18 and +0x20 - name is a guess
 #define ADDR_scrObjCount 0x199bd9e0 // uint32_t[2]: how many of them per script instance - name is a guess
+#define ADDR_Scr_InitVariables 0x12f3177 // func - void (scriptInstance_t inst), clears the instance's script variable table (130,000 entries of 0x40 bytes for the server, 65,000 for the client; allocated once as "ScriptVars" at 0x12f309f, which ends by jumping here) and chains every entry as free: type 0x1b at +8, the next free one at +0x18, entry 0's +0x18 the first; AllocVariable (0x12f36a9) takes from the head and the free at 0x12f35a8 puts back there - name is a guess
 #define ADDR_GScr_IsProfileBuild 0x1205df7 // func - void (scriptInstance_t inst), the GSC/CSC builtin isprofilebuild(): Scr_AddInt(inst, 0)
 #define ADDR_Scr_GetInt 0x11a1e78 // func - int (scriptInstance_t inst, unsigned int index), takes int and hash params
 #define ADDR_Scr_GetString 0x11a2281 // func - const char * (scriptInstance_t inst, unsigned int index)

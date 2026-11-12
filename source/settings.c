@@ -105,6 +105,7 @@ static const setting_t settings[] = {
     { "AAEBankFix", "AAE bank and locker", "Keeps cheats off as a map starts with All-around Enhancement (not with devmap or its own elmg_cheats), so its bank and weapon locker load.", "Game", Toggle(1) },
     { "WeaponAnims", "AAE weapon animations", "Plays the weapon animations All-around Enhancement asks for, like the first raise when you inspect a weapon that has no inspect animation of its own.", "Game", Toggle(1) },
     { "AAEScriptPatches", "AAE patch scripts", "Loads All-around Enhancement 4's patch scripts, which hold its changes to the game's own zombies scripts: the starting round, Perkaholic, the zombie counter and more.", "Game", Toggle(1) },
+    { "MoreScriptVariables", "More script variables", "Gives the server's scripts 524,288 variables instead of 130,000, as All-around Enhancement's Windows plugin does, so a long match with the mod doesn't end in a script error when they run out.", "Game", Toggle(1) },
     { "FrameStats", "Frame stats in the log", "Logs the frame rate, 1% low and worst frame time to BO3MacFix/log.txt.", "Advanced", false, 4, { 0, 5, 10, 30 }, { "Off", "Every 5 s", "Every 10 s", "Every 30 s" }, 0, Live_Present },
     { "GpuDiagnostics", "GPU diagnostics in the log", "Logs the window, display mode and Metal layer whenever they change.", "Advanced", Toggle(0) },
     { "NoCodePatches", "No code patches (testing)", "Leaves the game's code exactly as shipped, without any of the fixes. Solo play only.", "Advanced", Toggle(0) },
