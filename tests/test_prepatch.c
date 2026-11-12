@@ -107,20 +107,26 @@ static int32_t rel32(const uint8_t *at) {
     return value;
 }
 
-static int stubs_before_code; // how many of the last copy's stubs are in the padding before __text
+static int stubs_before_code;         // how many of the last copy's stubs are in the padding before __text
+static uint32_t last_stub_after_code; // and where the last one of the others is
 
 static bool in_padding(uint32_t stub) {
     if (stub >= ADDR_Prepatch_Stubs2 && stub + Stub_Max <= ADDR_Prepatch_Stubs2End) {
         stubs_before_code++;
         return true;
     }
-    return stub >= ADDR_Prepatch_Header && stub + Stub_Max <= first_area_end;
+    if (stub < ADDR_Prepatch_Header || stub + Stub_Max > first_area_end)
+        return false;
+    if (stub > last_stub_after_code)
+        last_stub_after_code = stub;
+    return true;
 }
 
 // the copy's stubs, read back as the CPU would follow them
 static void check_stubs(const uint8_t *copy) {
     uint32_t slot = ADDR_Prepatch_Slots;
     stubs_before_code = 0;
+    last_stub_after_code = 0;
     for (size_t i = 0; i < sizeof(hook_defs) / sizeof(hook_defs[0]); i++, slot += 8) {
         const hook_def_t *def = &hook_defs[i];
         const uint8_t *entry = copy + def->function;
@@ -337,7 +343,11 @@ int main(void) {
         }
     }
 
-    CHECK(stubs_before_code == 0, "%i stubs before the code, with room after it", stubs_before_code);
+    // the room after the code is used up first: a stub only goes before the code when another one, 48 bytes at most
+    // like the one before it, no longer fits there
+    CHECK(stubs_before_code == 0 || last_stub_after_code + 2 * Stub_Max > first_area_end,
+          "%i stubs before the code, with room after it (the last one there is at %08x of %08x)", stubs_before_code,
+          last_stub_after_code, first_area_end);
 
     // with little room after the code, the stubs that don't fit go before it, and everything works the same
     uint32_t whole_first_area = first_area_end;
