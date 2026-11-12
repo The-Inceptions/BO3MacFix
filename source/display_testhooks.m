@@ -17,6 +17,9 @@
 //                                    send function, so mods that watch the chat (All-around Enhancement's /dep, /bal
 //                                    and /save) see it as typed. Sent on the game's next client frame: that function
 //                                    needs the game thread (its va() buffers), and crashes on Aspyr's main thread.
+//   com.bo3macfix.test.lua           runs that file's text as Lua in the UI's Lua VM, with one argument: a function
+//                                    that writes its string to the log as "test lua: ...". Run from the notices' poll
+//                                    (notices.lua), so within a quarter of a second, and only while that runs.
 // They arrive on the main queue, which Aspyr's main thread runs while it pumps events.
 #import <AppKit/AppKit.h>
 #include <notify.h>
@@ -27,6 +30,7 @@
 #include "controllers.h"
 #include "display_follow.h"
 #include "display_testhooks.h"
+#include "havok.h"
 #include "metalfx.h"
 #include "offsets.h"
 #include "settings.h"
@@ -36,6 +40,9 @@ static void (*ChatClient_Send)(int localClientNum, const char *text, int channel
 // a chat message for the game thread to send; the main thread fills it in while chat_pending is false
 static char pending_chat[256];
 static atomic_bool chat_pending;
+// a Lua chunk for the UI's Lua VM to run, handed over the same way
+static char pending_lua[16384];
+static atomic_bool lua_pending;
 
 static void on_notification(const char *name, void (^handler)(int token)) {
     int token;
@@ -141,6 +148,14 @@ void display_testhooks_init(uint64_t game_base_address) {
         if (read_test_text(pending_chat, sizeof(pending_chat)))
             atomic_store_explicit(&chat_pending, true, memory_order_release);
     });
+    on_notification("com.bo3macfix.test.lua", ^(int token) {
+        if (atomic_load_explicit(&lua_pending, memory_order_acquire)) {
+            printf("display tests: the last Lua chunk hasn't run yet\n");
+            return;
+        }
+        if (read_test_text(pending_lua, sizeof(pending_lua)))
+            atomic_store_explicit(&lua_pending, true, memory_order_release);
+    });
     on_notification("com.bo3macfix.test.screenshot", ^(int token) {
         char path[1024];
         if (!read_test_text(path, sizeof(path)))
@@ -158,4 +173,21 @@ void display_testhooks_frame(int localClientNum) {
     printf("display tests: chat %s\n", pending_chat);
     ChatClient_Send(localClientNum, pending_chat, 0);
     atomic_store_explicit(&chat_pending, false, memory_order_release);
+}
+
+static int lua_test_log(lua_State *s) {
+    printf("test lua: %s\n", hks_check_string(s, 1));
+    return 0;
+}
+
+// from the UI's Lua VM, on every poll of the notices: runs the chunk com.bo3macfix.test.lua queued
+void display_testhooks_lua(lua_State *s) {
+    if (!atomic_load_explicit(&lua_pending, memory_order_acquire))
+        return;
+    printf("display tests: lua, %zu bytes\n", strlen(pending_lua));
+    if (hks_load_source(s, pending_lua, strlen(pending_lua), "=test")) {
+        hks_push_cfunction(s, lua_test_log, "TestLog");
+        hks_pcall(s, 1, 0);
+    }
+    atomic_store_explicit(&lua_pending, false, memory_order_release);
 }

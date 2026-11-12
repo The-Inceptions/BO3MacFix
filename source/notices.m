@@ -37,6 +37,7 @@
 #include <time.h>
 #include "gc_bridge.h"
 #include "gpu_tweaks.h"
+#include "display_testhooks.h"
 #include "havok.h"
 #include "notice_queue.h"
 #include "notices.h"
@@ -267,6 +268,7 @@ static void press_escape(const char *why) {
 
 // TakeNotice() -> the next notice's text and, for a lasting one (a warning), how many seconds to show it; or nil
 static int lua_take_notice(lua_State *s) {
+    display_testhooks_lua(s); // the tests' own Lua, which needs a moment inside this VM
     char text[Notice_Text_Max];
     bool lasting = false;
     os_unfair_lock_lock(&lock);
