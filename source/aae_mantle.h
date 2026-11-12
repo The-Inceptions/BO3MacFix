@@ -13,8 +13,11 @@ void aae_mantle_scan_input(int threshold, signed char *forward, signed char *rig
 // the same for the game's test before it looks for a ledge at all, which the mod drops for a threshold of 0 or less
 void aae_mantle_start_input(int threshold, signed char *forward, signed char *right);
 // what the scan's first trace hit: whether to go on looking for a ledge there, and the "over" flag for the choice of
-// animation. Returns the contents to show the game so that its own test agrees.
-uint32_t aae_mantle_first_hit(bool ignore_checks, uint32_t contents, uint32_t surface_flags, uint32_t *traversal_flags);
+// animation. Returns the contents to show the game so that its own test agrees. vehicle says whether the hit is a
+// vehicle and the player is at a side of it to climb it from.
+enum { Aae_Vehicle_None = -1, Aae_Vehicle_NoSide, Aae_Vehicle_Side };
+uint32_t aae_mantle_first_hit(bool ignore_checks, int vehicle, uint32_t contents, uint32_t surface_flags,
+                              uint32_t *traversal_flags);
 // the kind of traversal for a ledge this far above the player's feet, or -1 for the game's own choice
 int aae_mantle_high_type(float height, float offset, uint32_t traversal_flags);
 // the height to show the game's own choice when it's below the mod's first step but not below the game's

@@ -113,6 +113,10 @@
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
 // traversal, the way over obstacles from multiplayer and the campaign (aae_mantle.c) - names are guesses
+#define ADDR_level_clients 0x1096ee40 // gclient_s *: the game's players, 0x17210 bytes each (0x20 more than in the Windows game: what comes after the player's state is that much further). The number one was connected as is at +0x16c18 (Windows +0x16bf8)
+#define ADDR_sv_gentities 0x144fbde8 // gentity_s *: the entities the server was last given (what the game's start gives it is the array at 0x110cea410), 0x4f8 bytes each: type (a word, 15 a vehicle) at +0x1a0, origin +0x230, angles +0x23c, client +0x250, vehicle data +0x270
+#define ADDR_sv_gentitySize 0x144fbdf0 // int: and how big each is
+#define ADDR_Vehicle_MantleSide 0xd691e0 // func - int (gentity_s *vehicle, gentity_s *player): which of the vehicle's sides to climb it from the player is at, 4 for none (Windows 0x141b8bb30)
 #define ADDR_CG_DrawMantleHint 0x112fe20 // func - void (int localClientNum, the HUD element, ...): draws the prompts for mantling, a hatch and mounting, by the predicted player state's mantle flags (cg_t + 0x11b0b4: 0x10 mantle, 0x80 mount, 0x800 hatch)
 #define ADDR_TRM_CanStart 0x14c4f60 // func - bool (pmove_t *, pml_t *)
 #define ADDR_TRM_Init 0x14c5a9e // func - void (alloc function): makes the traversal animations ("PLAYER_TRM") at a map's start, if trm_enabled

@@ -3,6 +3,7 @@
 // includes the source itself).
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include "../source/aae_mantle.c"
 
@@ -80,6 +81,8 @@ static struct {
     uint32_t contents, surface;      // what the first trace hits
     float fraction;
     bool start_solid;
+    int hit_type;                    // 1: an entity, with this number
+    unsigned hit_id;
     uint32_t seen_first, seen_second; // the contents the scan read back
 } game_scan;
 
@@ -96,6 +99,11 @@ static void game_trace(uint8_t *pm, uint8_t *results, const float *start, const 
     memcpy(results + Trace_Contents, &contents, sizeof(contents));
     memcpy(results + Trace_SurfaceFlags, &surface, sizeof(surface));
     results[Trace_StartSolid] = first && game_scan.start_solid;
+    if (first) {
+        uint16_t id = (uint16_t)game_scan.hit_id;
+        memcpy(results + Trace_HitType, &game_scan.hit_type, sizeof(game_scan.hit_type));
+        memcpy(results + Trace_HitId, &id, sizeof(id));
+    }
 }
 
 static bool game_scan_ledge(uint8_t *pm, void *pml, vec3_t *ledge, vec3_t *normal) {
@@ -118,6 +126,37 @@ static bool game_scan_ledge(uint8_t *pm, void *pml, vec3_t *ledge, vec3_t *norma
     memcpy(&game_scan.seen_second, results + Trace_Contents, sizeof(uint32_t));
     ledge->z = 140.0f;
     return go_on;
+}
+
+// what the server was given as its entities, the players, and the game's test for the side of a vehicle a player is at
+static uint8_t game_entities[1024 * Entity_Size];
+static uint8_t *the_server_entities = game_entities, *the_clients;
+static int the_entity_size = Entity_Size;
+static struct {
+    int calls, answer;
+    uint8_t *vehicle, *player;
+} game_side = { .answer = Vehicle_No_Side };
+static int game_vehicle_side(uint8_t *vehicle, uint8_t *player) {
+    game_side.calls++;
+    game_side.vehicle = vehicle, game_side.player = player;
+    return game_side.answer;
+}
+static void set_entity(unsigned number, unsigned type, const void *client, bool vehicle_data) {
+    uint8_t *entity = game_entities + (size_t)number * Entity_Size;
+    uint16_t t = (uint16_t)type;
+    const void *data = vehicle_data ? entity : NULL;
+    memset(entity, 0, Entity_Size);
+    memcpy(entity + Entity_Type, &t, sizeof(t));
+    memcpy(entity + Entity_Client, &client, sizeof(client));
+    memcpy(entity + Entity_Vehicle, &data, sizeof(data));
+}
+// a player connected under this number: the server's state of it, and its entity
+static uint8_t *connect_player(uint32_t number) {
+    uint8_t *client = the_clients + (size_t)number * Client_Size;
+    memcpy(client, &number, sizeof(number));
+    memcpy(client + Client_Index, &number, sizeof(number));
+    set_entity(number, 1, client, false);
+    return client;
 }
 
 static bool in_jump = true; // the rest of what the game asks for before it scans
@@ -257,27 +296,44 @@ static void test_input_rules(void) {
 static void test_first_hit(void) {
     uint32_t flags = 0;
     // the mod's rule: a ledge is looked for at a mantle brush, the opposite of the game's own
-    CHECK((aae_mantle_first_hit(false, Contents_Mantle | 1, 0, &flags) & Contents_Mantle) == 0);
-    CHECK((aae_mantle_first_hit(false, 1, 0, &flags) & Contents_Mantle) != 0);
-    CHECK((aae_mantle_first_hit(false, 0x430600, 0xd440a0, &flags) & Contents_Mantle) != 0);
+    CHECK((aae_mantle_first_hit(false, Aae_Vehicle_None, Contents_Mantle | 1, 0, &flags) & Contents_Mantle) == 0);
+    CHECK((aae_mantle_first_hit(false, Aae_Vehicle_None, 1, 0, &flags) & Contents_Mantle) != 0);
+    CHECK((aae_mantle_first_hit(false, Aae_Vehicle_None, 0x430600, 0xd440a0, &flags) & Contents_Mantle) != 0);
     // without the checks: anywhere
-    CHECK((aae_mantle_first_hit(true, Contents_Mantle | 1, 0, &flags) & Contents_Mantle) == 0);
-    CHECK((aae_mantle_first_hit(true, 1, 0, &flags) & Contents_Mantle) == 0);
+    CHECK((aae_mantle_first_hit(true, Aae_Vehicle_None, Contents_Mantle | 1, 0, &flags) & Contents_Mantle) == 0);
+    CHECK((aae_mantle_first_hit(true, Aae_Vehicle_None, 1, 0, &flags) & Contents_Mantle) == 0);
     // the other contents stay as they are
-    CHECK(aae_mantle_first_hit(false, Contents_Mantle | 0x10001, 0, &flags) == 0x10001);
-    CHECK(aae_mantle_first_hit(false, 0x10001, 0, &flags) == (Contents_Mantle | 0x10001));
+    CHECK(aae_mantle_first_hit(false, Aae_Vehicle_None, Contents_Mantle | 0x10001, 0, &flags) == 0x10001);
+    CHECK(aae_mantle_first_hit(false, Aae_Vehicle_None, 0x10001, 0, &flags) == (Contents_Mantle | 0x10001));
     CHECK(flags == 0);
     // "mantle over" and "mount" together, without "mantle on": the traversal goes over
-    aae_mantle_first_hit(false, Contents_Mantle, 0x18000000, &flags);
+    aae_mantle_first_hit(false, Aae_Vehicle_None, Contents_Mantle, 0x18000000, &flags);
     CHECK(flags == Traversal_Over);
     static const uint32_t not_over[] = { 0x08000000, 0x10000000, 0x20000000, 0x38000000, 0x28000000, 0x30000000, 0 };
     for (size_t i = 0; i < sizeof(not_over) / sizeof(not_over[0]); i++) {
         flags = 0x40;
-        aae_mantle_first_hit(true, 1, not_over[i], &flags);
+        aae_mantle_first_hit(true, Aae_Vehicle_None, 1, not_over[i], &flags);
         CHECK(flags == 0x40);
     }
     flags = 0x40;
-    aae_mantle_first_hit(true, 1, 0x18000000 | 0x440a0, &flags);
+    aae_mantle_first_hit(true, Aae_Vehicle_None, 1, 0x18000000 | 0x440a0, &flags);
+    CHECK(flags == (0x40 | Traversal_Over));
+
+    // a vehicle, with the checks on: from a side it can be climbed from a ledge is looked for, brush or not
+    flags = 0;
+    CHECK((aae_mantle_first_hit(false, Aae_Vehicle_Side, 1, 0, &flags) & Contents_Mantle) == 0);
+    CHECK((aae_mantle_first_hit(false, Aae_Vehicle_Side, Contents_Mantle | 1, 0, &flags) & Contents_Mantle) == 0);
+    CHECK(aae_mantle_first_hit(false, Aae_Vehicle_Side, 0x10001, 0, &flags) == 0x10001 && flags == 0);
+    aae_mantle_first_hit(false, Aae_Vehicle_Side, 1, 0x18000000, &flags);
+    CHECK(flags == Traversal_Over);
+    // from anywhere else none is, a mantle brush or not, and the "over" flag isn't touched
+    flags = 0x40;
+    CHECK((aae_mantle_first_hit(false, Aae_Vehicle_NoSide, Contents_Mantle | 1, 0x18000000, &flags) & Contents_Mantle) != 0);
+    CHECK((aae_mantle_first_hit(false, Aae_Vehicle_NoSide, 1, 0x18000000, &flags) & Contents_Mantle) != 0);
+    CHECK(aae_mantle_first_hit(false, Aae_Vehicle_NoSide, 0x10001, 0, &flags) == (Contents_Mantle | 0x10001));
+    CHECK(flags == 0x40);
+    // without the checks a vehicle is like anything else
+    CHECK((aae_mantle_first_hit(true, Aae_Vehicle_NoSide, Contents_Mantle | 1, 0x18000000, &flags) & Contents_Mantle) == 0);
     CHECK(flags == (0x40 | Traversal_Over));
 }
 
@@ -431,6 +487,187 @@ static void test_with_the_mod(void) {
     CHECK(fake_TRM_Type(player_state, (vec3_t){ 0, 0, 150.0f }) == 7 && game_type.calls == 4);
     CHECK(fake_TRM_Type(player_state, (vec3_t){ 0, 0, 151.0f }) == 0x11 && game_type.calls == 4);
     set_option(Opt_HighOffset, 0.0f);
+}
+
+// ---- a vehicle in the way
+
+static bool check_now(uint32_t contents);
+static void set_player(uint32_t client, uint64_t flags, int handler);
+static void forget_everything(void);
+
+// a scan, made with this player state, whose first trace hit this entity with these contents: whether the game went
+// on to look for a ledge
+static bool scan_at_entity(uint8_t *ps, int hit_type, unsigned hit_id, uint32_t contents) {
+    vec3_t ledge = { 0 }, normal = { 0 };
+    uint8_t *usual = player_state;
+    memcpy(pmove, &ps, sizeof(ps));
+    memset(ps + Ps_TraversalFlags, 0, 4);
+    game_scan.hit_type = hit_type, game_scan.hit_id = hit_id;
+    game_scan.contents = contents, game_scan.surface = 0, game_scan.fraction = 0.4f, game_scan.start_solid = false;
+    bool found = fake_TRM_Scan(pmove, NULL, &ledge, &normal);
+    game_scan.hit_type = 0, game_scan.hit_id = 0x3ff;
+    memcpy(pmove, &usual, sizeof(usual));
+    return found;
+}
+// the rule for anything that isn't a vehicle: a ledge at a mantle brush only, and the game's test isn't asked
+static bool brush_rule(uint8_t *ps, int hit_type, unsigned hit_id) {
+    int calls = game_side.calls;
+    return !scan_at_entity(ps, hit_type, hit_id, 1) && scan_at_entity(ps, hit_type, hit_id, Contents_Mantle | 1) &&
+           game_side.calls == calls;
+}
+// a vehicle that can't be climbed from where the player is: no ledge, not even at a mantle brush
+static bool no_ledge(uint8_t *ps, int hit_type, unsigned hit_id) {
+    return !scan_at_entity(ps, hit_type, hit_id, 1) && !scan_at_entity(ps, hit_type, hit_id, Contents_Mantle | 1);
+}
+
+static void test_vehicles(void) {
+    atomic_store(&active, true);
+    set_option(Opt_Height, 60.0f);
+    set_option(Opt_IgnoreChecks, 0.0f);
+    set_option(Opt_Threshold, 0.0f);
+    set_input(0, 0);
+    // room before and after the players, for player states that aren't any of them
+    uint8_t *room = calloc(Max_Players + 3, Client_Size);
+    the_clients = room + Client_Size;
+    memset(game_entities, 0, sizeof(game_entities));
+    uint8_t *server_ps = connect_player(2), *player = game_entities + 2 * Entity_Size;
+    set_entity(300, Entity_Type_Vehicle, NULL, true);
+    set_entity(301, Entity_Type_Vehicle, NULL, false); // one without its vehicle data
+    set_entity(302, 6, NULL, true);                    // something that isn't a vehicle
+    uint8_t *vehicle = game_entities + 300 * Entity_Size;
+    // the client's prediction has a player state of its own, with the player's number in it
+    uint32_t number = 2;
+    memcpy(player_state, &number, sizeof(number));
+
+    for (int handler = 0; handler <= 1; handler++) {
+        uint8_t *ps = handler == 1 ? server_ps : player_state;
+        pmove[Pm_Handler] = (uint8_t)handler;
+        // at a side to climb it from: a ledge is looked for though it's no mantle brush
+        for (int side = 0; side < Vehicle_No_Side; side++) {
+            game_side.answer = side, game_side.calls = 0;
+            CHECK(scan_at_entity(ps, 1, 300, 1) && game_side.calls == 1 && game_side.vehicle == vehicle &&
+                  game_side.player == player && game_scan.seen_first == 1);
+        }
+        // at none of them: not even at a mantle brush
+        game_side.answer = Vehicle_No_Side, game_side.calls = 0;
+        CHECK(no_ledge(ps, 1, 300) && game_side.calls == 2);
+        game_side.answer = 0;
+        // what isn't a vehicle, or is one without its data, or isn't an entity at all: the mantle brush rule
+        CHECK(brush_rule(ps, 1, 302) && brush_rule(ps, 1, 301) && brush_rule(ps, 0, 300) && brush_rule(ps, 2, 300));
+        // nor are the two numbers that stand for the world and for nothing, whatever is in their places
+        set_entity(Entity_World, Entity_Type_Vehicle, NULL, true);
+        set_entity(Entity_World + 1, Entity_Type_Vehicle, NULL, true);
+        CHECK(brush_rule(ps, 1, Entity_World) && brush_rule(ps, 1, Entity_World + 1));
+        set_entity(Entity_World - 1, Entity_Type_Vehicle, NULL, true); // the last number an entity can have
+        game_side.calls = 0;
+        CHECK(scan_at_entity(ps, 1, Entity_World - 1, 1) && game_side.calls == 1 &&
+              game_side.vehicle == game_entities + (Entity_World - 1) * Entity_Size);
+        // a server that was given no entities, or ones of another size, or a game without players
+        the_server_entities = NULL;
+        CHECK(brush_rule(ps, 1, 300));
+        the_server_entities = game_entities, the_entity_size = Entity_Size + 8;
+        CHECK(brush_rule(ps, 1, 300));
+        the_entity_size = 0;
+        CHECK(brush_rule(ps, 1, 300));
+        the_entity_size = Entity_Size;
+        uint8_t *clients = the_clients;
+        the_clients = NULL;
+        CHECK(brush_rule(ps, 1, 300));
+        the_clients = clients;
+        // without the checks the vehicle isn't asked about
+        set_option(Opt_IgnoreChecks, 1.0f);
+        game_side.answer = Vehicle_No_Side, game_side.calls = 0;
+        CHECK(scan_at_entity(ps, 1, 300, 1) && game_side.calls == 0);
+        set_option(Opt_IgnoreChecks, 0.0f);
+        game_side.answer = 0;
+    }
+    // a move that is neither the client's nor the server's
+    pmove[Pm_Handler] = 2;
+    CHECK(brush_rule(server_ps, 1, 300) && brush_rule(player_state, 1, 300));
+
+    // the server's move is made with the server's own state of a player. With anything else there's no ledge: a state
+    // that isn't in the game's players at all, before them or after them,
+    pmove[Pm_Handler] = 1;
+    game_side.calls = 0;
+    CHECK(no_ledge(player_state, 1, 300));
+    memcpy(room, &number, sizeof(number));
+    CHECK(no_ledge(room, 1, 300));
+    uint8_t *past = the_clients + (size_t)Max_Players * Client_Size;
+    number = Max_Players;
+    memcpy(past, &number, sizeof(number));
+    memcpy(past + Client_Index, &number, sizeof(number));
+    set_entity(Max_Players, 1, past, false);
+    CHECK(no_ledge(past, 1, 300));
+    // one that is part of a player's but not its start,
+    number = 2;
+    memcpy(server_ps + 8, &number, sizeof(number));
+    CHECK(no_ledge(server_ps + 8, 1, 300));
+    // one with another player's number in it,
+    uint8_t *third = connect_player(3);
+    memcpy(third, &number, sizeof(number));
+    CHECK(no_ledge(third, 1, 300));
+    // and a player whose entity isn't that player's
+    connect_player(3);
+    set_entity(3, 1, server_ps, false);
+    CHECK(no_ledge(third, 1, 300));
+    set_entity(3, 1, NULL, false);
+    CHECK(no_ledge(third, 1, 300) && game_side.calls == 0);
+    // the last player there can be
+    uint8_t *last = connect_player(Max_Players - 1);
+    CHECK(scan_at_entity(last, 1, 300, 1) && game_side.calls == 1 &&
+          game_side.player == game_entities + (Max_Players - 1) * Entity_Size);
+
+    // the client's prediction looks the player up by number. Without a player connected under that number here, it
+    // is the mantle brush rule: a number no player has,
+    pmove[Pm_Handler] = 0;
+    number = Max_Players;
+    memcpy(player_state, &number, sizeof(number));
+    CHECK(brush_rule(player_state, 1, 300));
+    // nobody connected under it, or somebody else,
+    number = 5;
+    memcpy(player_state, &number, sizeof(number));
+    set_entity(5, 1, the_clients + 5 * Client_Size, false);
+    CHECK(brush_rule(player_state, 1, 300));
+    uint32_t other = 4;
+    memcpy(the_clients + 5 * Client_Size + Client_Index, &other, sizeof(other));
+    CHECK(brush_rule(player_state, 1, 300));
+    // or an entity that isn't that player's
+    connect_player(5);
+    set_entity(5, 1, server_ps, false);
+    CHECK(brush_rule(player_state, 1, 300));
+    set_entity(5, 1, NULL, false);
+    CHECK(brush_rule(player_state, 1, 300));
+    // the number is the one the player was connected under, whatever the server's state of that player says
+    connect_player(5);
+    memcpy(the_clients + 5 * Client_Size, &other, sizeof(other));
+    game_side.calls = 0;
+    CHECK(scan_at_entity(player_state, 1, 300, 1) && game_side.calls == 1 &&
+          game_side.player == game_entities + 5 * Entity_Size);
+    number = Max_Players - 1;
+    memcpy(player_state, &number, sizeof(number));
+    CHECK(scan_at_entity(player_state, 1, 300, 1) && game_side.player == game_entities + (Max_Players - 1) * Entity_Size);
+
+    // a probe for the prompt asks the same
+    forget_everything();
+    game_mode_bits = Mode_Network_Lan | 0x4000;
+    set_player(2, 0, 0);
+    in_jump = false;
+    game_scan.hit_type = 1, game_scan.hit_id = 300;
+    check_now(1);
+    game_time += 2000;
+    game_side.answer = 1;
+    CHECK(check_now(1) && atomic_load(&hints[2].found[0]));
+    game_time += 100;
+    game_side.answer = Vehicle_No_Side;
+    CHECK(check_now(Contents_Mantle | 1) && !atomic_load(&hints[2].found[0]));
+    game_side.answer = 0;
+    game_scan.hit_type = 0, game_scan.hit_id = 0x3ff;
+    in_jump = true;
+    game_mode_bits = 0x4000;
+    forget_everything();
+    set_player(0, 0, 0);
+    the_clients = NULL;
+    free(room);
 }
 
 // ---- the mantle prompt
@@ -986,6 +1223,10 @@ int main(void) {
     cg_clients = &game_cg;
     cg_client_count = &game_cg_count;
     now_ms = game_now;
+    server_entities = &the_server_entities;
+    server_entity_size = &the_entity_size;
+    game_clients = &the_clients;
+    Vehicle_MantleSide = game_vehicle_side;
     loaded_mod = loaded_name;
     uint8_t *ps = player_state;
     memcpy(pmove, &ps, sizeof(ps));
@@ -999,6 +1240,7 @@ int main(void) {
     test_after_the_mod();
     test_probes();
     test_prompt_draw();
+    test_vehicles();
     test_traversal_for_zombies();
     if (failures != 0) {
         printf("test_aae_mantle: %d failures\n", failures);

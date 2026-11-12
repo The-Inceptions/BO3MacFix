@@ -16,7 +16,9 @@
 //   aae_t7_move_input_threshold   how much move input counts as pushing, in place of the game's 50 (the mod sets 0:
 //                                 any input, and none is needed to start)
 //   aae_t7_high_height_offset     added to the heights 96, 200 and 350 at which the kind of traversal changes
-// A mantle brush marked for mantling over and mounting also sets the traversal's "over" flag.
+// A mantle brush marked for mantling over and mounting also sets the traversal's "over" flag. And a vehicle in the
+// way has a rule of its own, whatever its contents, while the checks are on: it can be climbed from the sides its
+// kind of vehicle allows (the game's own test for its "mantle vehicle" prompt), and not from anywhere else.
 //
 // The plugin patches instructions inside the game's traversal scan. Here the functions around those places are hooked
 // instead: the game type setting's getter (for trm_maxHeight), the scan and the test before it (the move input they
@@ -34,8 +36,8 @@
 //
 // The mantle prompt is the plugin's mantle_hint component, see "the mantle prompt" below.
 //
-// Not ported: the plugin's rule for a first trace that hits a vehicle (it asks the game whether the player may use
-// it).
+// The plugin's side was read from the DLL, and the game's side from the Windows executable it is made for as well
+// (the unpacked image, see wip/windows): each place the plugin patches there has its counterpart here.
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -95,11 +97,14 @@ void aae_mantle_start_input(int threshold, signed char *forward, signed char *ri
     *right = 0;
 }
 
-uint32_t aae_mantle_first_hit(bool ignore_checks, uint32_t contents, uint32_t surface_flags, uint32_t *traversal_flags) {
+uint32_t aae_mantle_first_hit(bool ignore_checks, int vehicle, uint32_t contents, uint32_t surface_flags,
+                              uint32_t *traversal_flags) {
+    // the game goes on to look for a ledge when the hit isn't a mantle brush
+    if (!ignore_checks && vehicle == Aae_Vehicle_NoSide)
+        return contents | Contents_Mantle;
     if ((surface_flags & Surface_OverMask) == Surface_Over)
         *traversal_flags |= Traversal_Over;
-    bool look_for_ledge = ignore_checks || (contents & Contents_Mantle) != 0;
-    // the game goes on when the hit isn't a mantle brush
+    bool look_for_ledge = ignore_checks || vehicle == Aae_Vehicle_Side || (contents & Contents_Mantle) != 0;
     return look_for_ledge ? contents & ~(uint32_t)Contents_Mantle : contents | Contents_Mantle;
 }
 
@@ -209,7 +214,7 @@ static bool ignore_checks(void) {
 #define Hint_Settle_Ms 2000 // no probes for this long after a player's first move
 #define Ps_Flags 0x10
 #define Ps_Flag_Traversing 0x200
-#define Pm_Handler 0x2ac          // pmove_t: 0 the server's move, 1 the client's prediction
+#define Pm_Handler 0x2ac          // pmove_t: 0 the client's prediction of a move, 1 the server's move
 #define Mode_Network_Mask 0x3c0 // of the session mode's bits: how the game is networked (0 offline, 2 online)
 #define Mode_Network_Lan 0x40   // 1, "system link": a game from the menus' "play local", or one started by devmap
 #define Cg_Size 0x342a80
@@ -355,6 +360,70 @@ install_hook_name(GameTypeSettings_GetFloat, float, const char *name, bool which
     return orig_GameTypeSettings_GetFloat(name, which);
 }
 
+// ---- a vehicle in the way
+#define Trace_HitType 0x24  // 1: an entity
+#define Trace_HitId 0x28    // its number, a word
+#define Entity_Size 0x4f8   // gentity_s
+#define Entity_Type 0x1a0   // a word
+#define Entity_Type_Vehicle 15
+#define Entity_Client 0x250
+#define Entity_Vehicle 0x270
+#define Entity_World 0x3fe  // this and the one after it aren't entities
+#define Client_Size 0x17210 // gclient_s, which starts with the player's state (0x20 more than in the Windows game)
+#define Client_Index 0x16c18 // the number it was connected as
+#define Max_Players 64
+#define Vehicle_No_Side 4 // what the game's test answers for a player at none of the vehicle's sides to climb it from
+
+// the game's: what its server on this machine was last given as its entities and how big each is, and the players
+static uint8_t *const *server_entities;
+static const int *server_entity_size;
+static uint8_t *const *game_clients;
+static int (*Vehicle_MantleSide)(uint8_t *vehicle, uint8_t *player);
+
+// The plugin's question for a first trace that hit a vehicle, with what it does when it can't ask: the vehicle and
+// the player have to be entities of a server on this machine. In the server's own move the player state has to be
+// that server's own state of a player (anything else: no ledge); in the client's prediction the player is the one
+// connected under that number.
+static int vehicle_rule(const uint8_t *trace, const uint8_t *ps, const uint8_t *pm) {
+    unsigned handler = pm[Pm_Handler];
+    int hit_type;
+    uint16_t hit, type;
+    memcpy(&hit_type, trace + Trace_HitType, sizeof(hit_type));
+    memcpy(&hit, trace + Trace_HitId, sizeof(hit));
+    if (handler > 1 || hit_type != 1 || hit >= Entity_World)
+        return Aae_Vehicle_None;
+    uint8_t *entities = *server_entities, *clients = *game_clients;
+    if (entities == NULL || *server_entity_size != Entity_Size)
+        return Aae_Vehicle_None;
+    uint8_t *vehicle = entities + (size_t)hit * Entity_Size;
+    memcpy(&type, vehicle + Entity_Type, sizeof(type));
+    if (type != Entity_Type_Vehicle || clients == NULL)
+        return Aae_Vehicle_None;
+    uint32_t number, connected_as;
+    memcpy(&number, ps, sizeof(number));
+    if (handler == 1) {
+        // where among the players this state is: it has to be the start of the one its number says (a state from
+        // before them is, counted like this, far behind them)
+        uintptr_t offset = (uintptr_t)ps - (uintptr_t)clients;
+        if (offset % Client_Size != 0 || offset / Client_Size != number || number >= Max_Players)
+            return Aae_Vehicle_NoSide;
+    } else {
+        if (number >= Max_Players)
+            return Aae_Vehicle_None;
+        memcpy(&connected_as, clients + (size_t)number * Client_Size + Client_Index, sizeof(connected_as));
+        if (connected_as != number)
+            return Aae_Vehicle_None;
+    }
+    uint8_t *player = entities + (size_t)number * Entity_Size, *client, *vehicle_data;
+    memcpy(&client, player + Entity_Client, sizeof(client));
+    if (client != clients + (size_t)number * Client_Size)
+        return handler == 1 ? Aae_Vehicle_NoSide : Aae_Vehicle_None;
+    memcpy(&vehicle_data, vehicle + Entity_Vehicle, sizeof(vehicle_data));
+    if (vehicle_data == NULL)
+        return Aae_Vehicle_None;
+    return Vehicle_MantleSide(vehicle, player) != Vehicle_No_Side ? Aae_Vehicle_Side : Aae_Vehicle_NoSide;
+}
+
 // a scan on this thread, for the player trace's hook: the scan's first trace is the one whose hit decides
 static _Thread_local struct {
     bool first_trace;
@@ -381,7 +450,12 @@ install_hook_name(PM_PlayerTrace, void, uint8_t *pm, uint8_t *results, const flo
     memcpy(&contents, results + Trace_Contents, sizeof(contents));
     memcpy(&surface_flags, results + Trace_SurfaceFlags, sizeof(surface_flags));
     memcpy(&flags, scan.ps + Ps_TraversalFlags, sizeof(flags));
-    uint32_t shown = aae_mantle_first_hit(ignore_checks(), contents, surface_flags, &flags);
+    bool anywhere = ignore_checks();
+    int vehicle = anywhere ? Aae_Vehicle_None : vehicle_rule(results, scan.ps, pm);
+    if (debug && vehicle != Aae_Vehicle_None)
+        printf("mantle: a vehicle in the way: the player is %s\n", vehicle == Aae_Vehicle_Side ?
+               "at a side it can be climbed from" : "not at a side it can be climbed from");
+    uint32_t shown = aae_mantle_first_hit(anywhere, vehicle, contents, surface_flags, &flags);
     memcpy(results + Trace_Contents, &shown, sizeof(shown));
     memcpy(scan.ps + Ps_TraversalFlags, &flags, sizeof(flags));
 }
@@ -570,6 +644,10 @@ void aae_mantle_init(uint64_t game_base_address, int enabled) {
     session_mode = (const uint32_t *)(base_address + ADDR_sSessionModeState);
     cg_clients = (uint8_t *const *)(base_address + ADDR_cgArray);
     cg_client_count = (const int *)(base_address + ADDR_LOCAL_CLIENT_COUNT);
+    server_entities = (uint8_t *const *)(base_address + ADDR_sv_gentities);
+    server_entity_size = (const int *)(base_address + ADDR_sv_gentitySize);
+    game_clients = (uint8_t *const *)(base_address + ADDR_level_clients);
+    Vehicle_MantleSide = (void *)(base_address + ADDR_Vehicle_MantleSide);
     now_ms = uptime_ms;
     install_hook_CG_DrawMantleHint((void *)(base_address + ADDR_CG_DrawMantleHint));
     install_hook_GameTypeSettings_GetFloat((void *)(base_address + ADDR_GameTypeSettings_GetFloat));
