@@ -414,7 +414,10 @@ static void write_screenshot(id<MTLTexture> texture, const char *path) {
                              : (CGBitmapInfo)kCGBitmapByteOrder32Big | (CGBitmapInfo)kCGImageAlphaNoneSkipLast;
     CGContextRef full = CGBitmapContextCreate(pixels, width, height, 8, width * 4, space, info);
     CGImageRef image = full != NULL ? CGBitmapContextCreateImage(full) : NULL;
-    if (image != NULL && width > Screenshot_Max_Width) {
+    // a picture named *.full.png keeps the frame's own size, for comparing fine detail like the edges of text
+    size_t path_length = strlen(path);
+    bool keep_size = path_length >= 9 && strcmp(path + path_length - 9, ".full.png") == 0;
+    if (image != NULL && width > Screenshot_Max_Width && !keep_size) {
         size_t small_width = Screenshot_Max_Width, small_height = (size_t)llround((double)height * small_width / width);
         CGContextRef small = CGBitmapContextCreate(NULL, small_width, small_height, 8, 0, space, info);
         if (small != NULL) {
