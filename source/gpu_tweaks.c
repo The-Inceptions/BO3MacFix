@@ -43,6 +43,7 @@
 #include "prepatch.h"
 #include "offsets.h"
 #include "script_errors.h"
+#include "lua_heap.h"
 #include "script_vars.h"
 #include "gpu_diag.h"
 
@@ -95,7 +96,7 @@ static void frame_stats_tick(void) {
     int display_fps = present_display_max_fps();
     if (display_fps > 0)
         snprintf(display, sizeof(display), ", display %i Hz", display_fps);
-    char detail[256] = "";
+    char detail[320] = "";
     if (frame_stats_detail) {
         uint64_t buffers;
         double busy = gpu_diag_take_busy(&buffers);
@@ -109,8 +110,10 @@ static void frame_stats_tick(void) {
             uint32_t server_limit, client_limit;
             uint32_t server_used = script_variables_used(0, &server_limit);
             uint32_t client_used = script_variables_used(1, &client_limit);
-            snprintf(detail + n, sizeof(detail) - n, ", script variables %u of %u server, %u of %u client", server_used,
-                     server_limit, client_used, client_limit);
+            size_t lua_capacity, lua_used = lua_heap_used(&lua_capacity);
+            snprintf(detail + n, sizeof(detail) - n, ", script variables %u of %u server, %u of %u client, UI Lua "
+                     "%.1f of %zu MB", server_used, server_limit, client_used, client_limit, lua_used / 1048576.0,
+                     lua_capacity >> 20);
         }
     }
     printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s%s)%s\n",

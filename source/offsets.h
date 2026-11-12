@@ -111,6 +111,12 @@
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
+// the Lua VMs' memory (lua_heap.c) - names are guesses
+#define ADDR_Lua_HeapCreate 0x144849f // func - heap *(init): a dlmalloc heap in the block init's callback gives it, for a Lua VM
+#define ADDR_LUI_HeapAlloc 0xd4d640 // func - the UI VM's callback for its heap's block: void *(user, block, old_size, new_size), gives the 60 MB "LUI_Main" block once
+#define ADDR_LUI_HeapBlock 0x2564bc8 // void *, that block; the heap itself starts 16 bytes into it
+#define ADDR_LUI_HeapBlockTaken 0x2564f40 // bool, whether a heap has it
+
 // the TrueType glyph cache and its atlas (font_resolution.c) - the FontCache names are guesses
 #define ADDR_FontCache_GetGlyph 0x1278311 // func - glyph *(face, height, character, effect): the cached glyph, made first if it's new
 #define ADDR_FontCache_Reset 0x127920f // func - void (): empties the cache and the atlas

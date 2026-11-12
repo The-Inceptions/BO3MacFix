@@ -46,3 +46,4 @@ tests/test_gsc_obj
 tests/test_gsc_detours
 tests/test_script_vars
 tests/test_font_resolution
+tests/test_lua_heap

@@ -16,6 +16,8 @@ TEST_TARGETS += tests/test_gsc_detours
 TEST_TARGETS += tests/test_script_vars
 # glyphs drawn twice as detailed into the font atlas (font_resolution.c)
 TEST_TARGETS += tests/test_font_resolution
+# the UI's Lua heap growing past its 60 MB (lua_heap.c)
+TEST_TARGETS += tests/test_lua_heap
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
 
@@ -69,6 +71,8 @@ SOURCES += source/gsc_obj.c source/gsc_detours.c
 SOURCES += source/script_vars.c
 # SharpFonts: menu and HUD text from glyphs twice as detailed (font_resolution.c)
 SOURCES += source/font_resolution.c
+# LuaHeapGrowth: more memory for the UI's Lua VM when its 60 MB are full (lua_heap.c)
+SOURCES += source/lua_heap.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -158,6 +162,10 @@ tests/test_font_resolution: tests/test_font_resolution.c source/font_resolution.
 		source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h source/prepatch.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_font_resolution.c \
 		source/gsc_obj.c
+
+# lua_heap.c against a made-up heap that asks its callbacks as the game's dlmalloc does
+tests/test_lua_heap: tests/test_lua_heap.c source/lua_heap.c source/lua_heap.h source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_lua_heap.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

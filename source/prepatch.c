@@ -89,6 +89,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Lua_Exec, Push_R14 },
     { ADDR_Lua_GetBuildIntField, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
     { ADDR_Lua_GetBuildStringField, Push_R14 },
+    { ADDR_Lua_HeapCreate, Push_R14 },
     { ADDR_R_CheckVidRestart, Push_R15 },
     { ADDR_R_SetWndParms, Push_R15 },
     { ADDR_Scr_ErrorInternal, Push_R15 },
