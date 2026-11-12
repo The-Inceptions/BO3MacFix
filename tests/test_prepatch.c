@@ -330,11 +330,34 @@ int main(void) {
     CHECK(stat(copy_path, &st) == 0 && (st.st_mode & 0777) == 0755, "the copy's mode is %o", st.st_mode & 0777);
     if (copy != NULL) {
         check_stubs(copy);
-        // outside what it changed, the copy is the original
-        size_t differences = 0;
-        for (size_t i = 0; i < File_Size; i++)
-            differences += copy[i] != original[i];
-        CHECK(differences < 4096, "%zu bytes differ", differences);
+        // outside what it changed, the copy is the original: the two paddings, and the places its tables name
+        uint8_t *may_differ = calloc(1, File_Size);
+        memset(may_differ + ADDR_Prepatch_Header, 1, ADDR_Prepatch_CodeEnd - ADDR_Prepatch_Header);
+        memset(may_differ + ADDR_Prepatch_Stubs2, 1, ADDR_Prepatch_Stubs2End - ADDR_Prepatch_Stubs2);
+        for (size_t i = 0; i < sizeof(hook_defs) / sizeof(hook_defs[0]); i++)
+            memset(may_differ + hook_defs[i].function, 1, hook_defs[i].length);
+        for (size_t i = 0; i < sizeof(value_defs) / sizeof(value_defs[0]); i++)
+            memset(may_differ + value_defs[i].site, 1, 5);
+        for (size_t i = 0; i < sizeof(call_defs) / sizeof(call_defs[0]); i++)
+            memset(may_differ + call_defs[i].site, 1, 6);
+        for (size_t i = 0; i < sizeof(patch_defs) / sizeof(patch_defs[0]); i++)
+            memset(may_differ + patch_defs[i].offset, 1, patch_defs[i].length);
+        for (size_t i = 0; i < sizeof(netver_addresses) / sizeof(netver_addresses[0]); i++)
+            memset(may_differ + netver_addresses[i] + Netver_At, 1, sizeof(netver_original));
+        for (size_t i = 0; i < sizeof(tuver_addresses) / sizeof(tuver_addresses[0]); i++)
+            memset(may_differ + tuver_addresses[i] + Tuver_At, 1, sizeof(tuver_original));
+        size_t differences = 0, elsewhere = 0, first_elsewhere = 0;
+        for (size_t i = 0; i < File_Size; i++) {
+            if (copy[i] == original[i])
+                continue;
+            differences++;
+            if (!may_differ[i] && elsewhere++ == 0)
+                first_elsewhere = i;
+        }
+        free(may_differ);
+        CHECK(elsewhere == 0, "%zu bytes differ outside what the copy may change, the first at %08zx", elsewhere,
+              first_elsewhere);
+        CHECK(differences > 1000, "only %zu bytes differ", differences);
         uint8_t *image = map_image(copy);
         CHECK(image != NULL, "no memory for the image");
         if (image != NULL) {
