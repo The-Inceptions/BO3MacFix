@@ -8,6 +8,7 @@ int sdl_displays_rebuild_mode_table(void);               // engine thread (tier 
 int sdl_displays_count(void);
 uint32_t sdl_displays_id(int index);                     // index 0 = the game's display
 int sdl_game_fullscreen_mode(void);                      // 0 windowed, 1 fullscreen, 2 fullscreen window
+void *sdl_game_window(void);                             // the game's SDL_Window, NULL before it has one
 uint32_t sdl_game_window_display(void);                  // the display the game window is on now, 0 if there's no window
 void sdl_displays_describe(char *buf, size_t n);         // "window=WxH fullscreen=M frame=x,y,w,h screen=x,y,w,h"
 

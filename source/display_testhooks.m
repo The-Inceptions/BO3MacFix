@@ -17,6 +17,15 @@
 //                                    send function, so mods that watch the chat (All-around Enhancement's /dep, /bal
 //                                    and /save) see it as typed. Sent on the game's next client frame: that function
 //                                    needs the game thread (its va() buffers), and crashes on Aspyr's main thread.
+//   com.bo3macfix.test.pad           gives player 1 a controller in the state that file's text names, seven numbers:
+//                                    buttons (XInput's bits, 0x1000 is A) left-x left-y right-x right-y (-32768 to
+//                                    32767) left-trigger right-trigger (0 to 255). It stays so until the next one.
+//                                    From the first one on SDL's keyboard focus is kept on the game's window, which
+//                                    is what the game takes for being in front: otherwise it doesn't read
+//                                    controllers in the menus, e.g. while the Mac's screen is locked. Needs
+//                                    ControllerBridge.
+//   com.bo3macfix.test.cheats        turns sv_cheats on, for setviewpos, god and notarget: a devmap start with
+//                                    All-around Enhancement 4 leaves it off
 //   com.bo3macfix.test.lua           runs that file's text as Lua in the UI's Lua VM, with two arguments: a function
 //                                    that writes its string to the log as "test lua: ...", and one that releases the
 //                                    registry reference with its number through the game's luaL_unref. Run from the
@@ -32,11 +41,15 @@
 #include "controllers.h"
 #include "display_follow.h"
 #include "display_testhooks.h"
+#include "gc_bridge.h"
+#include "gsc_obj.h"
 #include "havok.h"
 #include "metalfx.h"
 #include "offsets.h"
+#include "sdl_displays.h"
 #include "settings.h"
 
+static uint64_t base_address;
 static void (*Cbuf_AddText)(int localClientNum, const char *text);
 static void (*ChatClient_Send)(int localClientNum, const char *text, int channel);
 static void (*hksi_luaL_unref)(lua_State *s, int index, int ref);
@@ -70,7 +83,15 @@ static bool read_test_text(char *text, size_t size) {
     return length > 0;
 }
 
+// what the game's input frame asks before it reads the controllers: SDL's keyboard focus is the game's window
+static void keep_game_in_front(void) {
+    void *window = sdl_game_window();
+    if (window != NULL)
+        *(void *volatile *)(base_address + ADDR_SDL_KeyboardFocus) = window;
+}
+
 void display_testhooks_init(uint64_t game_base_address) {
+    base_address = game_base_address;
     Cbuf_AddText = (void *)(game_base_address + ADDR_Cbuf_AddText);
     ChatClient_Send = (void *)(game_base_address + ADDR_ChatClient_Send);
     hksi_luaL_unref = (void *)(game_base_address + ADDR_hksi_luaL_unref);
@@ -151,6 +172,40 @@ void display_testhooks_init(uint64_t game_base_address) {
         }
         if (read_test_text(pending_chat, sizeof(pending_chat)))
             atomic_store_explicit(&chat_pending, true, memory_order_release);
+    });
+    on_notification("com.bo3macfix.test.pad", ^(int token) {
+        char text[128];
+        unsigned buttons = 0;
+        int left_x = 0, left_y = 0, right_x = 0, right_y = 0, left_trigger = 0, right_trigger = 0;
+        if (!read_test_text(text, sizeof(text)) ||
+            sscanf(text, "%i %d %d %d %d %d %d", (int *)&buttons, &left_x, &left_y, &right_x, &right_y, &left_trigger,
+                   &right_trigger) < 1)
+            return;
+        static bool scanned = false;
+        printf("display tests: pad %s\n", text);
+        gc_bridge_test_pad((uint16_t)buttons, (int16_t)left_x, (int16_t)left_y, (int16_t)right_x, (int16_t)right_y,
+                           (uint8_t)left_trigger, (uint8_t)right_trigger);
+        if (!scanned) {
+            scanned = true;
+            controllers_request_gamepad_scan("test");
+            // SDL takes the focus away again whenever macOS tells it so
+            static dispatch_source_t timer;
+            timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+            dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC, 20 * NSEC_PER_MSEC);
+            dispatch_source_set_event_handler(timer, ^{
+                keep_game_in_front();
+            });
+            dispatch_resume(timer);
+        }
+        keep_game_in_front();
+    });
+    on_notification("com.bo3macfix.test.cheats", ^(int token) {
+        void *(*find)(uint32_t hash) = (void *)(base_address + ADDR_Dvar_FindByHash);
+        void (*set_bool)(void *dvar, bool value) = (void *)(base_address + ADDR_Dvar_SetBool);
+        void *cheats = find(gsc_hash("sv_cheats"));
+        printf("display tests: sv_cheats %s\n", cheats != NULL ? "on" : "not found");
+        if (cheats != NULL)
+            set_bool(cheats, true);
     });
     on_notification("com.bo3macfix.test.lua", ^(int token) {
         if (atomic_load_explicit(&lua_pending, memory_order_acquire)) {

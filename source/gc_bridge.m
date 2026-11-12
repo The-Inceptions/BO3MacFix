@@ -409,8 +409,27 @@ static void set_adaptive_triggers(GCController *controller, bool on) {
     }
 }
 
+// the tests' own controller on player 1, which the game gets whether it's in front or not (display_testhooks.m)
+static XINPUT_STATE test_pad;
+static atomic_bool test_pad_on;
+
+void gc_bridge_test_pad(uint16_t buttons, int16_t left_x, int16_t left_y, int16_t right_x, int16_t right_y,
+                        uint8_t left_trigger, uint8_t right_trigger) {
+    os_unfair_lock_lock(&pads_lock);
+    test_pad.dwPacketNumber++;
+    test_pad.Gamepad = (XINPUT_GAMEPAD){ buttons, left_trigger, right_trigger, left_x, left_y, right_x, right_y };
+    os_unfair_lock_unlock(&pads_lock);
+    atomic_store(&test_pad_on, true);
+}
+
 // DWORD XInputGetState(DWORD dwUserIndex, XINPUT_STATE *pState)
 install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STATE *state) {
+    if (user_index == 0 && state != NULL && atomic_load_explicit(&test_pad_on, memory_order_relaxed)) {
+        os_unfair_lock_lock(&pads_lock);
+        *state = test_pad;
+        os_unfair_lock_unlock(&pads_lock);
+        return ERROR_SUCCESS;
+    }
     if (enabled && user_index < XUSER_MAX_COUNT) {
         os_unfair_lock_lock(&pads_lock);
         rehome_pads();

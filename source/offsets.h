@@ -229,6 +229,7 @@
 #define ADDR_ASL_BuildModeTable 0x6f076 // func - builds ASL's mode table for SDL display 0, once at startup on the main thread
 #define ADDR_ASL_ModeTable 0x2105710 // std::vector<std::vector<mode>> { begin, end, capacity } - ASL's modes, one entry (display 0)
 #define ADDR_ASL_WindowMutex 0x104c9bb8 // std::recursive_mutex - held by Window_SetMode while it waits for the main thread, and by present
+#define ADDR_SDL_KeyboardFocus 0x21097b0 // SDL_Window * - SDL 2.0.7's SDL_keyboard.focus; the window ASL's GetForegroundWindow answers with, which the game's input frame compares with its own before it reads the controllers
 #define ADDR_SDL_VideoDevice 0x210b1f8 // SDL_VideoDevice * - SDL 2.0.7's _this
 #define ADDR_Cocoa_GetDisplayMode 0x146fe0 // func - SDL 2.0.7's static GetDisplayMode(CGDisplayModeRef, CFArrayRef modelist, CVDisplayLinkRef, SDL_DisplayMode *), no _this
 #define ADDR_Cocoa_SetWindowFullscreen 0x14e5e0 // func - SDL 2.0.7 (_this, window, display, fullscreen)

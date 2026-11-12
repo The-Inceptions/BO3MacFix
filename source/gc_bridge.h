@@ -32,3 +32,8 @@ void gc_bridge_set_gyro_sensitivity(int percent);
 void gc_bridge_set_gyro_invert(int axes);
 void gc_bridge_set_adaptive_triggers(int on);
 void gc_bridge_set_lightbar(int rgb);
+
+// for the tests: a controller on player 1 with this state from now on, which the game also gets while it isn't in
+// front. Only with the bridge on (its XInputGetState hook answers).
+void gc_bridge_test_pad(uint16_t buttons, int16_t left_x, int16_t left_y, int16_t right_x, int16_t right_y,
+                        uint8_t left_trigger, uint8_t right_trigger);

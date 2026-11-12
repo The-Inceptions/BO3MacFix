@@ -130,6 +130,11 @@ static int window_mode(char *window) {
         rect[2] == (int)bounds.size.width && rect[3] == (int)bounds.size.height ? 2 : 0;
 }
 
+void *sdl_game_window(void) {
+    char *dev = video();
+    return dev != NULL ? game_window(dev) : NULL;
+}
+
 int sdl_game_fullscreen_mode(void) {
     char *dev = video();
     char *window = dev != NULL ? game_window(dev) : NULL;
