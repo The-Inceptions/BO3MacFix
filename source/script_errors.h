@@ -11,3 +11,7 @@ void script_errors_quit(void);
 // the script errors thrown since the last call, server and client (counted while QuietScriptErrors is on, which
 // it returns), for FrameStats' detail (BO3MACFIX_FRAMESTATSDETAIL=1)
 bool script_errors_take_thrown(uint32_t *server, uint32_t *client);
+// how many of a script instance's variables are in use and how many it has (0 the server's, 1 the client's), for
+// FrameStats' detail. A game that runs out of them stops with a script error. All-around Enhancement's Windows
+// plugin raises the server's from 130,000 to 524,288; here they stay as the game has them.
+uint32_t script_variables_used(int inst, uint32_t *limit);

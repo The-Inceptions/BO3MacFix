@@ -214,6 +214,30 @@ bool script_errors_take_thrown(uint32_t *server, uint32_t *client) {
     return quiet_on;
 }
 
+// The script variables: 0x40 bytes each, 130,000 for the server and 65,000 for the client (the allocation at
+// 0x12f309f), a free one has type 0x1b.
+#define VarGlob_Size 0x100
+#define VarGlob_Vars 0x80
+#define Var_Size 0x40
+#define Var_Type 0x8
+#define Var_Free 0x1b
+
+uint32_t script_variables_used(int inst, uint32_t *limit) {
+    *limit = inst == 1 ? 65000 : 130000;
+    const uint8_t *vars;
+    memcpy(&vars, (const void *)(base_address + ADDR_scrVarGlob + (uint64_t)inst * VarGlob_Size + VarGlob_Vars),
+           sizeof(vars));
+    if (base_address == 0 || vars == NULL)
+        return 0;
+    uint32_t used = 0;
+    for (uint32_t i = 1; i < *limit; i++) {
+        uint32_t type;
+        memcpy(&type, vars + (size_t)i * Var_Size + Var_Type, sizeof(type));
+        used += type != Var_Free;
+    }
+    return used;
+}
+
 void script_errors_new_map(void) {
     summarize_and_forget(false);
 }

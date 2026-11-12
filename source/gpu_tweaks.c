@@ -94,7 +94,7 @@ static void frame_stats_tick(void) {
     int display_fps = present_display_max_fps();
     if (display_fps > 0)
         snprintf(display, sizeof(display), ", display %i Hz", display_fps);
-    char detail[160] = "";
+    char detail[256] = "";
     if (frame_stats_detail) {
         uint64_t buffers;
         double busy = gpu_diag_take_busy(&buffers);
@@ -102,7 +102,15 @@ static void frame_stats_tick(void) {
                          busy * 1000.0 / frames, busy * 100.0 / seconds, (double)buffers / frames);
         uint32_t server_errors, client_errors;
         if (script_errors_take_thrown(&server_errors, &client_errors) && n > 0 && n < (int)sizeof(detail))
-            snprintf(detail + n, sizeof(detail) - n, ", script errors %u server, %u client", server_errors, client_errors);
+            n += snprintf(detail + n, sizeof(detail) - n, ", script errors %u server, %u client", server_errors,
+                          client_errors);
+        if (n > 0 && n < (int)sizeof(detail)) {
+            uint32_t server_limit, client_limit;
+            uint32_t server_used = script_variables_used(0, &server_limit);
+            uint32_t client_used = script_variables_used(1, &client_limit);
+            snprintf(detail + n, sizeof(detail) - n, ", script variables %u of %u server, %u of %u client", server_used,
+                     server_limit, client_used, client_limit);
+        }
     }
     printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s%s)%s\n",
            frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds, display, detail);
