@@ -26,6 +26,8 @@ TEST_TARGETS += tests/test_pmem_spill
 TEST_TARGETS += tests/test_aae_mantle
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
+# the thunks for detours inside the game's functions (detour.h); x86_64 code, so this test is built for x86_64
+TEST_TARGETS += tests/test_detour
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -193,6 +195,10 @@ tests/test_aae_mantle: tests/test_aae_mantle.c source/aae_mantle.c source/aae_ma
 		source/gsc_obj.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_mantle.c source/gsc_obj.c
+
+# detour.h: its thunks against two made-up game functions in assembly
+tests/test_detour: tests/test_detour.c source/detour.h
+	$(CLANG) -arch x86_64 -std=gnu11 -O1 -g -Wall -Wextra -Werror -o $@ tests/test_detour.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

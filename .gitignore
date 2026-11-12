@@ -42,6 +42,7 @@ tests/test_gpu_diag
 tests/test_t7o_subtitle
 tests/test_launch_args
 tests/test_weapon_anim
+tests/test_detour
 tests/test_gsc_obj
 tests/test_gsc_detours
 tests/test_script_vars
