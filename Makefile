@@ -14,6 +14,8 @@ TEST_TARGETS += tests/test_gsc_obj
 TEST_TARGETS += tests/test_gsc_detours
 # the script variable table's free list and the bigger table for the server (script_vars.c)
 TEST_TARGETS += tests/test_script_vars
+# glyphs drawn twice as detailed into the font atlas (font_resolution.c)
+TEST_TARGETS += tests/test_font_resolution
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
 
@@ -65,6 +67,8 @@ SOURCES += source/aae_cheats.c
 SOURCES += source/gsc_obj.c source/gsc_detours.c
 # the server's script variables: counting them and a higher limit (script_vars.c)
 SOURCES += source/script_vars.c
+# SharpFonts: menu and HUD text from glyphs twice as detailed (font_resolution.c)
+SOURCES += source/font_resolution.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -148,6 +152,12 @@ tests/test_gsc_detours: tests/test_gsc_detours.c tests/fake_gsc.h source/gsc_det
 # script_vars.c against a made-up game that sets up, takes from and returns to the variable table as the game does
 tests/test_script_vars: tests/test_script_vars.c source/script_vars.c source/script_vars.h source/offsets.h source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_script_vars.c
+
+# font_resolution.c against a made-up game: an atlas, its allocator, a FreeType and a glyph function
+tests/test_font_resolution: tests/test_font_resolution.c source/font_resolution.c source/font_resolution.h \
+		source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h source/prepatch.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_font_resolution.c \
+		source/gsc_obj.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

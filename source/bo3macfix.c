@@ -27,6 +27,7 @@
 #include "aae_cheats.h"
 #include "gsc_detours.h"
 #include "script_vars.h"
+#include "font_resolution.h"
 #include "bo3macnative.h"
 #include "codhavoktypes.h"
 #include "cpu_tuning.h"
@@ -1168,6 +1169,9 @@ __attribute__((constructor)) static void dylib_main() {
     // the server's scripts get 524,288 variables instead of 130,000, as All-around Enhancement's Windows plugin gives
     // them (MoreScriptVariables, on by default), see script_vars.c
     script_vars_init(game_base_address, read_int_setting_or_env("MoreScriptVariables", 1));
+    // menu and HUD text from glyphs drawn twice as detailed, as All-around Enhancement's Windows plugin draws it
+    // (SharpFonts, on by default), see font_resolution.c
+    font_resolution_init(game_base_address, read_int_setting_or_env("SharpFonts", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);

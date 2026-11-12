@@ -109,6 +109,16 @@
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
+// the TrueType glyph cache and its atlas (font_resolution.c) - the FontCache names are guesses
+#define ADDR_FontCache_GetGlyph 0x1278311 // func - glyph *(face, height, character, effect): the cached glyph, made first if it's new
+#define ADDR_FontCache_Reset 0x127920f // func - void (): empties the cache and the atlas
+#define ADDR_FontCache_Allocate 0x1279a54 // func - bool (packer, width, height, rotate, int position[3]): a free rectangle of the atlas
+#define ADDR_FontCache_AllocateReturn 0x12786e4 // where FontCache_GetGlyph's call of FontCache_Allocate returns to
+#define ADDR_FontCache_Upload 0x12799b2 // func - void (left, top, right, bottom): queues that part of the atlas for the GPU
+#define ADDR_FT_Outline_Render 0x474e9a // func - FreeType's, int (library, outline, params)
+#define ADDR_FontCache_RenderReturn 0x1278c5f // where FontCache_GetGlyph's call of FT_Outline_Render returns to
+#define ADDR_FontCache_Bitmap 0x631d2c0 // the atlas: 2048x2048 bytes
+
 // controllers
 #define ADDR_GPad_GetGamepadType 0x122f78d // func - returns gamepadType_e, Aspyr's always says DURANGO for a connected pad
 #define ADDR_g_gpads 0x5dedb70 // gamepad[2], 0x70 bytes each, mapped port (0-3) at +4 - name is a guess
