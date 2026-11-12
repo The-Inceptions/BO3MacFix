@@ -46,6 +46,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "aae_mantle.h"
+#include "aae_plugin.h"
 #include "dobby.h"
 #include "gsc_obj.h"
 #include "offsets.h"
@@ -148,7 +149,6 @@ int aae_mantle_hint_state(bool traversing, const bool found[2], const uint64_t f
 static uint64_t base_address;
 static void *(*Dvar_FindByHash)(uint32_t hash);
 static float (*Dvar_GetFloat)(void *dvar); // a dvar that a "set" made is a string, read as atof of its text
-static const char *loaded_mod; // the game's: the folder name of the mod that's loaded, "" without one
 static _Atomic bool active;    // that mod has the plugin whose work this is: found out at each map's start
 static int debug;              // BO3MACFIX_MANTLEDEBUG=1: the log says what each scan found
 
@@ -554,8 +554,6 @@ install_hook_name(TRM_Type, int, uint8_t *ps, vec3_t ledge) {
 #define Dvar_Value 0x28
 #define Dvar_Latched 0x40
 #define Dvar_Default 0x58
-#define Plugin_Path "T7Overcharged/plugins/AAEUnified.dll" // in the mod's folder: T7Overcharged loads it on Windows
-#define Mod_Name_Size 0x20 // the game's array for the loaded mod's name
 
 static int dvar_type(const uint8_t *dvar) {
     int type;
@@ -608,24 +606,10 @@ static void traversal_for_zombies(bool on) {
     pthread_mutex_unlock(&zombies_own.lock);
 }
 
-// whether the mod that's loaded has the plugin whose work this is
-static bool mod_has_plugin(void) {
-    char path[4096 + sizeof(Plugin_Path) + 1], loaded[Mod_Name_Size + 1];
-    const char *folder = t7o_mod_folder(), *name = strrchr(folder, '/');
-    name = name != NULL ? name + 1 : folder;
-    memcpy(loaded, loaded_mod, Mod_Name_Size);
-    loaded[Mod_Name_Size] = '\0';
-    // the folder T7Overcharged was last asked for from has to be the loaded mod's, not one from earlier on
-    if (loaded[0] == '\0' || strcmp(name, loaded) != 0)
-        return false;
-    snprintf(path, sizeof(path), "%s/%s", folder, Plugin_Path);
-    return access(path, F_OK) == 0;
-}
-
 // TRM_Init(alloc): at a map's start, on the server and on the client, makes the traversals' animations if the mode
 // has traversal
 install_hook_name(TRM_Init, void, void *alloc) {
-    bool on = mod_has_plugin();
+    bool on = aae_plugin_loaded();
     atomic_store_explicit(&active, on, memory_order_relaxed);
     traversal_for_zombies(on);
     orig_TRM_Init(alloc);
@@ -640,7 +624,7 @@ void aae_mantle_init(uint64_t game_base_address, int enabled) {
     Dvar_FindByHash = (void *)(base_address + ADDR_Dvar_FindByHash);
     Dvar_GetFloat = (void *)(base_address + ADDR_Dvar_GetFloat);
     Dvar_GetInt = (void *)(base_address + ADDR_Dvar_GetInt);
-    loaded_mod = (const char *)(base_address + ADDR_Mods_LoadedName);
+    aae_plugin_init(base_address);
     session_mode = (const uint32_t *)(base_address + ADDR_sSessionModeState);
     cg_clients = (uint8_t *const *)(base_address + ADDR_cgArray);
     cg_client_count = (const int *)(base_address + ADDR_LOCAL_CLIENT_COUNT);

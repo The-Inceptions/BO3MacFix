@@ -28,6 +28,8 @@ TEST_TARGETS += tests/test_aae_mantle
 TEST_TARGETS += tests/test_weapon_anim
 # the thunks for detours inside the game's functions (detour.h); x86_64 code, so this test is built for x86_64
 TEST_TARGETS += tests/test_detour
+# All-around Enhancement's prompts in the world (aae_prompt.c) and the test for its plugin (aae_plugin.c)
+TEST_TARGETS += tests/test_aae_prompt
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -87,6 +89,10 @@ SOURCES += source/lua_unref.c
 SOURCES += source/pmem_spill.c
 # AAEMantling: mantling by the rules All-around Enhancement 4 gives its Windows plugin (aae_mantle.c)
 SOURCES += source/aae_mantle.c
+# whether the mod with that plugin is the one loaded (aae_plugin.c)
+SOURCES += source/aae_plugin.c
+# AAEPrompts: the mod's prompts in the world, kept by distance as the plugin makes the game keep them (aae_prompt.c)
+SOURCES += source/aae_prompt.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -191,14 +197,21 @@ tests/test_pmem_spill: tests/test_pmem_spill.c source/pmem_spill.c source/pmem_s
 
 # aae_mantle.c: the mod's traversal rules, and its hooks against a made-up scan, dvars and per-mode dvar. Undefined
 # behaviour stops the test: a division by zero is a crash in the game (x86_64) and nothing at all on an Apple CPU
-tests/test_aae_mantle: tests/test_aae_mantle.c source/aae_mantle.c source/aae_mantle.h source/gsc_obj.c \
-		source/gsc_obj.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
+tests/test_aae_mantle: tests/test_aae_mantle.c source/aae_mantle.c source/aae_mantle.h source/aae_plugin.c \
+		source/aae_plugin.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h source/prepatch.h \
+		source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_mantle.c source/gsc_obj.c
 
 # detour.h: its thunks against two made-up game functions in assembly
 tests/test_detour: tests/test_detour.c source/detour.h
 	$(CLANG) -arch x86_64 -std=gnu11 -O1 -g -Wall -Wextra -Werror -o $@ tests/test_detour.c
+
+# aae_prompt.c and aae_plugin.c: the handlers against a made-up prompt element and made-up models
+tests/test_aae_prompt: tests/test_aae_prompt.c source/aae_prompt.c source/aae_prompt.h source/aae_plugin.c \
+		source/aae_plugin.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_prompt.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

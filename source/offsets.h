@@ -112,6 +112,18 @@
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
+// the campaign's prompts in the world, which All-around Enhancement 4 uses in zombies (aae_prompt.c) - names are guesses
+#define ADDR_Prompt_NearTest 0x1304343 // "mov edi, 2 ; call Com_SessionMode_IsMode ; test al, al ; je" in the code that places a prompt on the screen: only the campaign keeps a prompt's "nearTo" model (Windows: the call at 0x14275a7ae)
+#define ADDR_Prompt_NearTest_Yes 0x1304355 // where that goes on after a yes
+#define ADDR_Prompt_FarTest 0x13052bc // the same before a prompt's "isFarAway" model is set and its text becomes the distance (Windows 0x14274dd9c)
+#define ADDR_Prompt_FarTest_Yes 0x13052ca
+#define ADDR_Prompt_NotFarTest 0x1305344 // the same before "isFarAway" is cleared (Windows 0x14274de81)
+#define ADDR_Prompt_NotFarTest_Yes 0x1305352
+#define ADDR_Prompt_NoObjective 0x1305337 // "cmp dword [rbx + 0x154], -2 ; je": a prompt (its UI element in rbx) without an objective skips the rest (Windows 0x14274de6f, element in rdi)
+#define ADDR_Prompt_IsFarAwayText 0x1742145 // "isFarAway"
+#define ADDR_UIModel_Child 0x10365c3 // func - uint16_t (uint16_t model, const char *name): the model's child of that name, made if it isn't there (0x1036418 doesn't make it)
+#define ADDR_UIModel_SetBool 0x1036a60 // func - bool (uint16_t model, bool value): whether that changed it
+
 // traversal, the way over obstacles from multiplayer and the campaign (aae_mantle.c) - names are guesses
 #define ADDR_level_clients 0x1096ee40 // gclient_s *: the game's players, 0x17210 bytes each (0x20 more than in the Windows game: what comes after the player's state is that much further). The number one was connected as is at +0x16c18 (Windows +0x16bf8)
 #define ADDR_sv_gentities 0x144fbde8 // gentity_s *: the entities the server was last given (what the game's start gives it is the array at 0x110cea410), 0x4f8 bytes each: type (a word, 15 a vehicle) at +0x1a0, origin +0x230, angles +0x23c, client +0x250, vehicle data +0x270

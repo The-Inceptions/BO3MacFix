@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include "../source/aae_plugin.c"
 #include "../source/aae_mantle.c"
 
 static int failures = 0;

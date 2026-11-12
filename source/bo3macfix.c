@@ -26,6 +26,7 @@
 #include "aae_build.h"
 #include "aae_cheats.h"
 #include "aae_mantle.h"
+#include "aae_prompt.h"
 #include "gsc_detours.h"
 #include "script_vars.h"
 #include "font_resolution.h"
@@ -1188,6 +1189,10 @@ __attribute__((constructor)) static void dylib_main() {
     // mantling by the rules All-around Enhancement 4 gives its Windows plugin (AAEMantling, on by default), see
     // aae_mantle.c
     aae_mantle_init(game_base_address, read_int_setting_or_env("AAEMantling", 1));
+
+    // All-around Enhancement 4's prompts in the world shown and hidden by distance, as its Windows plugin makes the
+    // game do it (AAEPrompts, on by default), see aae_prompt.c
+    aae_prompt_init(game_base_address, read_int_setting_or_env("AAEPrompts", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);

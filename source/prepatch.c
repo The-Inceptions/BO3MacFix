@@ -95,6 +95,10 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Lua_HeapCreate, Push_R14 },
     { ADDR_PM_PlayerTrace, Push_R15 },
     { ADDR_PMem_Alloc, Push_R15 },
+    { ADDR_Prompt_FarTest, 5, 0, { 0xBF, 0x02, 0x00, 0x00, 0x00 } },    // mov edi, 2 (a detour, see detour.h)
+    { ADDR_Prompt_NearTest, 5, 0, { 0xBF, 0x02, 0x00, 0x00, 0x00 } },   // mov edi, 2
+    { ADDR_Prompt_NoObjective, 7, 0, { 0x83, 0xBB, 0x54, 0x01, 0x00, 0x00, 0xFE } }, // cmp dword [rbx+0x154], -2
+    { ADDR_Prompt_NotFarTest, 5, 0, { 0xBF, 0x02, 0x00, 0x00, 0x00 } }, // mov edi, 2
     { ADDR_R_CheckVidRestart, Push_R15 },
     { ADDR_R_SetWndParms, Push_R15 },
     { ADDR_Scr_ErrorInternal, Push_R15 },
