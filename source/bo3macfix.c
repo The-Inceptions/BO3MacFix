@@ -25,6 +25,7 @@
 
 #include "aae_build.h"
 #include "aae_cheats.h"
+#include "aae_mantle.h"
 #include "gsc_detours.h"
 #include "script_vars.h"
 #include "font_resolution.h"
@@ -1184,6 +1185,9 @@ __attribute__((constructor)) static void dylib_main() {
     // 2 GB more address space for loaded files when the game's 2 GB are full, as All-around Enhancement's Windows
     // plugin gives it (MoreMapMemory, on by default), see pmem_spill.c
     pmem_spill_init(game_base_address, read_int_setting_or_env("MoreMapMemory", 1));
+    // mantling by the rules All-around Enhancement 4 gives its Windows plugin (AAEMantling, on by default), see
+    // aae_mantle.c
+    aae_mantle_init(game_base_address, read_int_setting_or_env("AAEMantling", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);

@@ -183,11 +183,21 @@ static int t7o_init(lua_State *s) {
     return 0;
 }
 
+const char *t7o_mod_folder(void) {
+    return dll_dir;
+}
+
 void t7o_push_init(lua_State *s, const char *dll_path) {
-    strncpy(dll_dir, dll_path, sizeof(dll_dir) - 1);
-    char *last_slash = strrchr(dll_dir, '/');
+    // the mod asks again at every map's start, while the map's own threads may be reading the folder
+    // (t7o_mod_folder): it's only written when it's another one
+    char dir[sizeof(dll_dir)];
+    strncpy(dir, dll_path, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = '\0';
+    char *last_slash = strrchr(dir, '/');
     if (last_slash != NULL)
         *last_slash = '\0';
+    if (strcmp(dll_dir, dir) != 0)
+        strcpy(dll_dir, dir);
     hks_push_cfunction(s, t7o_init, "init");
 }
 

@@ -22,6 +22,8 @@ TEST_TARGETS += tests/test_lua_heap
 TEST_TARGETS += tests/test_lua_unref
 # the second address space for loaded files (pmem_spill.c)
 TEST_TARGETS += tests/test_pmem_spill
+# All-around Enhancement's rules for traversal (aae_mantle.c)
+TEST_TARGETS += tests/test_aae_mantle
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
 
@@ -81,6 +83,8 @@ SOURCES += source/lua_heap.c
 SOURCES += source/lua_unref.c
 # MoreMapMemory: 2 GB more address space for loaded files (pmem_spill.c)
 SOURCES += source/pmem_spill.c
+# AAEMantling: mantling by the rules All-around Enhancement 4 gives its Windows plugin (aae_mantle.c)
+SOURCES += source/aae_mantle.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -182,6 +186,13 @@ tests/test_lua_unref: tests/test_lua_unref.c source/lua_unref.c source/lua_unref
 # pmem_spill.c against a made-up PMem: stacks, address spaces and the game's own allocation
 tests/test_pmem_spill: tests/test_pmem_spill.c source/pmem_spill.c source/pmem_spill.h source/offsets.h source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_pmem_spill.c
+
+# aae_mantle.c: the mod's traversal rules, and its hooks against a made-up scan, dvars and per-mode dvar. Undefined
+# behaviour stops the test: a division by zero is a crash in the game (x86_64) and nothing at all on an Apple CPU
+tests/test_aae_mantle: tests/test_aae_mantle.c source/aae_mantle.c source/aae_mantle.h source/gsc_obj.c \
+		source/gsc_obj.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_mantle.c source/gsc_obj.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

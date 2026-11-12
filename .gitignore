@@ -49,3 +49,4 @@ tests/test_font_resolution
 tests/test_lua_heap
 tests/test_lua_unref
 tests/test_pmem_spill
+tests/test_aae_mantle

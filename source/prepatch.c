@@ -77,6 +77,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_FontCache_Allocate, Push_R15 },
     { ADDR_FontCache_GetGlyph, Push_R15 },
     { ADDR_FT_Outline_Render, Push_R15 },
+    { ADDR_GameTypeSettings_GetFloat, Push_R15 },
     { ADDR_GPad_GetGamepadType, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xC7 } }, // ...; movsxd rax, edi
     { ADDR_GScr_IsProfileBuild, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xF6 } }, // ...; xor esi, esi
     { ADDR_HKAI_InitMapData, Push_R15 },
@@ -91,6 +92,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Lua_GetBuildIntField, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
     { ADDR_Lua_GetBuildStringField, Push_R14 },
     { ADDR_Lua_HeapCreate, Push_R14 },
+    { ADDR_PM_PlayerTrace, Push_R15 },
     { ADDR_PMem_Alloc, Push_R15 },
     { ADDR_R_CheckVidRestart, Push_R15 },
     { ADDR_R_SetWndParms, Push_R15 },
@@ -106,6 +108,10 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Storage_Request, Push_R15 },
     { ADDR_Sys_CheckSumPacketCopy, 10, 0, { 0x66, 0xB8, 0xFF, 0xFF, 0x81, 0xFA, 0xE8, 0x04, 0x00, 0x00 } }, // mov ax, 0xFFFF; cmp edx, 0x4E8
     { ADDR_Sys_VerifyPacketChecksum, Push_R15 },
+    { ADDR_TRM_CanStart, Push_R15 },
+    { ADDR_TRM_Init, Push_R15 },
+    { ADDR_TRM_Scan, Push_R15 },
+    { ADDR_TRM_Type, 9, 0, { 0x55, 0x48, 0x89, 0xE5, 0xF3, 0x0F, 0x5C, 0x4F, 0x38 } }, // ...; subss xmm1, [rdi+0x38]
 };
 
 // a "mov r32, imm32" that a setting changes, with the flags dead after it (its stub tests the slot)

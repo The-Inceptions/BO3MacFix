@@ -112,6 +112,14 @@
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
+// traversal, the way over obstacles from multiplayer and the campaign (aae_mantle.c) - names are guesses
+#define ADDR_TRM_CanStart 0x14c4f60 // func - bool (pmove_t *, pml_t *)
+#define ADDR_TRM_Init 0x14c5a9e // func - void (alloc function): makes the traversal animations ("PLAYER_TRM") at a map's start, if trm_enabled
+#define ADDR_TRM_Scan 0x14c3d7e // func - bool (pmove_t *, pml_t *, vec3 *ledge, vec3 *normal)
+#define ADDR_TRM_Type 0x14c50bc // func - int (playerState_s *, vec3 ledge by value)
+#define ADDR_PM_PlayerTrace 0x113b850 // func - void (pmove_t *, trace_t *, start, mins, maxs, end, passEntityNum, contentMask)
+#define ADDR_GameTypeSettings_GetFloat 0xd973da // func - float (const char *name, bool)
+
 // the player's storage files: stats, loadouts and settings, on disk and online (display_testhooks.m) - names are guesses
 #define ADDR_Storage_Request 0x1102f5f // func - bool (controller, op: 0 read, 1 write, file, slot): asks for one of them to be read or written
 #define ADDR_Storage_Files 0x47fa680 // per controller (0x8558 bytes apart) 64 entries of 0x210 bytes, { descriptor *, int slot, buffer, ... }; a descriptor has the file's id at +0, its name at +8, its size at +0x18 and where it's kept at +0x20: 0 hdd, 1 dwuser (online), 2 memory, 3 fastfile
