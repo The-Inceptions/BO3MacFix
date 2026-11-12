@@ -2,13 +2,16 @@
 //
 // In the copy BO3MacFix_BuildPrepatched writes:
 // - BO3MacFix's byte patches are already applied
-// - every hooked function starts with a jump to a stub in __TEXT's tail padding:
+// - every hooked function starts with a jump to a stub in __TEXT's padding:
 //       cmp qword [rip+slot], 0 ; je trampoline ; jmp [rip+slot]
 //       trampoline: <the instructions the jump replaced> ; jmp <function + their length>
 //   so hooking it only means storing a pointer in its slot, in __DATA's zero-filled tail
 // - each "mov r32, imm32" a setting changes jumps to a stub that loads the value from a slot when it's set
 // - each call through objc_msgSend's pointer a setting redirects calls a stub that jumps through a slot when it's set
-// - a header at the start of the padding lists all of it, with the original bytes
+// - a header at the start of the padding after __TEXT's last section lists all of it, with the original bytes
+// The stubs follow the header. That padding is 3968 bytes, and a hook takes 64 of them (32 in the header, 32 for its
+// stub), so the stubs that don't fit there go into __TEXT's other padding: the 2 KB between the Mach-O header's load
+// commands and the first section, which is mapped and executable like the rest of the segment.
 // With every slot left at 0 the copy runs exactly like the original.
 #include <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
@@ -34,7 +37,8 @@
 #define Prepatch_Magic "BO3MFPP1"
 // table_id only covers the tables below, so bump this whenever BO3MacFix_BuildPrepatched writes anything differently
 // (the stubs, the header or the records): a copy with the same version and table_id counts as up to date
-#define Prepatch_Version 2
+#define Prepatch_Version 3
+#define Stub_Max 48 // more than any stub takes: a hook's is 16 bytes, its instructions (10 at most, 14 with a short jump made near) and a 5-byte jmp
 #define Game_Base 0x100000000ULL
 
 #pragma mark - what goes into the copy
@@ -475,6 +479,9 @@ void prepatch_report_at_quit(void) {
 typedef struct {
     uint8_t *data;              // the copy
     size_t size;
+    uint32_t code;              // where the next stub goes
+    bool second_area;           // ... which is in the padding before __text by now
+    uint32_t first_area_used;
     uint32_t claimed[256][2];   // ranges already changed, to catch overlaps
     int claimed_count;
     uint8_t records[4096];      // the byte patch records
@@ -545,6 +552,25 @@ static void put_rel32(uint8_t *at, uint64_t target, uint64_t next) {
     memcpy(at, &rel, sizeof(rel));
 }
 
+static uint32_t first_area_end = ADDR_Prepatch_CodeEnd; // a variable for the tests, which fill it sooner
+
+// where the next stub goes, 0 when there's no room left: after the header's records, then in the padding before __text
+static uint32_t stub_room(build_t *b) {
+    if (!b->second_area && b->code + Stub_Max > first_area_end) {
+        b->first_area_used = b->code - ADDR_Prepatch_Header;
+        b->second_area = true;
+        b->code = ADDR_Prepatch_Stubs2;
+    }
+    if (b->second_area && b->code + Stub_Max > ADDR_Prepatch_Stubs2End)
+        return 0;
+    return b->code;
+}
+
+static uint32_t no_stub_room(build_t *b) {
+    fail(b->message, b->message_size, "out of room for the stubs");
+    return 0;
+}
+
 // checks that the padding and slots BO3MacFix uses are where it expects in this executable
 static int check_layout(build_t *b) {
     const struct mach_header_64 *mh = (const struct mach_header_64 *)b->data;
@@ -552,6 +578,7 @@ static int check_layout(build_t *b) {
         sizeof(*mh) + mh->sizeofcmds > b->size)
         return fail(b->message, b->message_size, "it isn't the x86_64 game executable");
     uint64_t text_file_end = 0, text_sections_end = 0, data_start = 0, data_end = 0, data_sections_end = 0;
+    uint64_t text_sections_start = UINT64_MAX;
     uint64_t data_fileoff = 0, data_filesize = 0;
     const uint8_t *p = b->data + sizeof(*mh);
     for (uint32_t i = 0; i < mh->ncmds; i++) {
@@ -566,14 +593,17 @@ static int check_layout(build_t *b) {
                 return fail(b->message, b->message_size, "its load commands are damaged");
             if (seg->fileoff > b->size || seg->filesize > b->size - seg->fileoff)
                 return fail(b->message, b->message_size, "it's shorter than its load commands say (%zu bytes)", b->size);
-            uint64_t sections_end = 0;
+            uint64_t sections_start = UINT64_MAX, sections_end = 0;
             for (uint32_t s = 0; s < seg->nsects; s++) {
                 if (sections[s].addr + sections[s].size > sections_end)
                     sections_end = sections[s].addr + sections[s].size;
+                if (sections[s].addr < sections_start)
+                    sections_start = sections[s].addr;
             }
             if (strcmp(seg->segname, "__TEXT") == 0 && seg->vmaddr == Game_Base && seg->fileoff == 0) {
                 text_file_end = seg->filesize;
                 text_sections_end = sections_end - Game_Base;
+                text_sections_start = sections_start - Game_Base;
             } else if (strcmp(seg->segname, "__DATA") == 0) {
                 data_start = seg->vmaddr - Game_Base;
                 data_end = data_start + seg->vmsize;
@@ -591,6 +621,13 @@ static int check_layout(build_t *b) {
     for (uint32_t o = ADDR_Prepatch_Header; o < ADDR_Prepatch_CodeEnd; o++) {
         if (b->data[o] != 0)
             return fail(b->message, b->message_size, "the padding after its code isn't empty");
+    }
+    // the padding before __text: behind the load commands, with room left for one more of them, and before any section
+    if (sizeof(*mh) + mh->sizeofcmds > ADDR_Prepatch_Stubs2 || text_sections_start < ADDR_Prepatch_Stubs2End)
+        return fail(b->message, b->message_size, "it doesn't have room where this BO3MacFix expects it");
+    for (uint32_t o = ADDR_Prepatch_Stubs2; o < ADDR_Prepatch_Stubs2End; o++) {
+        if (b->data[o] != 0)
+            return fail(b->message, b->message_size, "the padding before its code isn't empty");
     }
     // an unset slot has to read as 0: past __DATA's file-backed part it's zero-filled when loaded, inside it the file
     // must hold zeros there
@@ -779,14 +816,24 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
     h.calls_offset = h.values_offset + sizeof(value_records);
     h.patches_offset = h.calls_offset + sizeof(call_records);
     uint32_t header_end = h.patches_offset + (uint32_t)b->records_size;
-    uint32_t code = (header_end + 15) & ~15u, slot = ADDR_Prepatch_Slots;
+    uint32_t slot = ADDR_Prepatch_Slots;
+    b->code = (header_end + 15) & ~15u;
+    if (header_end > first_area_end) {
+        no_stub_room(b);
+        goto done;
+    }
     if (claim(b, ADDR_Prepatch_Header, header_end - ADDR_Prepatch_Header, "the header") != 0)
         goto done;
 
     for (size_t i = 0; i < hook_count; i++) {
         const hook_def_t *def = &hook_defs[i];
-        uint32_t f = def->function, tramp = code + 16;
-        if (f + 16 > ADDR_Prepatch_Header || memcmp(b->data + f, def->stolen, def->length) != 0 || def->length < 5) {
+        uint32_t f = def->function, code = stub_room(b), tramp = code + 16;
+        if (code == 0) {
+            no_stub_room(b);
+            goto done;
+        }
+        if (f + 16 > ADDR_Prepatch_Header || f < ADDR_Prepatch_Stubs2End || memcmp(b->data + f, def->stolen, def->length) != 0 ||
+            def->length < 5) {
             fail(message, message_size, "unexpected code at %08x", f);
             goto done;
         }
@@ -821,13 +868,17 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         memcpy(hook_records[i].original, def->stolen, def->length);
         memcpy(hook_records[i].original + def->length, b->data + f + def->length, 16 - def->length);
         slot += 8;
-        code = (code + (uint32_t)n + 15) & ~15u;
+        b->code = (code + (uint32_t)n + 15) & ~15u;
     }
 
     for (size_t i = 0; i < value_count; i++) {
         const value_def_t *def = &value_defs[i];
-        uint32_t site = def->site;
+        uint32_t site = def->site, code = stub_room(b);
         uint8_t reg = def->original[0] - 0xB8;
+        if (code == 0) {
+            no_stub_room(b);
+            goto done;
+        }
         if (site + 5 > ADDR_Prepatch_Header || memcmp(b->data + site, def->original, 5) != 0 || def->original[0] < 0xB8 ||
             def->original[0] > 0xBF) {
             fail(message, message_size, "unexpected code at %08x", site);
@@ -850,12 +901,16 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         value_records[i] = (prepatch_site_t){ .site = site, .slot = slot, .length = 5 };
         memcpy(value_records[i].original, def->original, 5);
         slot += 8;
-        code = (code + (uint32_t)n + 15) & ~15u;
+        b->code = (code + (uint32_t)n + 15) & ~15u;
     }
 
     for (size_t i = 0; i < call_count; i++) {
         const call_def_t *def = &call_defs[i];
-        uint32_t site = def->site;
+        uint32_t site = def->site, code = stub_room(b);
+        if (code == 0) {
+            no_stub_room(b);
+            goto done;
+        }
         if (site + 6 > ADDR_Prepatch_Header || memcmp(b->data + site, def->original, 6) != 0) {
             fail(message, message_size, "unexpected code at %08x", site);
             goto done;
@@ -882,11 +937,11 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         call_records[i] = (prepatch_site_t){ .site = site, .slot = slot, .length = 6 };
         memcpy(call_records[i].original, def->original, 6);
         slot += 8;
-        code = (code + (uint32_t)n + 15) & ~15u;
+        b->code = (code + (uint32_t)n + 15) & ~15u;
     }
 
-    if (code > ADDR_Prepatch_CodeEnd || slot > ADDR_Prepatch_SlotsEnd) {
-        fail(message, message_size, "out of room for the stubs");
+    if (slot > ADDR_Prepatch_SlotsEnd) {
+        fail(message, message_size, "out of room for the slots");
         goto done;
     }
     memcpy(b->data + ADDR_Prepatch_Header, &h, sizeof(h));
@@ -913,9 +968,10 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         fail(message, message_size, "couldn't write %s", output);
         goto done;
     }
+    uint32_t used = b->second_area ? b->first_area_used + (b->code - ADDR_Prepatch_Stubs2) : b->code - ADDR_Prepatch_Header;
     snprintf(message, message_size, "made the pre-patched executable: %zu hooks, %zu settings, %zu calls, %u byte "
-             "patches, %u of %u bytes of padding used", hook_count, value_count, call_count, b->patch_count,
-             code - ADDR_Prepatch_Header, ADDR_Prepatch_CodeEnd - ADDR_Prepatch_Header);
+             "patches, %u of %u bytes of padding used", hook_count, value_count, call_count, b->patch_count, used,
+             (first_area_end - ADDR_Prepatch_Header) + (ADDR_Prepatch_Stubs2End - ADDR_Prepatch_Stubs2));
     result = 0;
 done:
     free(b->data);

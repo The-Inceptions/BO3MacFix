@@ -106,6 +106,8 @@
 #define ADDR_cgViewWeaponStates 0x159df5e8 // pointer to 0x3a0 bytes per local client: the weapAnim each hand last started, uint16_t at +0x36c (hand 0) and +0x374 (hand 1) - name is a guess
 #define ADDR_Prepatch_Header 0x1964080 // pre-patched executable: header and stubs, in __TEXT's padding after __eh_frame
 #define ADDR_Prepatch_CodeEnd 0x1965000 // end of that padding
+#define ADDR_Prepatch_Stubs2 0x1900 // pre-patched executable: the stubs that don't fit there, in the padding between the Mach-O header's load commands (they end at 0x17f8) and __text
+#define ADDR_Prepatch_Stubs2End 0x2100 // where __text starts
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 

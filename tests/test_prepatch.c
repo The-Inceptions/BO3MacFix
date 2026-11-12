@@ -35,7 +35,8 @@ int DobbyCodePatch(void *address, uint8_t *buffer, uint32_t buffer_size) {
 #define Netver_At 3 // where the network version is after each of its addresses (patch_near searches 16 bytes)
 #define Tuver_At 2
 
-// the game's layout: __TEXT with its padding after the last section, __DATA whose zero-fill tail holds the slots
+// the game's layout: __TEXT with padding before its first section and after its last, __DATA whose zero-fill tail holds
+// the slots
 static uint8_t *make_original(void) {
     uint8_t *data = calloc(1, File_Size);
     struct mach_header_64 *mh = (struct mach_header_64 *)data;
@@ -51,8 +52,10 @@ static uint8_t *make_original(void) {
                                          .fileoff = 0, .filesize = ADDR_Prepatch_CodeEnd, .maxprot = 5, .initprot = 5,
                                          .nsects = 1 };
     struct section_64 *text_section = (struct section_64 *)(text + 1);
-    *text_section = (struct section_64){ .sectname = "__text", .segname = "__TEXT", .addr = Game_Base + 0x1000,
-                                         .size = ADDR_Prepatch_Header - 0x1000, .offset = 0x1000 };
+    *text_section = (struct section_64){ .sectname = "__text", .segname = "__TEXT",
+                                         .addr = Game_Base + ADDR_Prepatch_Stubs2End,
+                                         .size = ADDR_Prepatch_Header - ADDR_Prepatch_Stubs2End,
+                                         .offset = ADDR_Prepatch_Stubs2End };
     struct segment_command_64 *seg = (struct segment_command_64 *)(text_section + 1);
     *seg = (struct segment_command_64){ .cmd = LC_SEGMENT_64, .cmdsize = sizeof(*seg) + sizeof(struct section_64),
                                         .segname = "__DATA", .vmaddr = Game_Base + ADDR_Prepatch_CodeEnd,
@@ -104,9 +107,20 @@ static int32_t rel32(const uint8_t *at) {
     return value;
 }
 
+static int stubs_before_code; // how many of the last copy's stubs are in the padding before __text
+
+static bool in_padding(uint32_t stub) {
+    if (stub >= ADDR_Prepatch_Stubs2 && stub + Stub_Max <= ADDR_Prepatch_Stubs2End) {
+        stubs_before_code++;
+        return true;
+    }
+    return stub >= ADDR_Prepatch_Header && stub + Stub_Max <= first_area_end;
+}
+
 // the copy's stubs, read back as the CPU would follow them
 static void check_stubs(const uint8_t *copy) {
     uint32_t slot = ADDR_Prepatch_Slots;
+    stubs_before_code = 0;
     for (size_t i = 0; i < sizeof(hook_defs) / sizeof(hook_defs[0]); i++, slot += 8) {
         const hook_def_t *def = &hook_defs[i];
         const uint8_t *entry = copy + def->function;
@@ -114,8 +128,7 @@ static void check_stubs(const uint8_t *copy) {
         for (int n = 5; n < def->length; n++)
             CHECK(entry[n] == 0x90, "hook %08x: byte %i after the jmp isn't a nop", def->function, n);
         uint32_t stub = def->function + 5 + rel32(entry + 1);
-        CHECK(stub >= ADDR_Prepatch_Header && stub + 32 <= ADDR_Prepatch_CodeEnd, "hook %08x: stub %08x isn't in the padding",
-              def->function, stub);
+        CHECK(in_padding(stub), "hook %08x: stub %08x isn't in the padding", def->function, stub);
         const uint8_t *s = copy + stub;
         CHECK(s[0] == 0x48 && s[1] == 0x83 && s[2] == 0x3D && s[7] == 0x00, "hook %08x: no cmp qword [rip+x], 0", def->function);
         CHECK(stub + 8 + rel32(s + 3) == slot, "hook %08x: cmp reads %08x, not its slot %08x", def->function,
@@ -151,6 +164,7 @@ static void check_stubs(const uint8_t *copy) {
         CHECK(site[0] == 0xE9, "setting %08x isn't a jmp", def->site);
         uint32_t stub = def->site + 5 + rel32(site + 1);
         const uint8_t *s = copy + stub;
+        CHECK(in_padding(stub), "setting %08x: stub %08x isn't in the padding", def->site, stub);
         CHECK(s[0] == 0x8B && s[1] == (0x05 | reg << 3) && stub + 6 + rel32(s + 2) == slot,
               "setting %08x: no mov r32, [slot]", def->site);
         CHECK(s[6] == 0x85 && s[7] == (0xC0 | reg << 3 | reg) && s[8] == 0x75 && s[9] == 0x05,
@@ -164,6 +178,7 @@ static void check_stubs(const uint8_t *copy) {
         CHECK(site[0] == 0xE8 && site[5] == 0x90, "call %08x isn't call stub; nop", def->site);
         uint32_t stub = def->site + 5 + rel32(site + 1);
         const uint8_t *s = copy + stub;
+        CHECK(in_padding(stub), "call %08x: stub %08x isn't in the padding", def->site, stub);
         CHECK(s[0] == 0x48 && s[1] == 0x83 && s[2] == 0x3D && stub + 8 + rel32(s + 3) == slot && s[8] == 0x74 &&
                   s[9] == 0x06 && s[10] == 0xFF && s[11] == 0x25 && stub + 16 + rel32(s + 12) == slot,
               "call %08x: no cmp/je/jmp [slot]", def->site);
@@ -212,7 +227,7 @@ static void check_runtime(uint8_t *image, const uint8_t *original) {
         CHECK(memcmp(prepatch_original_code(image + patch_defs[i].offset, patch_defs[i].length), patch_defs[i].original,
                      patch_defs[i].length) == 0, "original code of byte patch %08x", patch_defs[i].offset);
     uint8_t untouched[8] = { 0 };
-    CHECK(prepatch_original_code(image + 0x2000, 8) == image + 0x2000 && memcmp(image + 0x2000, untouched, 8) == 0,
+    CHECK(prepatch_original_code(image + 0x2800, 8) == image + 0x2800 && memcmp(image + 0x2800, untouched, 8) == 0,
           "unchanged code isn't returned as it is");
 
     // hooks only set their slot, and the original is the trampoline
@@ -322,6 +337,37 @@ int main(void) {
         }
     }
 
+    CHECK(stubs_before_code == 0, "%i stubs before the code, with room after it", stubs_before_code);
+
+    // with little room after the code, the stubs that don't fit go before it, and everything works the same
+    uint32_t whole_first_area = first_area_end;
+    first_area_end = ADDR_Prepatch_Header + ((prepatch_header_t *)(copy + ADDR_Prepatch_Header))->patches_offset -
+                     ADDR_Prepatch_Header + 0x400;
+    first_area_end = (first_area_end + 15) & ~15u;
+    CHECK(BO3MacFix_BuildPrepatched(original_path, other_path, message, sizeof(message)) == 0, "build: \"%s\"", message);
+    printf("%s\n", message);
+    size_t split_size = 0;
+    uint8_t *split = read_file(other_path, &split_size);
+    CHECK(split != NULL && split_size == File_Size, "the copy with stubs in both places is %zu bytes", split_size);
+    if (split != NULL) {
+        check_stubs(split);
+        CHECK(stubs_before_code > 20, "%i stubs before the code", stubs_before_code);
+        for (uint32_t o = first_area_end; o < whole_first_area; o++)
+            CHECK(split[o] == 0, "a stub past the room it was given, at %08x", o);
+        uint8_t *image = map_image(split);
+        if (image != NULL) {
+            dobby_hooks = dobby_patches = 0;
+            check_runtime(image, original);
+            munmap(image, ADDR_Prepatch_SlotsEnd);
+        }
+        free(split);
+    }
+    unlink(other_path);
+    // no room for the header's own records
+    first_area_end = ADDR_Prepatch_Header + 0x100;
+    expect_failure("no room", original_path, other_path, "out of room");
+    first_area_end = whole_first_area;
+
     // a game update: the copy no longer matches the original
     original[0x5000] ^= 1;
     write_file(original_path, original, File_Size);
@@ -379,6 +425,15 @@ int main(void) {
     write_file(other_path, original, File_Size);
     expect_failure("padding in use", other_path, copy_path, "isn't empty");
     original[ADDR_Prepatch_Header + 0x100] = 0;
+    original[ADDR_Prepatch_Stubs2End - 1] = 1;
+    write_file(other_path, original, File_Size);
+    expect_failure("padding before the code in use", other_path, copy_path, "isn't empty");
+    original[ADDR_Prepatch_Stubs2End - 1] = 0;
+    // an executable with more load commands, which reach into where the stubs would go
+    ((struct mach_header_64 *)original)->sizeofcmds += ADDR_Prepatch_Stubs2;
+    write_file(other_path, original, File_Size);
+    expect_failure("longer load commands", other_path, copy_path, "doesn't have room");
+    ((struct mach_header_64 *)original)->sizeofcmds -= ADDR_Prepatch_Stubs2;
     write_file(other_path, original, ADDR_Prepatch_Header - 0x100000);
     expect_failure("cut off in __TEXT", other_path, copy_path, "shorter");
     write_file(other_path, original, File_Size - 0x10);
