@@ -208,8 +208,9 @@ tests/test_detour: tests/test_detour.c source/detour.h
 	$(CLANG) -arch x86_64 -std=gnu11 -O1 -g -Wall -Wextra -Werror -o $@ tests/test_detour.c
 
 # aae_prompt.c and aae_plugin.c: the handlers against a made-up prompt element and made-up models
-tests/test_aae_prompt: tests/test_aae_prompt.c source/aae_prompt.c source/aae_prompt.h source/aae_plugin.c \
-		source/aae_plugin.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
+tests/test_aae_prompt: tests/test_aae_prompt.c tests/prompt_glide_frames.h source/aae_prompt.c source/aae_prompt.h \
+		source/aae_plugin.c source/aae_plugin.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h \
+		source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_prompt.c
 

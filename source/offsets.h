@@ -120,6 +120,8 @@
 #define ADDR_Prompt_NotFarTest 0x1305344 // the same before "isFarAway" is cleared (Windows 0x14274de81)
 #define ADDR_Prompt_NotFarTest_Yes 0x1305352
 #define ADDR_Prompt_NoObjective 0x1305337 // "cmp dword [rbx + 0x154], -2 ; je": a prompt (its UI element in rbx) without an objective skips the rest (Windows 0x14274de6f, element in rdi)
+#define ADDR_Prompt_Placed 0x1304895 // "movups xmm0, [r14 + 0x34]" in the placing code: the prompt (element r14) has its place on the screen (two floats at rbp - 0x70) and its rectangle is about to be written; the time for moves is in xmm7, the frame's ms in r15d, the screen's width over its height at rbp - 0x54 (Windows 0x14275e372)
+#define ADDR_Prompt_NotPlaced 0x1304789 // "movss xmm5, [rbp - 0x54]": the other branch, the prompt is kept at a fixed place of the screen (Windows 0x14275e3b8)
 #define ADDR_Prompt_IsFarAwayText 0x1742145 // "isFarAway"
 #define ADDR_UIModel_Child 0x10365c3 // func - uint16_t (uint16_t model, const char *name): the model's child of that name, made if it isn't there (0x1036418 doesn't make it)
 #define ADDR_UIModel_SetBool 0x1036a60 // func - bool (uint16_t model, bool value): whether that changed it
