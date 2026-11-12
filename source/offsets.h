@@ -112,6 +112,10 @@
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
+// the player's storage files: stats, loadouts and settings, on disk and online (display_testhooks.m) - names are guesses
+#define ADDR_Storage_Request 0x1102f5f // func - bool (controller, op: 0 read, 1 write, file, slot): asks for one of them to be read or written
+#define ADDR_Storage_Files 0x47fa680 // per controller (0x8558 bytes apart) 64 entries of 0x210 bytes, { descriptor *, int slot, buffer, ... }; a descriptor has the file's id at +0, its name at +8, its size at +0x18 and where it's kept at +0x20: 0 hdd, 1 dwuser (online), 2 memory, 3 fastfile
+
 // the game's memory for what it loads (pmem_spill.c)
 #define ADDR_PMem_Alloc 0xd32be1 // func - void *(size, alignment, type of address space 0-4, stack 0-10, tag)
 #define ADDR_PMem_Stacks 0x2522a18 // 11 stacks of 0xf68 bytes: the fill of their 5 address spaces at +0x10, the pools' pointers at +0xf40

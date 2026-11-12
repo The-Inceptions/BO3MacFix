@@ -32,6 +32,9 @@
 //                                    notices' poll (notices.lua), so within a quarter of a second, and only while that
 //                                    runs.
 // They arrive on the main queue, which Aspyr's main thread runs while it pumps events.
+//
+// And one thing that needs no notification: a game with these hooks on doesn't write the player's online storage
+// files (stats and loadouts), see Storage_Request.
 #import <AppKit/AppKit.h>
 #include <notify.h>
 #include <stdatomic.h>
@@ -39,6 +42,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "controllers.h"
+#include "dobby.h"
 #include "display_follow.h"
 #include "display_testhooks.h"
 #include "gc_bridge.h"
@@ -90,8 +94,41 @@ static void keep_game_in_front(void) {
         *(void *volatile *)(base_address + ADDR_SDL_KeyboardFocus) = window;
 }
 
+// Storage_Request(controller, op, file, slot): the game asks for one of a player's storage files to be read (op 0)
+// or written (1). A test run doesn't write the online ones (the target "dwuser": Demonware's copies of the player's
+// stats and loadouts). They aren't a test's to change, and a game started with a mod on its command line that stays
+// in the menus uploads loadouts_mp again whenever an upload of it has finished, about three times a second.
+#define Storage_Write 1
+#define Storage_Target_Online 1 // of 0 hdd, 1 dwuser, 2 memory, 3 fastfile
+#define Storage_Controllers 2
+#define Storage_Controller_Size 0x8558
+#define Storage_Files 0x40 // a controller's entries
+#define Storage_Entry_Size 0x210
+#define Storage_Descriptor_Name 8
+#define Storage_Descriptor_Target 0x20
+install_hook_name(Storage_Request, uint64_t, int controller, int op, int file, int slot) {
+    if (op == Storage_Write && controller >= 0 && controller < Storage_Controllers) {
+        const uint8_t *entry = (const uint8_t *)(base_address + ADDR_Storage_Files) +
+                               (uint64_t)controller * Storage_Controller_Size;
+        for (int i = 0; i < Storage_Files; i++, entry += Storage_Entry_Size) {
+            const uint8_t *descriptor = *(const uint8_t *const *)entry;
+            if (descriptor == NULL || *(const int32_t *)descriptor != file || *(const int32_t *)(entry + 8) != slot)
+                continue;
+            if (*(const int32_t *)(descriptor + Storage_Descriptor_Target) != Storage_Target_Online)
+                break;
+            static int said = 0;
+            if (said++ < 4)
+                printf("display tests: not writing the online file '%s' (a test run writes none)\n",
+                       *(const char *const *)(descriptor + Storage_Descriptor_Name));
+            return 0;
+        }
+    }
+    return orig_Storage_Request(controller, op, file, slot);
+}
+
 void display_testhooks_init(uint64_t game_base_address) {
     base_address = game_base_address;
+    install_hook_Storage_Request((void *)(game_base_address + ADDR_Storage_Request));
     Cbuf_AddText = (void *)(game_base_address + ADDR_Cbuf_AddText);
     ChatClient_Send = (void *)(game_base_address + ADDR_ChatClient_Send);
     hksi_luaL_unref = (void *)(game_base_address + ADDR_hksi_luaL_unref);
