@@ -112,6 +112,10 @@
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
+// the crosshair (aae_freeaim.c) - names are guesses
+#define ADDR_CG_DrawCrosshairTest 0xd54e99 // func - bool (cg_t *, playerState_s *): whether a crosshair is drawn at all; no while the view is third person (cg + 0x11a8c9), unless the weapon has flag 0x4000 (Windows 0x1406e9c90)
+#define ADDR_CG_DrawCrosshair_TestReturn 0xd54fac // where the crosshair function (it starts at 0xd54f45, (int localClientNum)) goes on after asking that (Windows 0x1406d062f)
+
 // the campaign's prompts in the world, which All-around Enhancement 4 uses in zombies (aae_prompt.c) - names are guesses
 #define ADDR_Prompt_NearTest 0x1304343 // "mov edi, 2 ; call Com_SessionMode_IsMode ; test al, al ; je" in the code that places a prompt on the screen: only the campaign keeps a prompt's "nearTo" model (Windows: the call at 0x14275a7ae)
 #define ADDR_Prompt_NearTest_Yes 0x1304355 // where that goes on after a yes

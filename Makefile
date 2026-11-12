@@ -30,6 +30,8 @@ TEST_TARGETS += tests/test_weapon_anim
 TEST_TARGETS += tests/test_detour
 # All-around Enhancement's prompts in the world (aae_prompt.c) and the test for its plugin (aae_plugin.c)
 TEST_TARGETS += tests/test_aae_prompt
+# when the mod's free aim is on, and the crosshair test's hook (aae_freeaim.c)
+TEST_TARGETS += tests/test_aae_freeaim
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -93,6 +95,8 @@ SOURCES += source/aae_mantle.c
 SOURCES += source/aae_plugin.c
 # AAEPrompts: the mod's prompts in the world, kept by distance as the plugin makes the game keep them (aae_prompt.c)
 SOURCES += source/aae_prompt.c
+# AAEFreeAim: a crosshair in the mod's third person view (aae_freeaim.c)
+SOURCES += source/aae_freeaim.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -213,6 +217,13 @@ tests/test_aae_prompt: tests/test_aae_prompt.c tests/prompt_glide_frames.h sourc
 		source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_prompt.c
+
+# aae_freeaim.c: the plugin's rule for free aim being on, and the crosshair test's hook against a made-up game
+tests/test_aae_freeaim: tests/test_aae_freeaim.c source/aae_freeaim.c source/aae_freeaim.h source/aae_plugin.c \
+		source/aae_plugin.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h source/prepatch.h \
+		source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_freeaim.c source/gsc_obj.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

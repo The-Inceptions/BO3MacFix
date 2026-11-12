@@ -63,6 +63,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_ASL_Window_UpdateLetterbox, Push_R14 },
     { ADDR_ASL_XInputGetState, Push_R14 },
     { ADDR_ASL_XInputSetState, Push_R14 },
+    { ADDR_CG_DrawCrosshairTest, Push_R15 },
     { ADDR_CG_DrawMantleHint, Push_R15 },
     { ADDR_CG_UpdateViewWeaponAnim, Push_R15 },
     { ADDR_CheatsOk, Push_R14 },
