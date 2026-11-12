@@ -36,6 +36,7 @@
 #define ADDR_hksi_luaL_checklstring 0x1473440 // func
 #define ADDR_hksi_hksL_loadbuffer 0x1474566 // func
 #define ADDR_hksi_lua_pcall 0x14465f9 // func
+#define ADDR_hksi_luaL_unref 0x1445693 // func - void (lua_State *, int index, int ref); 0x147488a jumps to it
 #define ADDR_hks_pushnamedcclosure 0x1476385 // func
 #define ADDR_R_TrackTextureMemory 0x126dad2 // func - name is a guess
 #define ADDR_ASL_SleepEx 0x111752 // func - Aspyr's Sleep/SleepEx(milliseconds, alertable)

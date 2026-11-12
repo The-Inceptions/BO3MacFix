@@ -17,9 +17,11 @@
 //                                    send function, so mods that watch the chat (All-around Enhancement's /dep, /bal
 //                                    and /save) see it as typed. Sent on the game's next client frame: that function
 //                                    needs the game thread (its va() buffers), and crashes on Aspyr's main thread.
-//   com.bo3macfix.test.lua           runs that file's text as Lua in the UI's Lua VM, with one argument: a function
-//                                    that writes its string to the log as "test lua: ...". Run from the notices' poll
-//                                    (notices.lua), so within a quarter of a second, and only while that runs.
+//   com.bo3macfix.test.lua           runs that file's text as Lua in the UI's Lua VM, with two arguments: a function
+//                                    that writes its string to the log as "test lua: ...", and one that releases the
+//                                    registry reference with its number through the game's luaL_unref. Run from the
+//                                    notices' poll (notices.lua), so within a quarter of a second, and only while that
+//                                    runs.
 // They arrive on the main queue, which Aspyr's main thread runs while it pumps events.
 #import <AppKit/AppKit.h>
 #include <notify.h>
@@ -37,6 +39,7 @@
 
 static void (*Cbuf_AddText)(int localClientNum, const char *text);
 static void (*ChatClient_Send)(int localClientNum, const char *text, int channel);
+static void (*hksi_luaL_unref)(lua_State *s, int index, int ref);
 // a chat message for the game thread to send; the main thread fills it in while chat_pending is false
 static char pending_chat[256];
 static atomic_bool chat_pending;
@@ -70,6 +73,7 @@ static bool read_test_text(char *text, size_t size) {
 void display_testhooks_init(uint64_t game_base_address) {
     Cbuf_AddText = (void *)(game_base_address + ADDR_Cbuf_AddText);
     ChatClient_Send = (void *)(game_base_address + ADDR_ChatClient_Send);
+    hksi_luaL_unref = (void *)(game_base_address + ADDR_hksi_luaL_unref);
     on_notification("com.bo3macfix.test.state", ^(int token) {
         display_follow_print_state("test");
     });
@@ -180,6 +184,17 @@ static int lua_test_log(lua_State *s) {
     return 0;
 }
 
+#define Lua_Registry (-10000)
+
+static int lua_test_unref(lua_State *s) {
+    float ref = -1;
+    if (hks_number_arg(s, 1, &ref) && hksi_luaL_unref != NULL) {
+        printf("test lua: releasing reference %d\n", (int)ref);
+        hksi_luaL_unref(s, Lua_Registry, (int)ref);
+    }
+    return 0;
+}
+
 // from the UI's Lua VM, on every poll of the notices: runs the chunk com.bo3macfix.test.lua queued
 void display_testhooks_lua(lua_State *s) {
     if (!atomic_load_explicit(&lua_pending, memory_order_acquire))
@@ -187,7 +202,8 @@ void display_testhooks_lua(lua_State *s) {
     printf("display tests: lua, %zu bytes\n", strlen(pending_lua));
     if (hks_load_source(s, pending_lua, strlen(pending_lua), "=test")) {
         hks_push_cfunction(s, lua_test_log, "TestLog");
-        hks_pcall(s, 1, 0);
+        hks_push_cfunction(s, lua_test_unref, "TestUnref");
+        hks_pcall(s, 2, 0);
     }
     atomic_store_explicit(&lua_pending, false, memory_order_release);
 }

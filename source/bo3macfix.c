@@ -29,6 +29,7 @@
 #include "script_vars.h"
 #include "font_resolution.h"
 #include "lua_heap.h"
+#include "lua_unref.h"
 #include "bo3macnative.h"
 #include "codhavoktypes.h"
 #include "cpu_tuning.h"
@@ -1176,6 +1177,9 @@ __attribute__((constructor)) static void dylib_main() {
     // the UI's Lua VM gets up to 24 MB more when its 60 MB are full, as All-around Enhancement's Windows plugin gives
     // it (LuaHeapGrowth, on by default), see lua_heap.c
     lua_heap_init(game_base_address, read_int_setting_or_env("LuaHeapGrowth", 1));
+    // releasing Lua reference 0 does nothing instead of writing 64 GB behind the table (LuaUnrefFix, on by default),
+    // see lua_unref.c
+    lua_unref_init(game_base_address, read_int_setting_or_env("LuaUnrefFix", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);
