@@ -19,3 +19,12 @@ uint32_t aae_mantle_first_hit(bool ignore_checks, uint32_t contents, uint32_t su
 int aae_mantle_high_type(float height, float offset, uint32_t traversal_flags);
 // the height to show the game's own choice when it's below the mod's first step but not below the game's
 float aae_mantle_low_height(float height);
+
+// ---- the mantle prompt
+// what a probe (the scan run for a player who isn't jumping) leaves as "a ledge is there": its own find, or the one
+// before it for a moment longer
+bool aae_mantle_probe_result(bool found, bool was_found, uint64_t now, uint64_t last_found_at);
+// what the prompt's flag gets at a draw: shown while a probe of either kind of move found a ledge a moment ago,
+// hidden during a traversal, otherwise what the game has
+enum { Aae_Hint_Unchanged, Aae_Hint_Show, Aae_Hint_Hide };
+int aae_mantle_hint_state(bool traversing, const bool found[2], const uint64_t found_at[2], uint64_t now);

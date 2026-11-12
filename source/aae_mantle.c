@@ -32,6 +32,8 @@
 // traversal_for_zombies). Here that happens at each map's start while a mod with the plugin is loaded, and is taken
 // back at the first map's start without one.
 //
+// The mantle prompt is the plugin's mantle_hint component, see "the mantle prompt" below.
+//
 // Not ported: the plugin's rule for a first trace that hits a vehicle (it asks the game whether the player may use
 // it).
 #include <pthread.h>
@@ -39,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include "aae_mantle.h"
 #include "dobby.h"
@@ -116,6 +119,25 @@ float aae_mantle_low_height(float height) {
     return height < High_Step_1 ? height : High_Step_1 - 0.125f;
 }
 
+#define Hint_Fresh_Ms 20 // how long a probe's find counts
+
+bool aae_mantle_probe_result(bool found, bool was_found, uint64_t now, uint64_t last_found_at) {
+    if (found)
+        return true;
+    // a miss right after a find: several moves are made within a frame, and the prompt shouldn't flicker with them.
+    // (A find later than now is as old as can be: the difference wraps around.)
+    return was_found && last_found_at != 0 && now - last_found_at <= Hint_Fresh_Ms;
+}
+
+int aae_mantle_hint_state(bool traversing, const bool found[2], const uint64_t found_at[2], uint64_t now) {
+    if (traversing)
+        return Aae_Hint_Hide;
+    for (int handler = 0; handler < 2; handler++)
+        if (found[handler] && found_at[handler] != 0 && now - found_at[handler] <= Hint_Fresh_Ms)
+            return Aae_Hint_Show;
+    return Aae_Hint_Unchanged;
+}
+
 // ---- the game's side
 
 static uint64_t base_address;
@@ -123,7 +145,7 @@ static void *(*Dvar_FindByHash)(uint32_t hash);
 static float (*Dvar_GetFloat)(void *dvar); // a dvar that a "set" made is a string, read as atof of its text
 static const char *loaded_mod; // the game's: the folder name of the mod that's loaded, "" without one
 static _Atomic bool active;    // that mod has the plugin whose work this is: found out at each map's start
-static bool debug;             // BO3MACFIX_MANTLEDEBUG=1: the log says what each scan found
+static int debug;              // BO3MACFIX_MANTLEDEBUG=1: the log says what each scan found
 
 enum { Opt_Height, Opt_IgnoreChecks, Opt_Threshold, Opt_HighOffset, Opt_Count };
 static const char *const option_names[Opt_Count] = { "aae_t7_mantle_height", "aae_t7_ignore_mantle_checks",
@@ -167,6 +189,163 @@ static bool ignore_checks(void) {
     return option(Opt_IgnoreChecks, &value) && value != 0.0f;
 }
 
+// ---- the mantle prompt (the plugin's mantle_hint component)
+//
+// The game's prompt for mantling ("Press [jump] to" and an arrow) goes by a flag that only its old way of mantling
+// sets, so traversal has none. The plugin gives it one. At every move of a player who isn't in a jump it lets the
+// scan run anyway, as a probe that starts nothing: the test before the scan is answered with yes, and the scan's
+// answer is kept and replaced by no. A probe's first trace is done 30 units up, about where a jump takes the player,
+// so a ledge lower than that gets no prompt. While the last probe found a ledge the prompt is shown, and during a
+// traversal it's hidden. A probe takes about 4 microseconds (10,000 of them 41 ms, at one or two a frame).
+//
+// The plugin only probes in a LAN game: it looks at the session's network mode as the game stores it, where a game
+// from the online lobby is "online" (the game's own question for it would say "system link" for any game with a
+// mod). So in a game started from the online lobby there is no prompt, with the plugin as here.
+//
+// The plugin also takes out a check of the game's that leaves the prompt away in zombies when its icon isn't loaded.
+// With the mod loaded the icon is there (on Kino as on a custom map), so that isn't done here.
+#define Hint_Clients 64
+#define Hint_Rise 30.0f     // how far above the player's feet a probe's first trace is done
+#define Hint_Settle_Ms 2000 // no probes for this long after a player's first move
+#define Ps_Flags 0x10
+#define Ps_Flag_Traversing 0x200
+#define Pm_Handler 0x2ac          // pmove_t: 0 the server's move, 1 the client's prediction
+#define Mode_Network_Mask 0x3c0 // of the session mode's bits: how the game is networked (0 offline, 2 online)
+#define Mode_Network_Lan 0x40   // 1, "system link": a game from the menus' "play local", or one started by devmap
+#define Cg_Size 0x342a80
+#define Cg_PlayerState 0x11a8d0
+#define Cg_MantleFlags 0x11b0b4 // the predicted player state's mantle flags
+#define Mantle_Flag_Prompt 0x10
+
+static struct {
+    _Atomic uint64_t seen_at;     // the player's first move, in ms
+    _Atomic uint64_t found_at[2]; // by handler: the last probe that found a ledge
+    _Atomic bool found[2];
+    _Atomic bool traversing;
+} hints[Hint_Clients];
+static _Atomic uint32_t hint_height; // the height the finds were made with (its bits)
+
+static _Thread_local struct {
+    bool wanted;  // the test before the scan asked for a probe: the scan that follows is one
+    bool running; // inside a probe's scan
+    uint32_t client, handler;
+} probe;
+
+static int (*Dvar_GetInt)(void *dvar);
+static const uint32_t *session_mode; // the game's
+static uint8_t *const *cg_clients;   // the game's: the local clients' cg_t, one after the other
+static const int *cg_client_count;
+static uint64_t (*now_ms)(void);
+
+static uint64_t uptime_ms(void) {
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000;
+}
+
+static void forget_finds(uint32_t client) {
+    for (int handler = 0; handler < 2; handler++) {
+        atomic_store(&hints[client].found[handler], false);
+        atomic_store(&hints[client].found_at[handler], 0);
+    }
+}
+
+// a new mantle height makes what the probes found worthless
+static void finds_for_height(float height) {
+    uint32_t bits;
+    memcpy(&bits, &height, sizeof(bits));
+    if (atomic_exchange(&hint_height, bits) != bits)
+        for (uint32_t client = 0; client < Hint_Clients; client++)
+            forget_finds(client);
+}
+
+static bool traversal_mode(void) {
+    static void *dvar; // found once: a dvar stays where it is
+    void *mode = __atomic_load_n(&dvar, __ATOMIC_RELAXED);
+    if (mode == NULL) {
+        mode = Dvar_FindByHash(gsc_hash("traverse_mode"));
+        if (mode == NULL)
+            return false;
+        __atomic_store_n(&dvar, mode, __ATOMIC_RELAXED);
+    }
+    return Dvar_GetInt(mode) == 1;
+}
+
+// at every move, before the scan: keeps up with whether the player is in a traversal, and says whether a probe may
+// be made now if the game's own test before the scan says no (the player isn't in a jump)
+static bool probe_allowed(uint8_t *pm) {
+    if ((*session_mode & Mode_Network_Mask) != Mode_Network_Lan || !traversal_mode() || pm[Pm_Handler] > 1)
+        return false;
+    const uint8_t *ps = *(uint8_t **)pm;
+    uint32_t client;
+    uint64_t flags;
+    memcpy(&client, ps, sizeof(client));
+    memcpy(&flags, ps + Ps_Flags, sizeof(flags));
+    if (client >= Hint_Clients)
+        return false;
+    bool traversing = (flags & Ps_Flag_Traversing) != 0;
+    atomic_store(&hints[client].traversing, traversing);
+    if (traversing) {
+        forget_finds(client);
+        return false;
+    }
+    uint64_t now = now_ms(), seen = 0;
+    if (atomic_compare_exchange_strong(&hints[client].seen_at, &seen, now))
+        return false; // the first move
+    if (now < seen || now - seen < Hint_Settle_Ms)
+        return false;
+    probe.client = client;
+    probe.handler = pm[Pm_Handler];
+    return true;
+}
+
+static void probe_found(bool found) {
+    uint64_t now = now_ms();
+    bool counts = aae_mantle_probe_result(found, atomic_load(&hints[probe.client].found[probe.handler]), now,
+                                          atomic_load(&hints[probe.client].found_at[probe.handler]));
+    if (found)
+        atomic_store(&hints[probe.client].found_at[probe.handler], now);
+    atomic_store(&hints[probe.client].found[probe.handler], counts);
+}
+
+// CG_DrawMantleHint(local client, the HUD's element, ...): draws the prompts for mantling, for a hatch and for
+// mounting, by the predicted player state's mantle flags
+install_hook_name(CG_DrawMantleHint, void, int local_client, void *element, void *a, void *b) {
+    float height;
+    uint8_t *clients = *cg_clients;
+    if (clients == NULL || local_client < 0 || local_client > 1 || local_client >= *cg_client_count ||
+        !mantle_height(&height) || !traversal_mode()) {
+        orig_CG_DrawMantleHint(local_client, element, a, b);
+        return;
+    }
+    uint8_t *cg = clients + (uint64_t)local_client * Cg_Size;
+    uint32_t client, flags;
+    uint64_t ps_flags;
+    memcpy(&client, cg, sizeof(client));
+    memcpy(&ps_flags, cg + Cg_PlayerState + Ps_Flags, sizeof(ps_flags));
+    int state = Aae_Hint_Unchanged;
+    if (client < Hint_Clients) {
+        finds_for_height(height);
+        bool found[2] = { atomic_load(&hints[client].found[0]), atomic_load(&hints[client].found[1]) };
+        uint64_t found_at[2] = { atomic_load(&hints[client].found_at[0]), atomic_load(&hints[client].found_at[1]) };
+        state = aae_mantle_hint_state(atomic_load(&hints[client].traversing) || (ps_flags & Ps_Flag_Traversing) != 0,
+                                      found, found_at, now_ms());
+    }
+    memcpy(&flags, cg + Cg_MantleFlags, sizeof(flags));
+    uint32_t shown = state == Aae_Hint_Show   ? flags | Mantle_Flag_Prompt
+                     : state == Aae_Hint_Hide ? flags & ~(uint32_t)Mantle_Flag_Prompt
+                                              : flags;
+    if (debug) {
+        static int said[2];
+        if (said[local_client] != state) {
+            said[local_client] = state;
+            printf("mantle: the prompt is %s\n", state == Aae_Hint_Show ? "shown: a ledge is there" :
+                   state == Aae_Hint_Hide ? "hidden for a traversal" : "the game's own again");
+        }
+    }
+    memcpy(cg + Cg_MantleFlags, &shown, sizeof(shown));
+    orig_CG_DrawMantleHint(local_client, element, a, b);
+    memcpy(cg + Cg_MantleFlags, &flags, sizeof(flags));
+}
+
 // GameTypeSettings_GetFloat(name, which): a setting of the game type's. Only the scan asks for trm_maxHeight, which
 // is 0 in zombies.
 install_hook_name(GameTypeSettings_GetFloat, float, const char *name, bool which) {
@@ -185,6 +364,11 @@ static _Thread_local struct {
 // PM_PlayerTrace(pm, results, start, mins, maxs, end, entity to pass through, contents to hit)
 install_hook_name(PM_PlayerTrace, void, uint8_t *pm, uint8_t *results, const float *start, const float *mins,
                   const float *maxs, const float *end, int pass_entity, int contents_mask) {
+    if (scan.first_trace && probe.running) {
+        // the scan's own two points: it goes on from them to where the trace hit
+        ((float *)start)[2] += Hint_Rise;
+        ((float *)end)[2] += Hint_Rise;
+    }
     orig_PM_PlayerTrace(pm, results, start, mins, maxs, end, pass_entity, contents_mask);
     if (!scan.first_trace)
         return;
@@ -205,8 +389,13 @@ install_hook_name(PM_PlayerTrace, void, uint8_t *pm, uint8_t *results, const flo
 // TRM_Scan(pm, pml, ledge out, normal out): looks for a ledge in front of the player to get on or over
 install_hook_name(TRM_Scan, bool, uint8_t *pm, void *pml, vec3_t *ledge, vec3_t *normal) {
     float height;
-    if (!mantle_height(&height))
+    if (!mantle_height(&height)) {
+        if (probe.wanted) { // the mod went between the test and the scan: this one was never to start anything
+            probe.wanted = false;
+            return false;
+        }
         return orig_TRM_Scan(pm, pml, ledge, normal);
+    }
     scan.ps = *(uint8_t **)pm;
     signed char forward = (signed char)pm[Pm_Forwardmove], right = (signed char)pm[Pm_Forwardmove + 1];
     signed char shown_forward = forward, shown_right = right;
@@ -214,10 +403,29 @@ install_hook_name(TRM_Scan, bool, uint8_t *pm, void *pml, vec3_t *ledge, vec3_t 
     pm[Pm_Forwardmove] = (uint8_t)shown_forward;
     pm[Pm_Forwardmove + 1] = (uint8_t)shown_right;
     scan.first_trace = true;
+    probe.running = probe.wanted;
+    probe.wanted = false;
+    uint64_t started = debug && probe.running ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
     bool found = orig_TRM_Scan(pm, pml, ledge, normal);
     scan.first_trace = false;
     pm[Pm_Forwardmove] = (uint8_t)forward;
     pm[Pm_Forwardmove + 1] = (uint8_t)right;
+    if (probe.running) {
+        probe.running = false;
+        probe_found(found);
+        if (debug) {
+            // what the prompt costs: the probes are the only work it adds to a move
+            static _Atomic unsigned probes, finds;
+            static _Atomic uint64_t spent;
+            uint64_t took = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started;
+            uint64_t in_all = atomic_fetch_add(&spent, took) + took;
+            unsigned count = atomic_fetch_add(&probes, 1) + 1, with_ledge = atomic_fetch_add(&finds, found) + found;
+            if (count % 2000 == 0)
+                printf("mantle: %u probes for the prompt so far, %u found a ledge, %.1f ms in all\n", count,
+                       with_ledge, (double)in_all / 1e6);
+        }
+        return false;
+    }
     if (debug && found) {
         float feet;
         memcpy(&feet, scan.ps + Ps_Origin_Z, sizeof(feet));
@@ -239,7 +447,9 @@ install_hook_name(TRM_CanStart, bool, uint8_t *pm, void *pml) {
     bool can = orig_TRM_CanStart(pm, pml);
     pm[Pm_Forwardmove] = (uint8_t)forward;
     pm[Pm_Forwardmove + 1] = (uint8_t)right;
-    return can;
+    finds_for_height(height);
+    probe.wanted = probe_allowed(pm) && !can;
+    return can || probe.wanted; // for a probe the game goes on to the scan as well
 }
 
 // TRM_Type(ps, ledge): which kind of traversal (animation) takes the player up to this ledge
@@ -352,10 +562,16 @@ void aae_mantle_init(uint64_t game_base_address, int enabled) {
         return;
     base_address = game_base_address;
     const char *env = getenv("BO3MACFIX_MANTLEDEBUG");
-    debug = env != NULL && atoi(env) != 0;
+    debug = env != NULL ? atoi(env) : 0;
     Dvar_FindByHash = (void *)(base_address + ADDR_Dvar_FindByHash);
     Dvar_GetFloat = (void *)(base_address + ADDR_Dvar_GetFloat);
+    Dvar_GetInt = (void *)(base_address + ADDR_Dvar_GetInt);
     loaded_mod = (const char *)(base_address + ADDR_Mods_LoadedName);
+    session_mode = (const uint32_t *)(base_address + ADDR_sSessionModeState);
+    cg_clients = (uint8_t *const *)(base_address + ADDR_cgArray);
+    cg_client_count = (const int *)(base_address + ADDR_LOCAL_CLIENT_COUNT);
+    now_ms = uptime_ms;
+    install_hook_CG_DrawMantleHint((void *)(base_address + ADDR_CG_DrawMantleHint));
     install_hook_GameTypeSettings_GetFloat((void *)(base_address + ADDR_GameTypeSettings_GetFloat));
     install_hook_PM_PlayerTrace((void *)(base_address + ADDR_PM_PlayerTrace));
     install_hook_TRM_Scan((void *)(base_address + ADDR_TRM_Scan));

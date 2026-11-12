@@ -1,5 +1,6 @@
 // aae_mantle.c: the mod's rules for traversal, and the hooks against a made-up game: its dvars, its scan with the
-// traces it does, and the per-mode dvar that turns traversal on (the test includes the source itself).
+// traces it does, the per-mode dvar that turns traversal on, and the mantle prompt's draw function (the test
+// includes the source itself).
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -37,6 +38,7 @@ static struct {
 } options[Opt_Count];
 static uint8_t trm_enabled[0x80], enabled_zombies[0x80], enabled_multiplayer[0x80], enabled_campaign[0x80];
 static bool have_trm_enabled;
+static int traverse_mode = 1, traverse_mode_dvar; // the game's dvar: 1 traversal, 2 the old mantling
 
 static void *game_find_dvar(uint32_t hash) {
     for (int i = 0; i < Opt_Count; i++)
@@ -44,7 +46,13 @@ static void *game_find_dvar(uint32_t hash) {
             return options[i].there ? &options[i] : NULL;
     if (hash == gsc_hash("trm_enabled"))
         return have_trm_enabled ? trm_enabled : NULL;
+    if (hash == gsc_hash("traverse_mode"))
+        return &traverse_mode_dvar;
     return NULL;
+}
+static int game_dvar_int(void *dvar) {
+    CHECK(dvar == &traverse_mode_dvar);
+    return traverse_mode;
 }
 static float game_dvar_float(void *dvar) {
     float value;
@@ -63,9 +71,11 @@ static float game_setting(const char *name, bool which) {
 
 // the scan: its first trace hits what the test says, a second one hits a mantle brush, and the result is what the
 // game's own rule makes of the first: a ledge unless that was a mantle brush
-static uint8_t player_state[0x900], pmove[0x100];
+static uint8_t player_state[0x900], pmove[0x300];
 static struct {
     int calls, traces;
+    float first_start_z, first_end_z; // where the first trace was done
+    float start_z_after, end_z_after; // and the scan's own two points after it
     signed char forward, right;      // the move input the scan saw
     uint32_t contents, surface;      // what the first trace hits
     float fraction;
@@ -78,6 +88,8 @@ static void game_trace(uint8_t *pm, uint8_t *results, const float *start, const 
     (void)pm, (void)start, (void)mins, (void)maxs, (void)end, (void)pass_entity, (void)contents_mask;
     memset(results, 0, 0x60);
     bool first = game_scan.traces++ == 0;
+    if (first)
+        game_scan.first_start_z = start[2], game_scan.first_end_z = end[2];
     float fraction = first ? game_scan.fraction : 0.5f;
     uint32_t contents = first ? game_scan.contents : Contents_Mantle, surface = first ? game_scan.surface : 0;
     memcpy(results + Trace_Fraction, &fraction, sizeof(fraction));
@@ -89,25 +101,51 @@ static void game_trace(uint8_t *pm, uint8_t *results, const float *start, const 
 static bool game_scan_ledge(uint8_t *pm, void *pml, vec3_t *ledge, vec3_t *normal) {
     (void)pml, (void)normal;
     uint8_t results[0x60];
-    float zero[3] = { 0 };
+    float zero[3] = { 0 }, start[3] = { 1.0f, 2.0f, 100.0f }, end[3] = { 31.0f, 2.0f, 100.0f };
     game_scan.calls++;
     game_scan.traces = 0;
     game_scan.forward = (signed char)pm[Pm_Forwardmove];
     game_scan.right = (signed char)pm[Pm_Forwardmove + 1];
-    fake_PM_PlayerTrace(pm, results, zero, zero, zero, zero, 0, 0x1010011);
+    fake_PM_PlayerTrace(pm, results, start, zero, zero, end, 0, 0x1010011);
+    game_scan.start_z_after = start[2], game_scan.end_z_after = end[2];
     memcpy(&game_scan.seen_first, results + Trace_Contents, sizeof(uint32_t));
     float fraction;
     memcpy(&fraction, results + Trace_Fraction, sizeof(fraction));
     bool go_on = !results[Trace_StartSolid] && fraction != 1.0f && (game_scan.seen_first & Contents_Mantle) == 0;
-    fake_PM_PlayerTrace(pm, results, zero, zero, zero, zero, 0, 0x1010011);
+    start[2] = end[2] = 100.0f;
+    fake_PM_PlayerTrace(pm, results, start, zero, zero, end, 0, 0x1010011);
+    CHECK(start[2] == 100.0f && end[2] == 100.0f); // only a scan's first trace is ever moved
     memcpy(&game_scan.seen_second, results + Trace_Contents, sizeof(uint32_t));
     ledge->z = 140.0f;
     return go_on;
 }
 
+static bool in_jump = true; // the rest of what the game asks for before it scans
 static bool game_can_start(uint8_t *pm, void *pml) {
     (void)pml;
-    return abs((signed char)pm[Pm_Forwardmove]) + abs((signed char)pm[Pm_Forwardmove + 1]) > Game_Push;
+    return in_jump && abs((signed char)pm[Pm_Forwardmove]) + abs((signed char)pm[Pm_Forwardmove + 1]) > Game_Push;
+}
+
+// the prompt's draw function: what the mantle flags were while it drew
+static uint8_t *game_cg; // two local clients' cg_t
+static int game_cg_count = 1;
+static uint32_t game_mode_bits = 0x4000; // the session mode: not a LAN game at first, so without probes
+static uint64_t game_time = 1000000;
+static uint64_t game_now(void) {
+    return game_time;
+}
+static struct {
+    int calls, local_client;
+    uint32_t flags;
+    void *element, *a, *b;
+} game_draw;
+static void game_draw_hint(int local_client, void *element, void *a, void *b) {
+    game_draw.calls++;
+    game_draw.local_client = local_client;
+    game_draw.element = element, game_draw.a = a, game_draw.b = b;
+    game_draw.flags = 0xdead;
+    if (game_cg != NULL && local_client >= 0 && local_client < 2)
+        memcpy(&game_draw.flags, game_cg + (size_t)local_client * Cg_Size + Cg_MantleFlags, sizeof(uint32_t));
 }
 
 static struct {
@@ -395,6 +433,342 @@ static void test_with_the_mod(void) {
     set_option(Opt_HighOffset, 0.0f);
 }
 
+// ---- the mantle prompt
+
+static void test_prompt_rules(void) {
+    // a probe's result: its own find, or the last one for 20 ms more
+    CHECK(aae_mantle_probe_result(true, false, 5000, 0) && aae_mantle_probe_result(true, true, 5000, 100));
+    CHECK(!aae_mantle_probe_result(false, false, 5000, 4999) && !aae_mantle_probe_result(false, false, 5000, 0));
+    CHECK(aae_mantle_probe_result(false, true, 5000, 5000) && aae_mantle_probe_result(false, true, 5000, 4980));
+    CHECK(!aae_mantle_probe_result(false, true, 5000, 4979) && !aae_mantle_probe_result(false, true, 5000, 0));
+    CHECK(!aae_mantle_probe_result(false, true, 5000, 5001)); // a find from later than now: the clock isn't trusted
+    CHECK(!aae_mantle_probe_result(false, true, 10, 0) && aae_mantle_probe_result(false, true, 10, 1)); // 0: none yet
+    // the prompt: hidden in a traversal whatever was found, shown for a fresh find of either kind of move
+    const bool none[2] = { false, false }, server[2] = { true, false }, client[2] = { false, true };
+    const uint64_t at[2] = { 4990, 4975 }, never[2] = { 0, 0 }, ahead[2] = { 5001, 5001 }, both_old[2] = { 4979, 4979 };
+    const bool both[2] = { true, true };
+    CHECK(aae_mantle_hint_state(true, both, at, 5000) == Aae_Hint_Hide);
+    CHECK(aae_mantle_hint_state(true, none, never, 5000) == Aae_Hint_Hide);
+    CHECK(aae_mantle_hint_state(false, none, at, 5000) == Aae_Hint_Unchanged);
+    CHECK(aae_mantle_hint_state(false, server, at, 5000) == Aae_Hint_Show);
+    CHECK(aae_mantle_hint_state(false, client, at, 5000) == Aae_Hint_Unchanged); // the client's is 25 ms old
+    CHECK(aae_mantle_hint_state(false, client, at, 4995) == Aae_Hint_Show);
+    CHECK(aae_mantle_hint_state(false, both, at, 5010) == Aae_Hint_Show && aae_mantle_hint_state(false, both, at, 5011) ==
+          Aae_Hint_Unchanged);
+    CHECK(aae_mantle_hint_state(false, both, never, 5) == Aae_Hint_Unchanged); // 0 is no find, however early it is
+    CHECK(aae_mantle_hint_state(false, both, ahead, 5000) == Aae_Hint_Unchanged);
+    CHECK(aae_mantle_hint_state(false, both, both_old, 5000) == Aae_Hint_Unchanged);
+}
+
+// the game's check at a move: the test, and if it says yes the scan, and if that finds a ledge a traversal starts
+static int started;
+static bool check_now(uint32_t contents) {
+    vec3_t ledge = { 0 }, normal = { 0 };
+    int scans = game_scan.calls;
+    game_scan.contents = contents, game_scan.surface = 0, game_scan.fraction = 0.4f, game_scan.start_solid = false;
+    if (fake_TRM_CanStart(pmove, NULL)) {
+        memset(player_state + Ps_TraversalFlags, 0, 4);
+        if (fake_TRM_Scan(pmove, NULL, &ledge, &normal))
+            started++;
+    }
+    return game_scan.calls > scans; // whether the game's scan ran
+}
+static void set_player(uint32_t client, uint64_t flags, int handler) {
+    memcpy(player_state, &client, sizeof(client));
+    memcpy(player_state + Ps_Flags, &flags, sizeof(flags));
+    pmove[Pm_Handler] = (uint8_t)handler;
+}
+static void forget_everything(void) {
+    memset(hints, 0, sizeof(hints));
+    atomic_store(&hint_height, 0);
+    started = 0;
+}
+
+static void test_probes(void) {
+    atomic_store(&active, true);
+    set_option(Opt_Height, 60.0f);
+    set_option(Opt_IgnoreChecks, 0.0f);
+    set_option(Opt_Threshold, 0.0f);
+    game_mode_bits = Mode_Network_Lan | 0x4000;
+    traverse_mode = 1;
+    forget_everything();
+    set_player(3, 0, 1);
+    set_input(0, 0);
+
+    // a player in a jump: the game's test says yes, the scan is a real one from the player's feet
+    in_jump = true;
+    CHECK(check_now(Contents_Mantle) && started == 1 && game_scan.first_start_z == 100.0f &&
+          game_scan.first_end_z == 100.0f && game_scan.start_z_after == 100.0f);
+    CHECK(!atomic_load(&hints[3].found[1]) && atomic_load(&hints[3].seen_at) == game_time);
+    // not in a jump: nothing for the first 2 seconds after the player's first move
+    in_jump = false;
+    CHECK(!check_now(Contents_Mantle));
+    game_time += 1999;
+    CHECK(!check_now(Contents_Mantle) && started == 1);
+    // then the scan runs as a probe: 30 units up, nothing starts, and what it found is kept
+    game_time += 1;
+    CHECK(check_now(Contents_Mantle) && started == 1);
+    CHECK(game_scan.first_start_z == 130.0f && game_scan.first_end_z == 130.0f);
+    CHECK(game_scan.start_z_after == 130.0f && game_scan.end_z_after == 130.0f); // the scan goes on from there
+    CHECK(atomic_load(&hints[3].found[1]) && atomic_load(&hints[3].found_at[1]) == game_time);
+    CHECK(!atomic_load(&hints[3].found[0]) && !probe.wanted && !probe.running);
+    // by the mod's rules, like any scan: with the checks on only a mantle brush counts
+    game_time += 100;
+    CHECK(check_now(1) && started == 1 && !atomic_load(&hints[3].found[1]));
+    CHECK(game_scan.seen_first == (Contents_Mantle | 1));
+    set_option(Opt_IgnoreChecks, 1.0f);
+    CHECK(check_now(1) && atomic_load(&hints[3].found[1]) && started == 1);
+    set_option(Opt_IgnoreChecks, 0.0f);
+    // and the move input is the player's own again afterwards
+    set_input(3, -4);
+    CHECK(check_now(Contents_Mantle) && game_scan.forward == 24 && game_scan.right == -32 && started == 1);
+    CHECK((signed char)pmove[Pm_Forwardmove] == 3 && (signed char)pmove[Pm_Forwardmove + 1] == -4);
+    set_input(0, 0);
+
+    // a miss right after a find doesn't take the find away, one 21 ms later does
+    uint64_t found_at = game_time;
+    game_time += 20;
+    CHECK(check_now(1) && atomic_load(&hints[3].found[1]) && atomic_load(&hints[3].found_at[1]) == found_at);
+    game_time += 1;
+    CHECK(check_now(1) && !atomic_load(&hints[3].found[1]));
+    game_time += 1;
+    CHECK(check_now(1) && !atomic_load(&hints[3].found[1])); // and it stays away
+    // the server's move and the client's are kept apart
+    set_player(3, 0, 0);
+    CHECK(check_now(Contents_Mantle) && atomic_load(&hints[3].found[0]) && !atomic_load(&hints[3].found[1]));
+    set_player(3, 0, 1);
+    CHECK(check_now(Contents_Mantle) && atomic_load(&hints[3].found[1]));
+
+    // a jump in between is a real scan again, and leaves the finds alone
+    in_jump = true;
+    CHECK(check_now(Contents_Mantle) && started == 2 && game_scan.first_start_z == 100.0f);
+    CHECK(atomic_load(&hints[3].found[1]) && !probe.wanted);
+    in_jump = false;
+
+    // during a traversal there are no probes, and what was found is forgotten
+    set_player(3, Ps_Flag_Traversing | 0x10000, 1);
+    CHECK(!check_now(Contents_Mantle) && atomic_load(&hints[3].traversing));
+    CHECK(!atomic_load(&hints[3].found[0]) && !atomic_load(&hints[3].found[1]) && atomic_load(&hints[3].found_at[1]) == 0);
+    set_player(3, 0x10000, 1);
+    CHECK(check_now(Contents_Mantle) && !atomic_load(&hints[3].traversing) && atomic_load(&hints[3].found[1]));
+    // that is kept up with at a move in a jump too (the made-up game lets a traversal start during one)
+    set_player(3, Ps_Flag_Traversing, 1);
+    in_jump = true;
+    check_now(Contents_Mantle);
+    CHECK(atomic_load(&hints[3].traversing) && !atomic_load(&hints[3].found[1]) && started == 3);
+    in_jump = false;
+    set_player(3, 0, 1);
+
+    // another player starts with 2 seconds of their own
+    set_player(4, 0, 1);
+    CHECK(!check_now(Contents_Mantle) && atomic_load(&hints[4].seen_at) == game_time);
+    game_time += 2000;
+    CHECK(check_now(Contents_Mantle) && atomic_load(&hints[4].found[1]));
+    set_player(63, 0, 1);
+    CHECK(!check_now(Contents_Mantle));
+    game_time += 2000;
+    CHECK(check_now(Contents_Mantle) && atomic_load(&hints[63].found[1]));
+    // no probes for what isn't a player's move of those two kinds, or a client number beyond the game's
+    set_player(64, 0, 1);
+    game_time += 5000;
+    CHECK(!check_now(Contents_Mantle));
+    game_time += 5000;
+    CHECK(!check_now(Contents_Mantle));
+    set_player(3, 0, 2);
+    CHECK(!check_now(Contents_Mantle));
+    set_player(3, 0, 1);
+    CHECK(check_now(Contents_Mantle));
+    // nor in a game that isn't a LAN one (0x80: online), nor while the game's own old mantling is on
+    game_mode_bits = 0x4000;
+    CHECK(!check_now(Contents_Mantle));
+    game_mode_bits = 0x80 | 0x4000;
+    CHECK(!check_now(Contents_Mantle));
+    game_mode_bits = Mode_Network_Lan | 0x4003; // the mode itself doesn't matter
+    CHECK(check_now(Contents_Mantle));
+    game_mode_bits = Mode_Network_Lan | 0xfffffc3f; // nor any other of its bits
+    CHECK(check_now(Contents_Mantle));
+    game_mode_bits = 0xfffffc3f;
+    CHECK(!check_now(Contents_Mantle));
+    static const uint32_t other_networks[] = { 0xc0, 0x140, 0x240, 0x3c0, 0x80, 0x100, 0x200 };
+    for (size_t i = 0; i < sizeof(other_networks) / sizeof(other_networks[0]); i++) {
+        game_mode_bits = other_networks[i];
+        CHECK(!check_now(Contents_Mantle));
+    }
+    game_mode_bits = Mode_Network_Lan | 0x4000;
+    traverse_mode = 2;
+    CHECK(!check_now(Contents_Mantle));
+    traverse_mode = 1;
+    CHECK(check_now(Contents_Mantle));
+
+    // a new mantle height: what was found with the old one is forgotten, for every player
+    CHECK(atomic_load(&hints[3].found[1]) && atomic_load(&hints[4].found[1]) && atomic_load(&hints[63].found[1]));
+    set_option(Opt_Height, 35.0f);
+    set_player(4, 0, 1);
+    CHECK(check_now(1));
+    CHECK(!atomic_load(&hints[3].found[1]) && !atomic_load(&hints[3].found[0]) && !atomic_load(&hints[4].found[1]) &&
+          !atomic_load(&hints[63].found[1]));
+    set_player(3, 0, 1);
+
+    // without the mod's plugin loaded: the game's own test and nothing else
+    atomic_store(&active, false);
+    CHECK(!check_now(Contents_Mantle));
+    atomic_store(&active, true);
+    CHECK(check_now(Contents_Mantle) && atomic_load(&hints[3].found[1]));
+    // the mod going between the test and the scan: that scan was never to start anything, so it isn't made
+    game_scan.contents = 1;
+    CHECK(fake_TRM_CanStart(pmove, NULL) && probe.wanted);
+    atomic_store(&active, false);
+    int scans = game_scan.calls;
+    vec3_t ledge = { 0 }, normal = { 0 };
+    CHECK(!fake_TRM_Scan(pmove, NULL, &ledge, &normal) && game_scan.calls == scans && !probe.wanted);
+    CHECK(fake_TRM_Scan(pmove, NULL, &ledge, &normal) && game_scan.calls == scans + 1); // the next one is the game's
+    atomic_store(&active, true);
+    // a test that says yes by itself after one that asked for a probe: no probe is left over
+    CHECK(fake_TRM_CanStart(pmove, NULL) && probe.wanted);
+    in_jump = true;
+    CHECK(fake_TRM_CanStart(pmove, NULL) && !probe.wanted);
+    CHECK(started == 3); // none of the probes started anything
+}
+
+static uint32_t cg_flags(int local_client) {
+    uint32_t flags;
+    memcpy(&flags, game_cg + (size_t)local_client * Cg_Size + Cg_MantleFlags, sizeof(flags));
+    return flags;
+}
+static void set_cg(int local_client, uint32_t client, uint32_t mantle_flags, uint64_t ps_flags) {
+    uint8_t *cg = game_cg + (size_t)local_client * Cg_Size;
+    memcpy(cg, &client, sizeof(client));
+    memcpy(cg + Cg_MantleFlags, &mantle_flags, sizeof(mantle_flags));
+    memcpy(cg + Cg_PlayerState + Ps_Flags, &ps_flags, sizeof(ps_flags));
+}
+// what the game's draw function saw as the mantle flags of that local client
+static uint32_t drawn(int local_client) {
+    int element, a, b, calls = game_draw.calls;
+    fake_CG_DrawMantleHint(local_client, &element, &a, &b);
+    CHECK(game_draw.calls == calls + 1 && game_draw.local_client == local_client && game_draw.element == &element &&
+          game_draw.a == &a && game_draw.b == &b);
+    return game_draw.flags;
+}
+static void find_for(uint32_t client, int handler, uint64_t at) {
+    atomic_store(&hints[client].found[handler], true);
+    atomic_store(&hints[client].found_at[handler], at);
+}
+
+static void test_prompt_draw(void) {
+    atomic_store(&active, true);
+    set_option(Opt_Height, 60.0f);
+    traverse_mode = 1;
+    forget_everything();
+    uint8_t *cgs = calloc(2, Cg_Size);
+    CHECK(cgs != NULL);
+    if (cgs == NULL)
+        return;
+    // before the game has its clients: straight through
+    game_cg = NULL;
+    game_cg_count = 1;
+    CHECK(drawn(0) == 0xdead);
+    game_cg = cgs;
+    set_cg(0, 7, 0, 0);
+    set_cg(1, 9, 0x800, 0);
+    CHECK(drawn(0) == 0 && cg_flags(0) == 0); // nothing found yet
+    find_for(7, 1, game_time);
+
+    // a fresh find of the client's move, or of the server's: the prompt's flag is there while the game draws, and
+    // only then
+    CHECK(drawn(0) == Mantle_Flag_Prompt && cg_flags(0) == 0);
+    game_time += 20;
+    CHECK(drawn(0) == Mantle_Flag_Prompt);
+    game_time += 1;
+    CHECK(drawn(0) == 0 && cg_flags(0) == 0);
+    find_for(7, 0, game_time);
+    atomic_store(&hints[7].found[1], false);
+    CHECK(drawn(0) == Mantle_Flag_Prompt && cg_flags(0) == 0);
+    // the other flags stay as they are (0x800: a hatch)
+    set_cg(0, 7, 0x880, 0);
+    CHECK(drawn(0) == (0x880 | Mantle_Flag_Prompt) && cg_flags(0) == 0x880);
+    // a find that was taken away again doesn't count, however new
+    atomic_store(&hints[7].found[0], false);
+    CHECK(drawn(0) == 0x880);
+    // nothing found: what the game has, its own prompt too
+    set_cg(0, 7, 0x810, 0);
+    CHECK(drawn(0) == 0x810 && cg_flags(0) == 0x810);
+
+    // in a traversal the prompt is hidden, the game's own too: by the player state the game draws from, or by what
+    // the last move said
+    find_for(7, 1, game_time);
+    set_cg(0, 7, 0x810, Ps_Flag_Traversing | 0x4);
+    CHECK(drawn(0) == 0x800 && cg_flags(0) == 0x810);
+    set_cg(0, 7, 0x810, 0x4);
+    CHECK(drawn(0) == 0x810);
+    atomic_store(&hints[7].traversing, true);
+    CHECK(drawn(0) == 0x800 && cg_flags(0) == 0x810);
+    atomic_store(&hints[7].traversing, false);
+    set_cg(0, 7, 0, 0);
+
+    // the second local client: its own state, its own player's finds
+    game_cg_count = 2;
+    CHECK(drawn(1) == 0x800 && cg_flags(1) == 0x800);
+    find_for(9, 1, game_time);
+    CHECK(drawn(1) == (0x800 | Mantle_Flag_Prompt) && cg_flags(1) == 0x800 && cg_flags(0) == 0);
+    CHECK(drawn(0) == Mantle_Flag_Prompt);
+    // a local client the game doesn't have, or one beyond the two the plugin looks at: straight through
+    game_cg_count = 1;
+    CHECK(drawn(1) == 0x800);
+    game_cg_count = 4;
+    CHECK(drawn(2) == 0xdead && drawn(-1) == 0xdead);
+    game_cg_count = 2;
+    // a client number beyond the game's players: the game's own
+    set_cg(1, 64, 0x800, 0);
+    CHECK(drawn(1) == 0x800);
+    set_cg(1, 9, 0x800, 0);
+
+    // not while the game's old mantling is on, and not without the mod's plugin
+    traverse_mode = 2;
+    CHECK(drawn(0) == 0 && drawn(1) == 0x800);
+    traverse_mode = 1;
+    CHECK(drawn(0) == Mantle_Flag_Prompt);
+    atomic_store(&active, false);
+    CHECK(drawn(0) == 0 && drawn(1) == 0x800);
+    atomic_store(&active, true);
+    // a new mantle height at the draw: the finds are forgotten there as well
+    CHECK(drawn(0) == Mantle_Flag_Prompt);
+    set_option(Opt_Height, 61.0f);
+    CHECK(drawn(0) == 0 && !atomic_load(&hints[7].found[1]) && !atomic_load(&hints[9].found[1]));
+
+    // probes and the prompt together: a player in front of a ledge, then jumping at it
+    forget_everything();
+    game_mode_bits = Mode_Network_Lan | 0x4000;
+    set_cg(0, 5, 0, 0);
+    set_player(5, 0, 1);
+    set_input(0, 0);
+    in_jump = false;
+    check_now(Contents_Mantle);
+    CHECK(drawn(0) == 0);
+    game_time += 2000;
+    check_now(Contents_Mantle);
+    game_time += 3;
+    CHECK(drawn(0) == Mantle_Flag_Prompt && started == 0);
+    in_jump = true;
+    check_now(Contents_Mantle); // the jump: the traversal starts
+    CHECK(started == 1);
+    set_player(5, Ps_Flag_Traversing, 1);
+    set_cg(0, 5, 0, Ps_Flag_Traversing);
+    in_jump = false;
+    game_time += 8;
+    check_now(Contents_Mantle);
+    CHECK(drawn(0) == 0 && started == 1);
+    // and after it, away from the ledge
+    set_player(5, 0, 1);
+    set_cg(0, 5, 0, 0);
+    game_time += 500;
+    check_now(1);
+    CHECK(drawn(0) == 0);
+
+    game_cg = NULL;
+    game_mode_bits = 0x4000;
+    free(cgs);
+}
+
 static void make_plugin(const char *folder, bool there) {
     char path[1200];
     snprintf(path, sizeof(path), "%s/T7Overcharged", folder);
@@ -440,6 +814,7 @@ static void fresh_dvar(void) {
 }
 
 static void test_traversal_for_zombies(void) {
+    set_option(Opt_Height, 35.0f);
     char base[] = "/tmp/bo3macfix-test-mantle-XXXXXX", mod[1100], other[1100], long_mod[1100], longer_mod[1100];
     CHECK(mkdtemp(base) != NULL);
     snprintf(mod, sizeof(mod), "%s/2631943123", base);
@@ -605,6 +980,12 @@ int main(void) {
     orig_TRM_CanStart = game_can_start;
     orig_TRM_Type = game_trm_type;
     orig_TRM_Init = game_trm_init;
+    orig_CG_DrawMantleHint = game_draw_hint;
+    Dvar_GetInt = game_dvar_int;
+    session_mode = &game_mode_bits;
+    cg_clients = &game_cg;
+    cg_client_count = &game_cg_count;
+    now_ms = game_now;
     loaded_mod = loaded_name;
     uint8_t *ps = player_state;
     memcpy(pmove, &ps, sizeof(ps));
@@ -612,9 +993,12 @@ int main(void) {
     test_input_rules();
     test_first_hit();
     test_types();
+    test_prompt_rules();
     test_without_the_mod();
     test_with_the_mod();
     test_after_the_mod();
+    test_probes();
+    test_prompt_draw();
     test_traversal_for_zombies();
     if (failures != 0) {
         printf("test_aae_mantle: %d failures\n", failures);

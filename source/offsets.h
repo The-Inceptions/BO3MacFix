@@ -113,6 +113,7 @@
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
 // traversal, the way over obstacles from multiplayer and the campaign (aae_mantle.c) - names are guesses
+#define ADDR_CG_DrawMantleHint 0x112fe20 // func - void (int localClientNum, the HUD element, ...): draws the prompts for mantling, a hatch and mounting, by the predicted player state's mantle flags (cg_t + 0x11b0b4: 0x10 mantle, 0x80 mount, 0x800 hatch)
 #define ADDR_TRM_CanStart 0x14c4f60 // func - bool (pmove_t *, pml_t *)
 #define ADDR_TRM_Init 0x14c5a9e // func - void (alloc function): makes the traversal animations ("PLAYER_TRM") at a map's start, if trm_enabled
 #define ADDR_TRM_Scan 0x14c3d7e // func - bool (pmove_t *, pml_t *, vec3 *ledge, vec3 *normal)
