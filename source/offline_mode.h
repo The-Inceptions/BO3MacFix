@@ -137,6 +137,9 @@ void offline_mode_init(int mode, bool debug, const char *probe_target);
 // the Mac's host name, which stays a local name.
 void offline_mode_start(int mode, bool debug, const char *own_name, const char *host, int port, int limit_ms,
                         const offline_probe_ops_t *ops);
+// What to call when the automatic test decides "offline" (bo3macfix.c: a notice on the screen), given once the
+// library's notices are ready: called at once if that verdict came before.
+void offline_mode_set_notice(void (*notice)(void));
 // whether the game's internet is cut now (for the library's own online requests, AAEOnline)
 bool offline_mode_cut(void);
 

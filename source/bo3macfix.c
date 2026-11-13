@@ -675,6 +675,12 @@ static int read_int_setting_or_env(const char *name, int fallback) {
     return env != NULL ? atoi(env) : read_int_setting(name, fallback);
 }
 
+// OfflineMode's automatic test found no internet at launch (offline_mode.c), shown until the UI has shown it
+static void offline_notice(void) {
+    notices_post_lasting("BO3MacFix found no internet at launch: offline for this session. Restart the game to try "
+                         "again.");
+}
+
 // text from BO3MACFIX_<NAME> at env if it's set, else from settings.ini, else ""
 static void read_string_setting_or_env(const char *name, char *out, size_t out_size) {
     char env_name[64];
@@ -1034,11 +1040,11 @@ __attribute__((constructor)) static void dylib_main() {
     // write the log out line by line, so nothing is lost if the game crashes or is killed
     setvbuf(stdout, NULL, _IOLBF, 0);
 
-    // OfflineMode (offline_mode.c, on its automatic setting by default): the game's process without the internet,
-    // always or when the online service doesn't answer quickly at launch, so a bad connection never holds the player
-    // up. First, so that it's in place before the game makes any network call; it changes no game code.
+    // OfflineMode (offline_mode.c, off by default): the game's process without the internet, always (for a flight) or
+    // when the online service doesn't answer quickly at launch. First, so that it's in place before the game makes any
+    // network call; it changes no game code.
     const char *offline_debug = getenv("BO3MACFIX_OFFLINEDEBUG");
-    offline_mode_init(read_int_setting_or_env("OfflineMode", 2), offline_debug != NULL && atoi(offline_debug) != 0,
+    offline_mode_init(read_int_setting_or_env("OfflineMode", 0), offline_debug != NULL && atoi(offline_debug) != 0,
                       getenv("BO3MACFIX_OFFLINEPROBE"));
 
     // a checkpoint resume set up last time (checkpoint.c) and not undone: the game quit before getting back to the
@@ -1305,6 +1311,8 @@ __attribute__((constructor)) static void dylib_main() {
 
     // notices in the game (controllers, their batteries, the display) and pausing when the controller disconnects
     notices_init(read_int_setting_or_env("Notices", 1), read_int_setting_or_env("PauseOnDisconnect", 0));
+    // OfflineMode's automatic test deciding "offline" tells the player (offline_mode.c), now that notices can be shown
+    offline_mode_set_notice(offline_notice);
     // a key (F5 by default), or L3 + R3 in the pause menu, saves a solo zombies game (quick_save.m, checkpoint.lua)
     quick_save_init(read_int_setting_or_env("QuickSave", 96));
 

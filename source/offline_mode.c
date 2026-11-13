@@ -408,6 +408,31 @@ offline_system_t offline_system = { connect, connectx, sendto, sendmsg, getaddri
 
 static offline_state_t session = Offline_State_Initializer;
 static bool debug_lines = false;
+// the notice for an "offline" verdict of the automatic test, once the library's notices are ready, and whether such a
+// verdict came before they were (both under session.lock)
+static void (*offline_notice)(void) = NULL;
+static bool notice_due = false;
+
+// automatic has decided "offline": the player is told on the screen (now, or as soon as the notices are ready)
+static void tell_the_player(void) {
+    pthread_mutex_lock(&session.lock);
+    void (*notice)(void) = offline_notice;
+    notice_due = notice == NULL;
+    pthread_mutex_unlock(&session.lock);
+    if (notice != NULL)
+        notice();
+}
+
+void offline_mode_set_notice(void (*notice)(void)) {
+    pthread_mutex_lock(&session.lock);
+    offline_notice = notice;
+    bool due = notice_due && notice != NULL;
+    if (due)
+        notice_due = false;
+    pthread_mutex_unlock(&session.lock);
+    if (due)
+        notice();
+}
 static char own_host_name[256];
 static offline_notes_t notes;
 static os_unfair_lock notes_lock = OS_UNFAIR_LOCK_INIT;
@@ -453,9 +478,11 @@ static bool refused(const char *what, const struct sockaddr *address, const char
     bool decided_here = false;
     bool cut = offline_state_cut(&session, &decided_here);
     uint64_t waited = offline_now_ms() - before;
-    if (decided_here)
+    if (decided_here) {
         printf("BO3MacFix: offline mode: automatic: offline for this session, the test hadn't answered in time ("
                Cut_Line ")\n");
+        tell_the_player();
+    }
     if (!debug_lines || (!cut && !was_pending))
         return cut;
     char target[300];
@@ -480,19 +507,23 @@ static bool refused(const char *what, const struct sockaddr *address, const char
     return cut;
 }
 
-// whether a call to address is refused: never while off (one load of the mode), never for a local address
+// Whether OfflineMode is on at all: one load, and the first thing every replacement asks, so that while it is off
+// nothing of the caller's (not even the structure an argument points to) is read before the system's call runs.
+static bool mode_on(void) {
+    return atomic_load_explicit(&session.mode, memory_order_relaxed) != Offline_Off;
+}
+
+// whether a call to address is refused (with the mode on): never for a local address
 static bool address_refused(const struct sockaddr *address, socklen_t length, const char *what, const char *call) {
-    return atomic_load_explicit(&session.mode, memory_order_relaxed) != Offline_Off &&
-           !offline_address_is_local(address, length) && refused(what, address, NULL, call);
+    return !offline_address_is_local(address, length) && refused(what, address, NULL, call);
 }
 
 static bool name_refused(const char *name, const char *call) {
-    return atomic_load_explicit(&session.mode, memory_order_relaxed) != Offline_Off &&
-           !offline_name_is_local(name, own_host_name) && refused("a name lookup of", NULL, name, call);
+    return !offline_name_is_local(name, own_host_name) && refused("a name lookup of", NULL, name, call);
 }
 
 int offline_connect(int socket, const struct sockaddr *address, socklen_t length) {
-    if (address_refused(address, length, "a connection to", "connect")) {
+    if (mode_on() && address_refused(address, length, "a connection to", "connect")) {
         errno = ENETUNREACH;
         return -1;
     }
@@ -501,7 +532,7 @@ int offline_connect(int socket, const struct sockaddr *address, socklen_t length
 
 int offline_connectx(int socket, const sa_endpoints_t *endpoints, sae_associd_t association, unsigned int flags,
                      const struct iovec *data, unsigned int data_count, size_t *length, sae_connid_t *connection) {
-    if (endpoints != NULL &&
+    if (mode_on() && endpoints != NULL &&
         address_refused(endpoints->sae_dstaddr, endpoints->sae_dstaddrlen, "a connection to", "connectx")) {
         errno = ENETUNREACH;
         return -1;
@@ -511,7 +542,7 @@ int offline_connectx(int socket, const sa_endpoints_t *endpoints, sae_associd_t 
 
 ssize_t offline_sendto(int socket, const void *buffer, size_t size, int flags, const struct sockaddr *address,
                        socklen_t length) {
-    if (address_refused(address, length, "a datagram to", "sendto")) {
+    if (mode_on() && address_refused(address, length, "a datagram to", "sendto")) {
         errno = ENETUNREACH;
         return -1;
     }
@@ -519,7 +550,7 @@ ssize_t offline_sendto(int socket, const void *buffer, size_t size, int flags, c
 }
 
 ssize_t offline_sendmsg(int socket, const struct msghdr *message, int flags) {
-    if (message != NULL &&
+    if (mode_on() && message != NULL &&
         address_refused((const struct sockaddr *)message->msg_name, message->msg_namelen, "a datagram to",
                         "sendmsg")) {
         errno = ENETUNREACH;
@@ -529,7 +560,7 @@ ssize_t offline_sendmsg(int socket, const struct msghdr *message, int flags) {
 }
 
 int offline_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **result) {
-    if (name_refused(node, "getaddrinfo")) {
+    if (mode_on() && name_refused(node, "getaddrinfo")) {
         if (result != NULL)
             *result = NULL;
         return EAI_NONAME;
@@ -538,7 +569,7 @@ int offline_getaddrinfo(const char *node, const char *service, const struct addr
 }
 
 struct hostent *offline_gethostbyname(const char *name) {
-    if (name_refused(name, "gethostbyname")) {
+    if (mode_on() && name_refused(name, "gethostbyname")) {
         h_errno = HOST_NOT_FOUND;
         return NULL;
     }
@@ -546,7 +577,7 @@ struct hostent *offline_gethostbyname(const char *name) {
 }
 
 struct hostent *offline_gethostbyname2(const char *name, int family) {
-    if (name_refused(name, "gethostbyname2")) {
+    if (mode_on() && name_refused(name, "gethostbyname2")) {
         h_errno = HOST_NOT_FOUND;
         return NULL;
     }
@@ -573,10 +604,12 @@ static void *probe_thread(void *argument) {
     offline_probe_result_t result;
     offline_probe_run(job->host, job->port, job->limit_ms, job->ops, &result);
     if (offline_state_decide(&session, job->generation, result.verdict)) {
-        if (result.verdict == Verdict_Online)
+        if (result.verdict == Verdict_Online) {
             printf("BO3MacFix: offline mode: automatic: online as usual, %s\n", result.reason);
-        else
+        } else {
             printf("BO3MacFix: offline mode: automatic: offline for this session, %s (" Cut_Line ")\n", result.reason);
+            tell_the_player();
+        }
     } else if (debug_lines) {
         printf("BO3MacFix: offline mode: automatic: the test's answer came too late to count: %s\n", result.reason);
     }
@@ -592,6 +625,9 @@ void offline_mode_start(int mode, bool debug, const char *own_name, const char *
     memset(&notes, 0, sizeof(notes));
     os_unfair_lock_unlock(&notes_lock);
 
+    pthread_mutex_lock(&session.lock);
+    notice_due = false;
+    pthread_mutex_unlock(&session.lock);
     unsigned generation = offline_state_start(&session, mode, offline_now_ms(), limit_ms);
     mode = atomic_load(&session.mode);
     if (mode == Offline_Always) {
@@ -609,9 +645,11 @@ void offline_mode_start(int mode, bool debug, const char *own_name, const char *
         }
         if (job == NULL || !start_detached(probe_thread, job)) {
             free(job);
-            if (offline_state_decide(&session, generation, Verdict_Offline))
+            if (offline_state_decide(&session, generation, Verdict_Offline)) {
                 printf("BO3MacFix: offline mode: automatic: offline for this session, the test couldn't be started "
                        "(" Cut_Line ")\n");
+                tell_the_player();
+            }
         }
     }
 }
@@ -639,5 +677,5 @@ void offline_mode_init(int mode, bool debug, const char *probe_target) {
 }
 
 bool offline_mode_cut(void) {
-    return atomic_load_explicit(&session.mode, memory_order_relaxed) != Offline_Off && offline_state_cut(&session, NULL);
+    return mode_on() && offline_state_cut(&session, NULL);
 }

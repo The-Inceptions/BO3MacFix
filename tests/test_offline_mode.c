@@ -665,9 +665,16 @@ static int local_calls_let_through(void) {
     return atomic_load(&system_calls) - before;
 }
 
+// the notice bo3macfix.c shows when automatic decides "offline"
+static _Atomic int notices_told;
+static void count_notice(void) {
+    atomic_fetch_add(&notices_told, 1);
+}
+
 static void test_replacements(void) {
     offline_system_t real = offline_system;
     offline_system = stand_ins;
+    offline_mode_set_notice(count_notice);
 
     // off: everything goes to the system as before, and nothing is said
     capture_start();
@@ -677,6 +684,7 @@ static void test_replacements(void) {
     CHECK(local_calls_let_through() == 15);
     const char *lines = capture_end();
     CHECK(strstr(lines, "offline mode") == NULL);
+    CHECK(atomic_load(&notices_told) == 0);
 
     // always: nothing outside the Mac reaches the system; told once per target with the debug lines
     capture_start();
@@ -698,6 +706,7 @@ static void test_replacements(void) {
     CHECK(count_of(lines, "offline mode: refused a name lookup of stun.us.demonware.net (gethostbyname2)\n") == 1);
     CHECK(count_of(lines, "refused") == 7);
     CHECK(count_of(lines, "waited") == 0);
+    CHECK(atomic_load(&notices_told) == 0);
     struct addrinfo *found = NULL;
     int through = atomic_load(&system_calls);
     capture_start();
@@ -752,6 +761,7 @@ static void test_replacements(void) {
                           "") == 1);
     CHECK(count_of(lines, "then let through") == 1);
     CHECK(count_of(lines, "refused") == 0);
+    CHECK(atomic_load(&notices_told) == 0);
 
     // automatic, the lobby server refuses: offline for the session
     set_fakes(20, 0, 20, ECONNREFUSED, false);
@@ -764,6 +774,7 @@ static void test_replacements(void) {
     CHECK(count_of(lines, "offline mode: automatic: offline for this session, the connection to lobby.example") == 1);
     CHECK(count_of(lines, "then refused") == 1);
     CHECK(count_of(lines, "refused a connection to 185.34.107.128:3074 (connect)") == 1);
+    CHECK(atomic_load(&notices_told) == 1);
 
     // automatic, the lookup never answers: offline at the limit
     set_fakes(900, 0, 0, 0, false);
@@ -777,6 +788,7 @@ static void test_replacements(void) {
     CHECK(count_of(lines, "offline mode: automatic: offline for this session, the name lookup of slow.example didn't "
                           "answer within 300 ms") == 1);
     CHECK(count_of(lines, "refused") == 0);
+    CHECK(atomic_load(&notices_told) == 2);
 
     // automatic, the test's own answer comes after the limit and the grace: the waiting call decides "offline" and
     // says so, and the late answer doesn't count
@@ -793,6 +805,30 @@ static void test_replacements(void) {
     CHECK(count_of(lines, "offline mode: automatic: the test's answer came too late to count: late.example") == 1);
     CHECK(count_of(lines, "online as usual") == 0);
     wait_for_lookups();
+    CHECK(atomic_load(&notices_told) == 3);
+
+    // a verdict before the notices are ready: told as soon as they are, once; a new start forgets it
+    offline_mode_set_notice(NULL);
+    set_fakes(5, EAI_NONAME, 0, 0, false);
+    capture_start();
+    offline_mode_start(Offline_Automatic, false, "test-mac", "lobby.example", 3074, 1500, &fake_ops);
+    CHECK(offline_mode_cut());
+    capture_end_after("offline for this session");
+    CHECK(atomic_load(&notices_told) == 3);
+    offline_mode_set_notice(count_notice);
+    CHECK(atomic_load(&notices_told) == 4);
+    offline_mode_set_notice(count_notice);
+    CHECK(atomic_load(&notices_told) == 4);
+    offline_mode_set_notice(NULL);
+    capture_start();
+    offline_mode_start(Offline_Automatic, false, "test-mac", "lobby.example", 3074, 1500, &fake_ops);
+    CHECK(offline_mode_cut());
+    capture_end_after("offline for this session");
+    capture_start();
+    offline_mode_start(Offline_Always, false, "test-mac", "lobby.example", 3074, 1500, &fake_ops);
+    capture_end();
+    offline_mode_set_notice(count_notice);
+    CHECK(atomic_load(&notices_told) == 4);
 
     // after all that, off again is off
     capture_start();
@@ -801,6 +837,131 @@ static void test_replacements(void) {
     lines = capture_end();
     CHECK(strstr(lines, "offline mode") == NULL);
 
+    offline_system = real;
+}
+
+// Off is the system as it was: every replacement hands each argument through as it came (pointers that point
+// nowhere too: none of them is read), leaves errno and h_errno as they were before the call and as the system left
+// them after it, and gives back the system's answer.
+typedef struct {
+    int calls, socket, flags, family, errno_seen, h_errno_seen;
+    const void *pointer, *buffer, *data, *length_out, *connection, *service, *hints, *result;
+    size_t size;
+    socklen_t length;
+    sae_associd_t association;
+    unsigned int data_count;
+} seen_t;
+static seen_t seen;
+
+static void saw(void) {
+    seen.calls++;
+    seen.errno_seen = errno;
+    seen.h_errno_seen = h_errno;
+    errno = 4321;
+    h_errno = 765;
+}
+static int record_connect(int socket, const struct sockaddr *address, socklen_t length) {
+    saw();
+    seen.socket = socket, seen.pointer = address, seen.length = length;
+    return 1001;
+}
+static int record_connectx(int socket, const sa_endpoints_t *endpoints, sae_associd_t association, unsigned int flags,
+                           const struct iovec *data, unsigned int data_count, size_t *length, sae_connid_t *connection) {
+    saw();
+    seen.socket = socket, seen.pointer = endpoints, seen.association = association, seen.flags = (int)flags;
+    seen.data = data, seen.data_count = data_count, seen.length_out = length, seen.connection = connection;
+    return 1002;
+}
+static ssize_t record_sendto(int socket, const void *buffer, size_t size, int flags, const struct sockaddr *address,
+                             socklen_t length) {
+    saw();
+    seen.socket = socket, seen.buffer = buffer, seen.size = size, seen.flags = flags, seen.pointer = address;
+    seen.length = length;
+    return 1003;
+}
+static ssize_t record_sendmsg(int socket, const struct msghdr *message, int flags) {
+    saw();
+    seen.socket = socket, seen.pointer = message, seen.flags = flags;
+    return 1004;
+}
+static int record_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints,
+                              struct addrinfo **result) {
+    saw();
+    seen.pointer = node, seen.service = service, seen.hints = hints, seen.result = result;
+    return 1005;
+}
+static struct hostent recorded_host;
+static struct hostent *record_gethostbyname(const char *name) {
+    saw();
+    seen.pointer = name;
+    return &recorded_host;
+}
+static struct hostent *record_gethostbyname2(const char *name, int family) {
+    saw();
+    seen.pointer = name, seen.family = family;
+    return &recorded_host + 1;
+}
+
+// before a call: what errno and h_errno hold, and nothing seen yet
+static void before_call(void) {
+    memset(&seen, 0, sizeof(seen));
+    errno = 1234;
+    h_errno = 567;
+}
+#define Handed_Through(call_result, expected)                                                                         \
+    CHECK((call_result) == (expected) && seen.calls == 1 && seen.errno_seen == 1234 && seen.h_errno_seen == 567 &&  \
+          errno == 4321 && h_errno == 765)
+
+static void test_off_hands_through(void) {
+    offline_system_t real = offline_system;
+    offline_system = (offline_system_t){ record_connect,     record_connectx,       record_sendto,
+                                         record_sendmsg,     record_getaddrinfo,    record_gethostbyname,
+                                         record_gethostbyname2 };
+    capture_start();
+    offline_mode_start(Offline_Off, true, "test-mac", "lobby.example", 3074, 1500, &fake_ops);
+    // addresses that point nowhere: off must not read them
+    const void *nowhere = (const void *)(uintptr_t)8, *elsewhere = (const void *)(uintptr_t)24;
+
+    before_call();
+    Handed_Through(offline_connect(31, (const struct sockaddr *)nowhere, 16), 1001);
+    CHECK(seen.socket == 31 && seen.pointer == nowhere && seen.length == 16);
+
+    size_t written = 0;
+    sae_connid_t connection = 0;
+    before_call();
+    Handed_Through(offline_connectx(32, (const sa_endpoints_t *)nowhere, 77, 0x5a, (const struct iovec *)elsewhere, 3,
+                                    &written, &connection),
+                   1002);
+    CHECK(seen.socket == 32 && seen.pointer == nowhere && seen.association == 77 && seen.flags == 0x5a &&
+          seen.data == elsewhere && seen.data_count == 3 && seen.length_out == &written &&
+          seen.connection == &connection);
+
+    before_call();
+    Handed_Through(offline_sendto(33, elsewhere, 999, 0x80, (const struct sockaddr *)nowhere, 28), 1003);
+    CHECK(seen.socket == 33 && seen.buffer == elsewhere && seen.size == 999 && seen.flags == 0x80 &&
+          seen.pointer == nowhere && seen.length == 28);
+
+    before_call();
+    Handed_Through(offline_sendmsg(34, (const struct msghdr *)nowhere, 0x40), 1004);
+    CHECK(seen.socket == 34 && seen.pointer == nowhere && seen.flags == 0x40);
+
+    struct addrinfo *found = (struct addrinfo *)&found;
+    before_call();
+    Handed_Through(offline_getaddrinfo((const char *)nowhere, (const char *)elsewhere,
+                                       (const struct addrinfo *)elsewhere, &found),
+                   1005);
+    CHECK(seen.pointer == nowhere && seen.service == elsewhere && seen.hints == elsewhere && seen.result == &found);
+    CHECK(found == (struct addrinfo *)&found);
+
+    before_call();
+    Handed_Through(offline_gethostbyname((const char *)nowhere), &recorded_host);
+    CHECK(seen.pointer == nowhere);
+
+    before_call();
+    Handed_Through(offline_gethostbyname2((const char *)nowhere, AF_INET6), &recorded_host + 1);
+    CHECK(seen.pointer == nowhere && seen.family == AF_INET6);
+
+    CHECK(strstr(capture_end(), "offline mode") == NULL);
     offline_system = real;
 }
 
@@ -877,6 +1038,7 @@ int main(void) {
     test_probe();
     test_probe_on_loopback();
     test_replacements();
+    test_off_hands_through();
     test_replacements_on_loopback();
     test_init();
     if (failures == 0)
