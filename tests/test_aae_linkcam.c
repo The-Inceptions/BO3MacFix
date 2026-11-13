@@ -743,6 +743,71 @@ static void test_methods(void) {
     CHECK(list(0)->count == 0 && state.noted.count == 0);
 }
 
+// The game makes its cg_t array anew when a map is left, perhaps elsewhere. What was kept of the old game's then
+// points at memory the game has given back: nothing is read from it or written to it again.
+static void test_the_next_game(void) {
+    reset_game();
+    set_mod(true);
+    link_entity(0, 1024, 4, 1, 2, 3);
+    CHECK(list(0)->count == 1 && state.cg == cg_of(0) && state.noted.count == 1);
+    uint8_t *old = game_cgs, *next = calloc(3, Cg_Size);
+    aae_linkcam_list_t old_list = *list_of(old);
+    // (the hand was being held back for the frame's view when the game was left)
+    fake_AddDObjToScene((void *)1, game_cents[0], 1024, 0, NULL);
+    CHECK(state.held.count == 1);
+    // the menu's or the next map's array is another one; where the old one was, the old list still stands
+    game_cgs = next;
+    log_clear();
+    delete_entity(0, 1024);
+    CHECK(memcmp(list_of(old), &old_list, sizeof(old_list)) == 0 && log_count(Deleted) == 1);
+    CHECK(state.cg == NULL && state.noted.count == 0 && state.held.count == 0);
+    // an entity that has the old hand's number is drawn at once, where it is, and nothing waits for a view
+    state.cg = old;
+    aae_linkcam_note(&state.noted, list_of(old));
+    log_clear();
+    fake_AddDObjToScene((void *)1, game_cents[0], 1024, 0, NULL);
+    CHECK(log_count(Drawn) == 1 && log_count(Pose) == 0 && state.held.count == 0 && state.cg == NULL &&
+          state.noted.count == 0 && memcmp(list_of(old), &old_list, sizeof(old_list)) == 0);
+    // forcedelete, and no array at all (between two maps)
+    state.cg = old;
+    force_delete_entity(0, 1024);
+    CHECK(memcmp(list_of(old), &old_list, sizeof(old_list)) == 0 && state.cg == NULL);
+    state.cg = old;
+    uint8_t *no_array = NULL;
+    cg_clients = &no_array;
+    delete_entity(0, 1024);
+    CHECK(memcmp(list_of(old), &old_list, sizeof(old_list)) == 0 && state.cg == NULL);
+    cg_clients = &game_cgs;
+    // Only a cg_t of the array counts: not one behind the local clients there are, not a place inside one, not the
+    // byte before the array. The second local client's does when there are two.
+    game_cgs = old;
+    state.cg = old + Cg_Size;
+    CHECK(kept_cg() == NULL);
+    game_local_clients = 2;
+    state.cg = old + Cg_Size;
+    CHECK(kept_cg() == old + Cg_Size);
+    state.cg = old + 2 * Cg_Size;
+    CHECK(kept_cg() == NULL);
+    state.cg = old + 8;
+    CHECK(kept_cg() == NULL);
+    state.cg = old - 1;
+    CHECK(kept_cg() == NULL);
+    state.cg = old;
+    CHECK(kept_cg() == old);
+    game_local_clients = 0;
+    CHECK(kept_cg() == NULL);
+    state.cg = old;
+    game_local_clients = -1;
+    CHECK(kept_cg() == NULL);
+    // in the same game everything goes on as before: the delete takes the entity off the list
+    game_local_clients = 1;
+    state.cg = old;
+    aae_linkcam_note(&state.noted, list_of(old));
+    delete_entity(0, 1024);
+    CHECK(list(0)->count == 0 && state.noted.count == 0 && state.cg == old);
+    free(next);
+}
+
 // ---- the debug lines, which the game checks go by (wip/agents/ltc/gamecheck): what a gesture prints
 
 static char debug_text[8192];
@@ -893,6 +958,7 @@ int main(void) {
     test_placing();
     test_without_the_mod();
     test_methods();
+    test_the_next_game();
     test_debug_lines();
     test_like_the_plugin();
 

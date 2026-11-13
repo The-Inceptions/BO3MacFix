@@ -200,6 +200,22 @@ static struct {
 static aae_linkcam_list_t *list_of(uint8_t *cg) {
     return (aae_linkcam_list_t *)(cg + Cg_Camera_List);
 }
+// The cg_t kept from the last link or view, while it is still one of the game's. The game frees its cg_t array when
+// a map is left and makes one anew for the next map or the menu, not always at the same place: what was kept then
+// points at memory that is nobody's (the game hands its pages back) or somebody else's, and a delete from a script in
+// the menu or at the next map's start would read a list there and perhaps write it. The plugin asks Windows whether
+// the memory can be read before it does that; whether it still is the list, it can't know. Here the kept cg_t counts
+// only as long as the game's array holds it, and when it doesn't, all that was kept is of a game that is over.
+static uint8_t *kept_cg(void) {
+    uintptr_t kept = (uintptr_t)state.cg, first = (uintptr_t)*cg_clients;
+    uintptr_t clients = *local_client_count > 0 ? (uintptr_t)*local_client_count : 0;
+    if (kept != 0 && (first == 0 || kept < first || kept - first >= clients * Cg_Size || (kept - first) % Cg_Size != 0)) {
+        state.cg = NULL;
+        state.noted.count = 0;
+        state.held.count = 0;
+    }
+    return state.cg;
+}
 static int32_t entity_number(const uint8_t *cent) {
     int32_t number;
     memcpy(&number, cent + Cent_Entnum, sizeof(number));
@@ -291,7 +307,7 @@ static void draw(void *object, uint8_t *cent, int32_t entnum, uint32_t flags, co
         return;
     }
     // held back until the view is worked out: also when all four places to keep it are taken, then it isn't drawn
-    uint8_t *cg = state.cg;
+    uint8_t *cg = kept_cg();
     if (cg == NULL || entity_number(cent) != entnum || aae_linkcam_find(list_of(cg), entnum) < 0) {
         orig_AddDObjToScene(object, cent, entnum, flags, lighting);
         return;
@@ -398,9 +414,10 @@ install_hook_name(CScr_LinkToCamera, void, uint64_t instance, uint64_t entity, u
 
 // delete and forcedelete: the entity is taken off the list first
 static void taken_away(int32_t entnum) {
-    if (state.cg == NULL || aae_linkcam_remove(list_of(state.cg), entnum) == 0)
+    uint8_t *cg = kept_cg();
+    if (cg == NULL || aae_linkcam_remove(list_of(cg), entnum) == 0)
         return;
-    aae_linkcam_note(&state.noted, list_of(state.cg));
+    aae_linkcam_note(&state.noted, list_of(cg));
     if (debug)
         say_list("deleted and taken off the list", entnum);
 }
