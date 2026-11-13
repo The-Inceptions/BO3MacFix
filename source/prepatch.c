@@ -85,6 +85,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_GameTypeSettings_GetFloat, Push_R15 },
     { ADDR_GPad_GetGamepadType, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xC7 } }, // ...; movsxd rax, edi
     { ADDR_GScr_IsProfileBuild, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xF6 } }, // ...; xor esi, esi
+    { ADDR_Grenade_Spawn, Push_R15 },
     { ADDR_HKAI_InitMapData, Push_R15 },
     { ADDR_hks_load_dll, Push_R15 },
     { ADDR_hksf_fopen_internal, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xC0 } }, // ...; xor eax, eax
@@ -99,6 +100,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Lua_HeapCreate, Push_R14 },
     { ADDR_PM_PlayerTrace, Push_R15 },
     { ADDR_PMem_Alloc, Push_R15 },
+    { ADDR_Projectile_Spawn, Push_R15 },
     { ADDR_Prompt_FarTest, 5, 0, { 0xBF, 0x02, 0x00, 0x00, 0x00 } },    // mov edi, 2 (a detour, see detour.h)
     { ADDR_Prompt_NearTest, 5, 0, { 0xBF, 0x02, 0x00, 0x00, 0x00 } },   // mov edi, 2
     { ADDR_Prompt_NoObjective, 7, 0, { 0x83, 0xBB, 0x54, 0x01, 0x00, 0x00, 0xFE } }, // cmp dword [rbx+0x154], -2
@@ -107,6 +109,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Prompt_Placed, 5, 0, { 0x41, 0x0F, 0x10, 0x46, 0x34 } },    // movups xmm0, [r14+0x34]
     { ADDR_R_CheckVidRestart, Push_R15 },
     { ADDR_R_SetWndParms, Push_R15 },
+    { ADDR_Rocket_Spawn, Push_R15 },
     { ADDR_Scr_ErrorInternal, Push_R15 },
     { ADDR_Scr_EvalEquality, Push_R15 },
     { ADDR_Scr_InitVariables, Push_R15 },

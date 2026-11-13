@@ -1,4 +1,5 @@
-// aae_freeaim.c: the plugin's rule for when free aim is on, and the crosshair test's hook against a made-up game.
+// aae_freeaim.c: the plugin's rule for when free aim is on, its sums for where shots go, and the hooks against a
+// made-up game.
 #include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
@@ -70,7 +71,8 @@ static struct {
               { .name = "aae_freeaim_enabled" },
               { .name = "aae_freeaim_enabled_1" },
               { .name = "aae_freeaim_target" },
-              { .name = "aae_freeaim_target_1" } };
+              { .name = "aae_freeaim_target_1" },
+              { .name = "aae_freeaim_nonbullet" } };
 static int wrong_asks; // times the text of a dvar without text was asked for
 static void *game_find(uint32_t hash) {
     for (size_t i = 0; i < sizeof(dvars) / sizeof(dvars[0]); i++)
@@ -422,8 +424,8 @@ static void test_aiming(void) {
 // ---- where the shots go
 
 // the same cases the plugin's own functions were given (see freeaim_cases.h), and what that gave
-#define Plugin_Lines 140095
-#define Plugin_Checksum 0x1f6c97748b7a6e2fULL
+#define Plugin_Lines 200159
+#define Plugin_Checksum 0x942f898a3c7aaac5ULL
 static struct {
     uint64_t checksum;
     int lines;
@@ -443,6 +445,10 @@ static int side_number(const char **text, float *value) {
 }
 static int side_turn(const float muzzle[3], const float directions[9], const float target[3], float turned[9]) {
     return aae_freeaim_turn(muzzle, directions, target, turned);
+}
+static int side_projectile(const float origin[3], const float velocity[3], const float target[3],
+                           float turned_velocity[3], float angles[3]) {
+    return aae_freeaim_projectile(origin, velocity, target, turned_velocity, angles);
 }
 static void test_like_the_plugin(void) {
     cases_out.checksum = 0xcbf29ce484222325ULL, cases_out.lines = 0;
@@ -683,6 +689,212 @@ static void test_shots(void) {
     memset(clients, 0, sizeof(clients));
 }
 
+// ---- rockets, grenades and other projectiles
+
+static bool about(float a, float b) {
+    return fabsf(a - b) < 0.01f;
+}
+// something flying from this place: whether it is turned at the target, and with what
+static float flies_with[3], flies_at[3];
+static bool flies(const float velocity[3], const float target[3]) {
+    const float from[3] = { 10, 20, 30 };
+    for (int i = 0; i < 3; i++)
+        flies_with[i] = flies_at[i] = -77.0f;
+    bool turned = aae_freeaim_projectile(from, velocity, target, flies_with, flies_at);
+    if (!turned) // nothing is given out then
+        for (int i = 0; i < 3; i++)
+            CHECK(flies_with[i] == -77.0f && flies_at[i] == -77.0f);
+    return turned;
+}
+static void test_projectile(void) {
+    const float along[3] = { 800, 0, 0 };
+    // at a target straight ahead: as it flew, level, heading along x
+    CHECK(flies(along, (float[3]){ 510, 20, 30 }) && flies_with[0] == 800.0f && flies_with[1] == 0.0f &&
+          flies_with[2] == 0.0f && flies_at[0] == 0.0f && flies_at[1] == 0.0f && flies_at[2] == 0.0f);
+    // to the side: as fast as before, heading there (yaw 90 is along y)
+    CHECK(flies(along, (float[3]){ 10, 500, 30 }) && about(flies_with[0], 0) && about(flies_with[1], 800) &&
+          about(flies_with[2], 0) && about(flies_at[0], 0) && about(flies_at[1], 90) && flies_at[2] == 0.0f);
+    CHECK(flies(along, (float[3]){ 10, -500, 30 }) && about(flies_with[1], -800) && about(flies_at[1], -90));
+    CHECK(flies(along, (float[3]){ -500, 20, 30 }) && about(flies_with[0], -800) && about(fabsf(flies_at[1]), 180));
+    // up is a pitch below 0, down one above
+    CHECK(flies(along, (float[3]){ 10, 20, 530 }) && about(flies_with[2], 800) && about(flies_at[0], -90));
+    CHECK(flies(along, (float[3]){ 10, 20, -530 }) && about(flies_with[2], -800) && about(flies_at[0], 90));
+    CHECK(flies(along, (float[3]){ 310, 20, 330 }) && about(flies_with[0], 565.685f) &&
+          about(flies_with[2], 565.685f) && about(flies_at[0], -45) && about(flies_at[1], 0));
+    // whichever way it flew: as fast as before
+    const float askew[3] = { 300, -400, 1200 };
+    CHECK(flies(askew, (float[3]){ -700, 900, 10 }) &&
+          about(sqrtf(dot(flies_with, flies_with)), 1300) && about(flies_at[1], 128.9f));
+    // straight up or down, where its "right" is made from another side: turned all the same
+    CHECK(flies((float[3]){ 0, 0, 800 }, (float[3]){ 510, 20, 30 }) && about(flies_with[0], 800) &&
+          about(flies_at[0], 0));
+    CHECK(flies((float[3]){ 0, 0, -800 }, (float[3]){ 10, 520, 30 }) && about(flies_with[1], 800) &&
+          about(flies_at[1], 90));
+    // as steep as 0.99 of its way and less: from the usual side; steeper: from the other one. Either gives the same
+    // velocity, so both are only seen to work
+    CHECK(flies((float[3]){ 142.0f, 0, 989.0f }, (float[3]){ 510, 20, 30 }) && about(flies_with[0], 999.14f));
+    CHECK(flies((float[3]){ 140.0f, 0, 990.2f }, (float[3]){ 510, 20, 30 }) && about(flies_with[0], 1000.05f));
+    // slower than 0.0001 isn't flying
+    CHECK(!flies((float[3]){ 0, 0, 0 }, (float[3]){ 510, 20, 30 }) &&
+          !flies((float[3]){ 0.00009f, 0, 0 }, (float[3]){ 510, 20, 30 }));
+    CHECK(flies((float[3]){ 0.00011f, 0, 0 }, (float[3]){ 10, 520, 30 }) && about(flies_with[1] * 10000.0f, 1.1f));
+    // a velocity that isn't numbers, or whose length isn't one
+    CHECK(!flies((float[3]){ NAN, 0, 0 }, (float[3]){ 510, 20, 30 }) &&
+          !flies((float[3]){ 0, INFINITY, 0 }, (float[3]){ 510, 20, 30 }) &&
+          !flies((float[3]){ 0, 0, 3.0e19f }, (float[3]){ 510, 20, 30 }));
+    // a target where it is, or one that isn't numbers
+    CHECK(!flies(along, (float[3]){ 10, 20, 30 }) && !flies(along, (float[3]){ NAN, 20, 30 }));
+}
+
+// what the server made, and the game's three functions that make such things
+static uint8_t made[0x4f8];
+static const float made_from[3] = { -239.0f, -1208.0f, 140.0f }, made_with[3] = { 900.0f, 0.0f, 0.0f },
+                   made_at[3] = { 3.0f, 4.0f, 5.0f };
+static struct {
+    int calls, kind;
+    uint8_t *owner, *gives;
+    uint64_t rest[7];
+} making;
+static uint8_t *game_made(int kind, uint8_t *owner, const uint64_t rest[7]) {
+    making.calls++, making.kind = kind, making.owner = owner;
+    memcpy(making.rest, rest, sizeof(making.rest));
+    return making.gives;
+}
+static uint8_t *game_grenade(uint8_t *owner, uint64_t second, uint64_t third, uint64_t fourth, uint64_t fifth,
+                             uint64_t sixth, uint64_t seventh) {
+    return game_made(0, owner, (uint64_t[7]){ second, third, fourth, fifth, sixth, seventh, 0 });
+}
+static uint8_t *game_rocket(uint8_t *owner, uint64_t second, uint64_t third, uint64_t fourth, uint64_t fifth,
+                            uint64_t sixth, uint64_t seventh) {
+    return game_made(1, owner, (uint64_t[7]){ second, third, fourth, fifth, sixth, seventh, 0 });
+}
+static uint8_t *game_projectile(uint8_t *owner, uint64_t second, uint64_t third, uint64_t fourth, uint64_t fifth,
+                                uint64_t sixth, uint64_t seventh, uint64_t eighth) {
+    return game_made(2, owner, (uint64_t[7]){ second, third, fourth, fifth, sixth, seventh, eighth });
+}
+// The server makes one of the three for this entity: whether it was turned. Either way the game's function is
+// called once with everything it was given, what it made is handed back, and nothing but the velocity and the
+// angles of the new thing is touched.
+static float made_velocity[3], made_angles[3];
+static bool makes(int kind, uint8_t *owner) {
+    uint8_t before[sizeof(made)];
+    memset(made, 0x6b, sizeof(made));
+    memcpy(made + Entity_Origin, made_from, sizeof(made_from));
+    memcpy(made + Entity_Velocity, made_with, sizeof(made_with));
+    memcpy(made + Entity_Angles, made_at, sizeof(made_at));
+    memcpy(before, made, sizeof(made));
+    making.calls = 0, making.gives = made;
+    uint8_t *given = kind == 0   ? fake_Grenade_Spawn(owner, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77)
+                     : kind == 1 ? fake_Rocket_Spawn(owner, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77)
+                                 : fake_Projectile_Spawn(owner, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88);
+    CHECK(given == made && making.calls == 1 && making.kind == kind && making.owner == owner);
+    CHECK(making.rest[0] == 0x22 && making.rest[1] == 0x33 && making.rest[2] == 0x44 && making.rest[3] == 0x55 &&
+          making.rest[4] == 0x66 && making.rest[5] == 0x77 && making.rest[6] == (kind == 2 ? 0x88 : 0));
+    memcpy(made_velocity, made + Entity_Velocity, sizeof(made_velocity));
+    memcpy(made_angles, made + Entity_Angles, sizeof(made_angles));
+    bool turned = memcmp(made_velocity, made_with, sizeof(made_with)) != 0;
+    CHECK(turned == (memcmp(made_angles, made_at, sizeof(made_at)) != 0));
+    memcpy(made + Entity_Velocity, made_with, sizeof(made_with));
+    memcpy(made + Entity_Angles, made_at, sizeof(made_at));
+    CHECK(memcmp(before, made, sizeof(made)) == 0);
+    return turned;
+}
+
+static void test_projectiles(void) {
+    set_mod(true);
+    memset(clients, 0, sizeof(clients));
+    set_view(0, true, 0, 0);
+    set_view(1, true, 0, 1);
+    orig_Grenade_Spawn = game_grenade, orig_Rocket_Spawn = game_rocket, orig_Projectile_Spawn = game_projectile;
+    set_text("aae_freeaim_target", "-239 -1108 140");
+    set_dvar_kind("aae_freeaim_target_1", false, "", Dvar_Type_String);
+    set_dvar_kind("aae_freeaim_nonbullet", false, "", Dvar_Type_String);
+    set_shooter(0, true, true);
+    // free aim not on yet for the player's client: as the game made it
+    CHECK(!makes(0, shooter) && !makes(1, shooter) && !makes(2, shooter));
+    CHECK(after_a_while(0, false));
+    // on: each of the three flies from where it is at the point the mod's script left, as fast as before, and has
+    // the angles of its way
+    for (int kind = 0; kind < 3; kind++)
+        CHECK(makes(kind, shooter) && about(made_velocity[0], 0) && about(made_velocity[1], 900) &&
+              about(made_velocity[2], 0) && about(made_angles[0], 0) && about(made_angles[1], 90) &&
+              made_angles[2] == 0.0f);
+    // each local client has a point of its own
+    set_shooter(1, true, true);
+    CHECK(after_a_while(1, false) && !makes(1, shooter));
+    set_text("aae_freeaim_target_1", "-239 -1208 500");
+    CHECK(makes(1, shooter) && about(made_velocity[2], 900) && about(made_angles[0], -90));
+    // two local clients with the same player's number: the first one's point and switch
+    set_view(1, true, 0, 0);
+    set_shooter(0, true, true);
+    CHECK(makes(1, shooter) && about(made_velocity[1], 900));
+    set_text("aae_freeaim_target", "nowhere");
+    CHECK(!makes(1, shooter));
+    set_text("aae_freeaim_target", "-239 -1108 140");
+    // a client the crosshair code was never at work for is passed over
+    clients[0].cg = NULL;
+    CHECK(makes(1, shooter) && about(made_velocity[2], 900));
+    clients[0].cg = cg_of(0);
+    set_view(1, true, 0, 1);
+    CHECK(makes(1, shooter) && about(made_velocity[1], 900));
+    // the switch for things that aren't bullets: 0 is off, anything else, nothing and what can't be read are on
+    set_text("aae_freeaim_nonbullet", "0");
+    CHECK(!makes(0, shooter) && !makes(1, shooter) && !makes(2, shooter));
+    fired.calls = 0;
+    CHECK(fires(shooter, shot)); // bullets don't go by it
+    set_text("aae_freeaim_nonbullet", "-0.0");
+    CHECK(!makes(1, shooter));
+    const char *const on[] = { "1", "0.5", "-3", "on", "", "0 0" };
+    for (size_t i = 0; i < sizeof(on) / sizeof(on[0]); i++) {
+        set_text("aae_freeaim_nonbullet", on[i]);
+        CHECK(makes(1, shooter));
+    }
+    set_dvar_kind("aae_freeaim_nonbullet", true, "0", 6);
+    CHECK(makes(1, shooter) && wrong_asks == 0);
+    set_dvar_kind("aae_freeaim_nonbullet", false, "", Dvar_Type_String);
+    CHECK(makes(1, shooter));
+    // the server says the player's view isn't third person (any byte but 0 is), or the entity has no player's state
+    set_shooter(0, false, true);
+    CHECK(!makes(1, shooter));
+    set_shooter(0, true, true);
+    shooter_state[Ps_ThirdPerson] = 2;
+    CHECK(makes(1, shooter));
+    set_shooter(0, true, false);
+    CHECK(!makes(1, shooter));
+    // somebody who isn't a local client's player, or no player at all (63 is the last one that can be)
+    set_shooter(2, true, true);
+    CHECK(!makes(1, shooter));
+    set_shooter(Max_Players, true, true);
+    set_view(0, true, 0, Max_Players);
+    CHECK(!makes(1, shooter));
+    set_shooter(Max_Players - 1, true, true);
+    set_view(0, true, 0, Max_Players - 1);
+    CHECK(makes(1, shooter));
+    set_view(0, true, 0, 0);
+    set_shooter(0, true, true);
+    CHECK(makes(1, shooter));
+    // free aim off for the client, or the mod not there
+    set_dvar("aae_freeaim_enabled", true, 0);
+    CHECK(!makes(0, shooter) && !makes(1, shooter) && !makes(2, shooter));
+    set_dvar("aae_freeaim_enabled", false, 1);
+    CHECK(makes(1, shooter));
+    set_mod(false);
+    CHECK(!makes(0, shooter) && !makes(1, shooter) && !makes(2, shooter));
+    set_mod(true);
+    CHECK(makes(0, shooter) && makes(1, shooter) && makes(2, shooter));
+    // the point is where the thing is: as the game made it
+    set_text("aae_freeaim_target", "-239 -1208 140");
+    CHECK(!makes(1, shooter));
+    set_text("aae_freeaim_target", "-239 -1108 140");
+    // nobody fired it; and the game made nothing
+    CHECK(!makes(0, NULL) && !makes(1, NULL) && !makes(2, NULL));
+    making.gives = NULL, making.calls = 0;
+    CHECK(fake_Grenade_Spawn(shooter, 1, 2, 3, 4, 5, 6) == NULL &&
+          fake_Rocket_Spawn(shooter, 1, 2, 3, 4, 5, 6) == NULL &&
+          fake_Projectile_Spawn(shooter, 1, 2, 3, 4, 5, 6, 7) == NULL && making.calls == 3);
+    memset(clients, 0, sizeof(clients));
+}
+
 static void test_init(void) {
     const uint64_t base = 0x100000000;
     aae_freeaim_init(base, 0);
@@ -693,16 +905,20 @@ static void test_init(void) {
         have_stubs = i < 2, stub_missing_for = i < 2 ? places[i] : -1;
         hooks = 0;
         aae_freeaim_init(base, 1);
-        CHECK(hooks == 2 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
+        CHECK(hooks == 5 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
                                        (void **)&orig_CG_DrawCrosshairTest) &&
-              was_hooked(ADDR_Bullet_Fire, (void *)fake_Bullet_Fire, (void **)&orig_Bullet_Fire));
+              was_hooked(ADDR_Bullet_Fire, (void *)fake_Bullet_Fire, (void **)&orig_Bullet_Fire) &&
+              was_hooked(ADDR_Grenade_Spawn, (void *)fake_Grenade_Spawn, (void **)&orig_Grenade_Spawn));
     }
     have_stubs = true, stub_missing_for = -1;
     hooks = 0;
     aae_freeaim_init(base, 1);
-    CHECK(hooks == 4 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
+    CHECK(hooks == 7 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
                                    (void **)&orig_CG_DrawCrosshairTest));
     CHECK(was_hooked(ADDR_Bullet_Fire, (void *)fake_Bullet_Fire, (void **)&orig_Bullet_Fire));
+    CHECK(was_hooked(ADDR_Grenade_Spawn, (void *)fake_Grenade_Spawn, (void **)&orig_Grenade_Spawn) &&
+          was_hooked(ADDR_Rocket_Spawn, (void *)fake_Rocket_Spawn, (void **)&orig_Rocket_Spawn) &&
+          was_hooked(ADDR_Projectile_Spawn, (void *)fake_Projectile_Spawn, (void **)&orig_Projectile_Spawn));
     CHECK(was_hooked(ADDR_CG_DrawCrosshair_Tests, (void *)handler_Crosshair_Tests, &orig_Crosshair_Tests) &&
           other_Crosshair_Tests == (void *)(base + ADDR_CG_DrawCrosshair_Draws));
     CHECK(was_hooked(ADDR_CG_DrawCrosshair_Gap, (void *)handler_Crosshair_Gap, &orig_Crosshair_Gap));
@@ -710,7 +926,7 @@ static void test_init(void) {
     CHECK(Cg_Size == 0x342a80 && Cg_ThirdPerson == 0x11a8c9 && Cg_PlayerState == 0x11a8d0 && Ps_Kind == 4 &&
           Ps_Sights == 0x2fc && Frame_Sights == -0x50 && Weapon_LeastGap == 0x6f0 && Dvar_Type == 0x1c &&
           Dvar_Type_String == 8 && Entity_Client == 0x250 && Ps_ThirdPerson == 0xbc && Shot_Muzzle == 0x24 &&
-          Max_Players == 64);
+          Max_Players == 64 && Entity_Origin == 0x1c && Entity_Velocity == 0x28 && Entity_Angles == 0x23c);
     CHECK(Dvar_FindByHash == (void *)(base + ADDR_Dvar_FindByHash) &&
           Dvar_GetString == (void *)(base + ADDR_Dvar_GetString) && cg_clients == (void *)(base + ADDR_cgArray) &&
           crosshair_asks_from == (const void *)(base + ADDR_CG_DrawCrosshair_TestReturn) && now_ms == uptime_ms);
@@ -746,6 +962,8 @@ int main(void) {
     test_numbers();
     test_turn();
     test_shots();
+    test_projectile();
+    test_projectiles();
 
     free(game_cgs);
     snprintf(command, sizeof(command), "rm -rf '%s'", template);

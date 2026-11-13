@@ -1,5 +1,6 @@
-// Made-up cases for aae_freeaim.c's sums: numbers to read and shots to turn, the same ones for the plugin's own
-// functions and for BO3MacFix's, so that what comes out can be compared bit for bit. A line goes out for each case.
+// Made-up cases for aae_freeaim.c's sums: numbers to read, shots to turn and things that fly, the same ones for the
+// plugin's own functions and for BO3MacFix's, so that what comes out can be compared bit for bit. A line goes out
+// for each case.
 //
 // The plugin's side isn't part of the tests: wip/windows/freeaim (not in the repository) maps AAEUnified.dll under
 // Wine without running anything of it and calls its functions by address (see compare.sh there). What that gave is
@@ -10,11 +11,18 @@
 #include <stdio.h>
 #include <string.h>
 
+// every side is to make the same cases: no multiplication and addition folded into one operation, which a compiler
+// may do differently for each side (also when it works a case out itself while compiling)
+#pragma STDC FP_CONTRACT OFF
+
 static void cases_line(const char *line);
 // reads a number at *text: whether there was one, with *text behind it then
 static int side_number(const char **text, float *value);
 // turns the nine directions: whether that worked
 static int side_turn(const float muzzle[3], const float directions[9], const float target[3], float turned[9]);
+// turns something that flies: whether that worked, with the velocity and the angles it gets
+static int side_projectile(const float origin[3], const float velocity[3], const float target[3],
+                           float turned_velocity[3], float angles[3]);
 
 static uint64_t cases_seed;
 static uint32_t cases_next(void) {
@@ -181,8 +189,109 @@ static void cases_turns(void) {
     }
 }
 
+// ---- things that fly
+
+static void cases_projectile_one(const float origin[3], const float velocity[3], const float target[3]) {
+    char line[400];
+    float turned[3] = { 5.0f, 5.0f, 5.0f }, angles[3] = { 5.0f, 5.0f, 5.0f };
+    int worked = side_projectile(origin, velocity, target, turned, angles);
+    int n = snprintf(line, sizeof(line), "p %d", worked);
+    for (int i = 0; i < 3 && worked; i++)
+        n += snprintf(line + n, sizeof(line) - (size_t)n, " %08x", cases_bits(turned[i]));
+    for (int i = 0; i < 3 && worked; i++)
+        n += snprintf(line + n, sizeof(line) - (size_t)n, " %08x", cases_bits(angles[i]));
+    cases_line(line);
+}
+static void cases_projectiles(void) {
+    for (int i = 0; i < 60000; i++) {
+        float origin[3], velocity[3], target[3];
+        // a direction: any, straight up or down, or about as steep as the rule for "right" turns on (0.99)
+        float direction[3] = { cases_between(-1, 1), cases_between(-1, 1), cases_between(-1, 1) };
+        uint32_t steep = cases_next() % 8;
+        if (steep == 0) {
+            direction[0] = direction[1] = 0.0f, direction[2] = cases_next() % 2 ? 1.0f : -1.0f;
+        } else if (steep <= 2) {
+            direction[2] = 0.0f;
+            cases_scale(direction, 1.0f);
+            direction[2] = cases_between(5.7f, 9.9f) * (cases_next() % 2 ? 1.0f : -1.0f);
+        }
+        cases_scale(direction, 1.0f);
+        // a speed: a usual one, next to none (0.0001 is the least), or more than its square can be
+        uint32_t fast = cases_next() % 16;
+        float speed = fast == 0 ? cases_between(0.00002f, 0.0003f)
+                      : fast == 1 ? cases_between(1.0e18f, 3.0e19f)
+                      : fast == 2 ? 0.0f
+                      : cases_between(1.0f, 5000.0f);
+        for (int k = 0; k < 3; k++) {
+            velocity[k] = direction[k] * speed;
+            origin[k] = cases_between(-6000.0f, 6000.0f);
+        }
+        if (cases_next() % 30 == 0)
+            velocity[cases_next() % 3] = cases_odd(100.0f);
+        if (cases_next() % 30 == 0)
+            origin[cases_next() % 3] = cases_odd(2.0e7f);
+        // a target somewhere, or straight ahead, or straight back, or where it is
+        uint32_t where = cases_next() % 16;
+        float away = cases_between(1.0f, 4000.0f);
+        for (int k = 0; k < 3; k++) {
+            if (where == 0)
+                target[k] = origin[k] + direction[k] * away;
+            else if (where == 1)
+                target[k] = origin[k] - direction[k] * away;
+            else if (where == 2)
+                target[k] = origin[k];
+            else if (where == 3)
+                target[k] = origin[k] + cases_between(-0.000001f, 0.000001f);
+            else
+                target[k] = origin[k] + cases_between(-3000.0f, 3000.0f);
+        }
+        if (cases_next() % 40 == 0)
+            target[cases_next() % 3] = cases_odd(1.0e9f);
+        cases_projectile_one(origin, velocity, target);
+    }
+    // as slow as the least speed, a little slower and a little faster, along each axis
+    for (int axis = 0; axis < 3; axis++) {
+        for (uint32_t bits = 0x38d1b715; bits <= 0x38d1b719; bits++) {
+            float origin[3] = { 10, 20, 30 }, velocity[3] = { 0 }, target[3] = { 400, -300, 90 };
+            velocity[axis] = cases_from_bits(bits);
+            cases_projectile_one(origin, velocity, target);
+            velocity[axis] = -velocity[axis];
+            cases_projectile_one(origin, velocity, target);
+        }
+    }
+    // as steep as the rule for "right" turns on, a little less and a little more
+    for (uint32_t bits = 0x3f7d70a2; bits <= 0x3f7d70a6; bits++) {
+        float origin[3] = { 10, 20, 30 }, target[3] = { 400, -300, 90 };
+        float up = cases_from_bits(bits), level[3] = { 1.0f - up * up, 0, 0 };
+        // the level part is the square root of 1 - up * up, by cases_scale's own root
+        float root = 1.0f;
+        for (int i = 0; i < 40; i++)
+            root = 0.5f * (root + level[0] / root);
+        float velocity[3] = { root, 0.0f, up };
+        cases_projectile_one(origin, velocity, target);
+        velocity[2] = -up;
+        cases_projectile_one(origin, velocity, target);
+    }
+    // along each axis, at a target straight ahead, straight back, straight up and level
+    for (int axis = 0; axis < 3; axis++) {
+        for (int sign = -1; sign <= 1; sign += 2) {
+            float origin[3] = { 10, 20, 30 }, velocity[3] = { 0 }, target[3] = { 10, 20, 30 };
+            velocity[axis] = 800.0f * (float)sign;
+            target[axis] += 100.0f * (float)sign;
+            cases_projectile_one(origin, velocity, target);
+            target[axis] -= 200.0f * (float)sign;
+            cases_projectile_one(origin, velocity, target);
+            target[axis] = origin[axis], target[2] += 50.0f;
+            cases_projectile_one(origin, velocity, target);
+            target[2] = origin[2], target[(axis + 1) % 2] += 70.0f;
+            cases_projectile_one(origin, velocity, target);
+        }
+    }
+}
+
 static void cases_run(void) {
     cases_seed = 20261112;
     cases_numbers();
     cases_turns();
+    cases_projectiles();
 }

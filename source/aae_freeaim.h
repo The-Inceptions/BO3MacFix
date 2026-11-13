@@ -37,4 +37,10 @@ float aae_freeaim_switch(const char *text, float otherwise);
 // take 0.05) by the shortest turn that makes forward point from the muzzle at the target. False when the directions
 // aren't such ones, the muzzle is beyond 16777216 or the target is at the muzzle.
 bool aae_freeaim_turn(const float muzzle[3], const float directions[9], const float target[3], float turned[9]);
+// The same for something that flies (a rocket, a grenade, any projectile), which has a place and a velocity and no
+// directions: they are made from the velocity, turned as above with the place as the muzzle, and out come the
+// velocity to give it, as fast as before and at the target now, and its angles (pitch, yaw and roll, in degrees).
+// False when it flies slower than 0.0001 or the turn can't be made.
+bool aae_freeaim_projectile(const float origin[3], const float velocity[3], const float target[3],
+                            float turned_velocity[3], float angles[3]);
 

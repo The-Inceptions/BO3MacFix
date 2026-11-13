@@ -3,7 +3,7 @@
 // The game has no crosshair in third person: its test for drawing one says no while the view is a third person one
 // (unless the weapon wants one anyway). The mod has a third person view of its own, and its plugin gives it a
 // crosshair and makes shots go to what is under it. This file is that, piece by piece: the crosshair, the crosshair
-// while aiming, and bullets ("where the shots go" further down).
+// while aiming, and bullets, rockets, grenades and other projectiles ("where the shots go" further down).
 //
 // The crosshair: the game's test for drawing one says yes while free aim is on. Free aim is on, by the plugin's rule, for a local client
 // whose crosshair code was at work within the last 250 ms (the plugin notes that at a place of its own right before
@@ -279,6 +279,50 @@ bool aae_freeaim_turn(const float muzzle[3], const float directions[9], const fl
     return true;
 }
 
+#define Projectile_Least_Speed 0.0001f // slower than this isn't moving
+#define Projectile_Steep 0.99f         // forward's part up or down from which "right" is worked out from another side
+#define Degrees_Per_Radian 57.29578f
+
+bool aae_freeaim_projectile(const float origin[3], const float velocity[3], const float target[3],
+                            float turned_velocity[3], float angles[3]) {
+    float speed = root(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
+    if (!is_number(speed) || Projectile_Least_Speed >= speed)
+        return false;
+    // three directions for the turn: where it flies, and a right and an up made from that
+    float directions[9], turned[9];
+    float *forward = directions, *right = directions + 3, *up = directions + 6;
+    float scale = 1.0f / speed;
+    forward[0] = velocity[0] * scale;
+    forward[1] = velocity[1] * scale;
+    forward[2] = velocity[2] * scale;
+    float side_x = fabsf(forward[2]) > Projectile_Steep ? 1.0f : 0.0f, side_z = 1.0f - side_x;
+    float x = forward[1] * side_z - forward[2] * 0.0f;
+    float y = forward[2] * side_x - forward[0] * side_z;
+    float z = forward[0] * 0.0f - forward[1] * side_x;
+    float length = root(y * y + x * x + z * z);
+    if (!is_number(length) || Turn_Least > length)
+        return false;
+    scale = 1.0f / length;
+    right[0] = x * scale;
+    right[1] = y * scale;
+    right[2] = z * scale;
+    up[0] = right[1] * forward[2] - right[2] * forward[1];
+    up[1] = right[2] * forward[0] - right[0] * forward[2];
+    up[2] = right[0] * forward[1] - right[1] * forward[0];
+    if (!aae_freeaim_turn(origin, directions, target, turned))
+        return false;
+    float level = root(turned[0] * turned[0] + turned[1] * turned[1]);
+    double pitch = atan2((double)turned[2], (double)level);
+    double yaw = atan2((double)turned[1], (double)turned[0]);
+    turned_velocity[0] = turned[0] * speed;
+    turned_velocity[1] = turned[1] * speed;
+    turned_velocity[2] = turned[2] * speed;
+    angles[0] = -(float)pitch * Degrees_Per_Radian;
+    angles[1] = (float)yaw * Degrees_Per_Radian;
+    angles[2] = 0.0f;
+    return true;
+}
+
 // ---- the game's side
 #define Cg_Size 0x342a80
 #define Cg_ThirdPerson 0x11a8c9  // a byte: the view is a third person one
@@ -292,6 +336,9 @@ bool aae_freeaim_turn(const float muzzle[3], const float directions[9], const fl
 #define Entity_Client 0x250      // gentity_s: the player's state on the server (gclient_s), or NULL
 #define Ps_ThirdPerson 0xbc      // a byte of the player state: the player's view is a third person one
 #define Shot_Muzzle 0x24         // a shot's parameters: forward, right and up (three floats each), then the muzzle
+#define Entity_Origin 0x1c       // gentity_s: where its way begins (three floats)
+#define Entity_Velocity 0x28     // and how fast it goes along it
+#define Entity_Angles 0x23c      // pitch, yaw and roll
 #define Max_Players 64
 
 static uint64_t base_address;
@@ -442,6 +489,9 @@ static bool fake_CG_DrawCrosshairTest(uint8_t *cg, uint8_t *ps) {
 // dvar, as "x y z": aae_freeaim_target (aae_freeaim_target_1 for the second local client). The server fires a bullet
 // with three directions (forward, right, up) from a muzzle. For a player whose view is third person, the plugin
 // turns those so that forward points from the muzzle at that point, fires, and puts them back.
+// Rockets, grenades and other projectiles are entities the server makes, each with a place and a velocity. Right
+// after one is made for such a player the plugin turns its velocity at the point, from where the thing is, and
+// gives it the angles of its new way (unless the dvar aae_freeaim_nonbullet is 0).
 // For a player on this machine the point is read straight from the dvar. (A player on another machine sends theirs
 // to the server; that part isn't here yet.)
 
@@ -451,47 +501,58 @@ static bool local_target(int which, float target[3]) {
     return text != NULL && aae_freeaim_target(text, target);
 }
 
-// The directions a shot of this player is to be fired with instead of its own, if any.
-static bool turned_shot(const uint8_t *attacker, const uint8_t *shot, float turned[9]) {
-    if (attacker == NULL || shot == NULL || !aae_plugin_loaded_lately())
-        return false;
-    uint32_t number;
+// the number of the player this entity is, when their view is a third person one
+static bool third_person_player(const uint8_t *entity, uint32_t *number) {
     const uint8_t *player;
-    memcpy(&number, attacker, sizeof(number));
-    memcpy(&player, attacker + Entity_Client, sizeof(player));
-    if (player == NULL || player[Ps_ThirdPerson] == 0 || number >= Max_Players)
-        return false;
+    memcpy(number, entity, sizeof(*number));
+    memcpy(&player, entity + Entity_Client, sizeof(player));
+    return player != NULL && player[Ps_ThirdPerson] != 0 && *number < Max_Players;
+}
+
+// The point this player's shots are to go to: the one of the first local client that is this player, while free aim
+// is on for them.
+static bool target_of(uint32_t number, float target[3]) {
     for (int which = 0; which < Local_Clients; which++) {
         const uint8_t *cg = seen_cg(which);
         uint32_t cg_number;
         if (cg == NULL)
             continue;
         memcpy(&cg_number, cg, sizeof(cg_number));
-        if (cg_number != number)
-            continue;
-        float target[3], directions[9], muzzle[3];
-        if (!on_for(which, cg) || !local_target(which, target))
-            return false;
-        memcpy(directions, shot, sizeof(directions));
-        memcpy(muzzle, shot + Shot_Muzzle, sizeof(muzzle));
-        if (!aae_freeaim_turn(muzzle, directions, target, turned))
-            return false;
-        if (debug) {
-            // a line for a shot at another point than the last one's (only the server's thread comes here)
-            static unsigned count;
-            static float last[3];
-            count++;
-            bool elsewhere = fabsf(target[0] - last[0]) + fabsf(target[1] - last[1]) + fabsf(target[2] - last[2]) > 1.0f;
-            memcpy(last, target, sizeof(last));
-            if (count == 1 || elsewhere)
-                printf("free aim: shot %u of player %u goes to %.1f %.1f %.1f: from %.1f %.1f %.1f, forward %.3f %.3f "
-                       "%.3f instead of %.3f %.3f %.3f\n", count, number, target[0], target[1], target[2], muzzle[0],
-                       muzzle[1], muzzle[2], turned[0], turned[1], turned[2], directions[0], directions[1],
-                       directions[2]);
-        }
-        return true;
+        if (cg_number == number)
+            return on_for(which, cg) && local_target(which, target);
     }
     return false;
+}
+
+// whether a debug line is due: for the first shot of its kind and for every one at another point than the last
+// one's (only the server's thread comes here)
+static bool worth_a_line(unsigned *count, float last[3], const float target[3]) {
+    bool elsewhere = fabsf(target[0] - last[0]) + fabsf(target[1] - last[1]) + fabsf(target[2] - last[2]) > 1.0f;
+    memcpy(last, target, 3 * sizeof(float));
+    return ++*count == 1 || elsewhere;
+}
+
+// The directions a shot of this player is to be fired with instead of its own, if any.
+static bool turned_shot(const uint8_t *attacker, const uint8_t *shot, float turned[9]) {
+    uint32_t number;
+    float target[3], directions[9], muzzle[3];
+    if (attacker == NULL || shot == NULL || !aae_plugin_loaded_lately())
+        return false;
+    if (!third_person_player(attacker, &number) || !target_of(number, target))
+        return false;
+    memcpy(directions, shot, sizeof(directions));
+    memcpy(muzzle, shot + Shot_Muzzle, sizeof(muzzle));
+    if (!aae_freeaim_turn(muzzle, directions, target, turned))
+        return false;
+    if (debug) {
+        static unsigned count;
+        static float last[3];
+        if (worth_a_line(&count, last, target))
+            printf("free aim: shot %u of player %u goes to %.1f %.1f %.1f: from %.1f %.1f %.1f, forward %.3f %.3f "
+                   "%.3f instead of %.3f %.3f %.3f\n", count, number, target[0], target[1], target[2], muzzle[0],
+                   muzzle[1], muzzle[2], turned[0], turned[1], turned[2], directions[0], directions[1], directions[2]);
+    }
+    return true;
 }
 
 // the server fires a bullet: (the player's entity, the shot's parameters, ...), with the spread as a float
@@ -508,6 +569,54 @@ install_hook_name(Bullet_Fire, void, uint8_t *attacker, uint8_t *shot, uint64_t 
     memcpy(shot, own, sizeof(own));
 }
 
+// Something that flies was made for this entity: turned at the point its player aims at, if any.
+enum { Kind_Grenade, Kind_Rocket, Kind_Projectile, Kinds };
+static void turn_projectile(const uint8_t *owner, uint8_t *made, int kind) {
+    uint32_t number;
+    float target[3], origin[3], velocity[3], turned[3], angles[3];
+    if (owner == NULL || made == NULL || !aae_plugin_loaded_lately() || !third_person_player(owner, &number))
+        return;
+    if (switch_dvar("aae_freeaim_nonbullet", 1.0f) == 0.0f || !target_of(number, target))
+        return;
+    memcpy(origin, made + Entity_Origin, sizeof(origin));
+    memcpy(velocity, made + Entity_Velocity, sizeof(velocity));
+    if (!aae_freeaim_projectile(origin, velocity, target, turned, angles))
+        return;
+    memcpy(made + Entity_Velocity, turned, sizeof(turned));
+    memcpy(made + Entity_Angles, angles, sizeof(angles));
+    if (debug) {
+        static const char *const names[Kinds] = { "grenade", "rocket", "projectile" };
+        static unsigned count[Kinds];
+        static float last[Kinds][3];
+        if (worth_a_line(&count[kind], last[kind], target))
+            printf("free aim: %s %u of player %u goes to %.1f %.1f %.1f: from %.1f %.1f %.1f, velocity %.1f %.1f %.1f "
+                   "instead of %.1f %.1f %.1f, angles %.1f %.1f\n", names[kind], count[kind], number, target[0],
+                   target[1], target[2], origin[0], origin[1], origin[2], turned[0], turned[1], turned[2], velocity[0],
+                   velocity[1], velocity[2], angles[0], angles[1]);
+    }
+}
+
+// The server makes a grenade, a rocket or another projectile: each of the three functions gets the entity that
+// fires first and gives the new entity. The rest is handed on as it came (in registers and on the stack).
+install_hook_name(Grenade_Spawn, uint8_t *, uint8_t *owner, uint64_t second, uint64_t third, uint64_t fourth,
+                  uint64_t fifth, uint64_t sixth, uint64_t seventh) {
+    uint8_t *made = orig_Grenade_Spawn(owner, second, third, fourth, fifth, sixth, seventh);
+    turn_projectile(owner, made, Kind_Grenade);
+    return made;
+}
+install_hook_name(Rocket_Spawn, uint8_t *, uint8_t *owner, uint64_t second, uint64_t third, uint64_t fourth,
+                  uint64_t fifth, uint64_t sixth, uint64_t seventh) {
+    uint8_t *made = orig_Rocket_Spawn(owner, second, third, fourth, fifth, sixth, seventh);
+    turn_projectile(owner, made, Kind_Rocket);
+    return made;
+}
+install_hook_name(Projectile_Spawn, uint8_t *, uint8_t *owner, uint64_t second, uint64_t third, uint64_t fourth,
+                  uint64_t fifth, uint64_t sixth, uint64_t seventh, uint64_t eighth) {
+    uint8_t *made = orig_Projectile_Spawn(owner, second, third, fourth, fifth, sixth, seventh, eighth);
+    turn_projectile(owner, made, Kind_Projectile);
+    return made;
+}
+
 void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     if (!enabled)
         return;
@@ -522,6 +631,9 @@ void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     DobbyHook((void *)(base_address + ADDR_CG_DrawCrosshairTest), (void *)fake_CG_DrawCrosshairTest,
               (void **)&orig_CG_DrawCrosshairTest);
     install_hook_Bullet_Fire((void *)(base_address + ADDR_Bullet_Fire));
+    install_hook_Grenade_Spawn((void *)(base_address + ADDR_Grenade_Spawn));
+    install_hook_Rocket_Spawn((void *)(base_address + ADDR_Rocket_Spawn));
+    install_hook_Projectile_Spawn((void *)(base_address + ADDR_Projectile_Spawn));
     if (!prepatch_has_hook(ADDR_CG_DrawCrosshair_Tests) || !prepatch_has_hook(ADDR_CG_DrawCrosshair_Gap)) {
         printf("free aim: not running from the pre-patched executable: the third person crosshair goes away while "
                "aiming down the sights, as the game's own does\n");

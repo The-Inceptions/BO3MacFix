@@ -114,6 +114,9 @@
 
 // the crosshair and where shots go (aae_freeaim.c) - names are guesses
 #define ADDR_Bullet_Fire 0xe285ad // func - void (gentity_s *attacker, float spread, the shot's parameters, gentity_s *weapon?, int): the server fires a bullet. The parameters begin with the shot's forward, right and up (3 floats each) and its muzzle (Windows 0x141580000)
+#define ADDR_Grenade_Spawn 0x1022bc8 // func - gentity_s *(gentity_s *owner, start, direction, weapon, int time, bool, bool): the server makes a grenade for the entity that throws or fires it; the new entity has where its way begins at +0x1c, its velocity at +0x28 and its angles at +0x23c (Windows 0x141a1c210)
+#define ADDR_Rocket_Spawn 0x1023e64 // func - gentity_s *(gentity_s *owner, weapon, start, direction, the gun's velocity, target, the target's offset): the server makes a rocket (Windows 0x141a194a0)
+#define ADDR_Projectile_Spawn 0x10230bf // func - gentity_s *(the same seven, bool): the server makes any other projectile; one caller, 0x12d00ea (Windows 0x141a1c600)
 #define ADDR_CG_DrawCrosshairTest 0xd54e99 // func - bool (cg_t *, playerState_s *): whether a crosshair is drawn at all; no while the view is third person (cg + 0x11a8c9), unless the weapon has flag 0x4000 (Windows 0x1406e9c90)
 #define ADDR_CG_DrawCrosshair_TestReturn 0xd54fac // where the crosshair function (it starts at 0xd54f45, (int localClientNum)) goes on after asking that (Windows 0x1406d062f)
 #define ADDR_CG_DrawCrosshair_Tests 0xd555d7 // "cmp bl, 0 ; jne" in the crosshair function: behind the crosshair's colour and the test of its alpha, where the tests for the sights being up (the function's copy of the player state's +0x2fc is at rbp - 0x50) and for what the weapon is doing begin; cg_t in r13 (Windows: 0x1406d5911 and the call at 0x1406d595c, where that row of tests is a function of its own, 0x1406c5aa0)
