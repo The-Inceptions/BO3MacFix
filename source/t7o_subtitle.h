@@ -27,8 +27,8 @@ bool t7o_parse_printsubtitle(int argc, const char *const *argv, int local_client
 // The arguments of the SendMenuResponse console command, which All-around Enhancement's key binds run
 // (gamedata/configs/common/aae_keybind.cfg, the pause menu's "Enhanced Controls"):
 //     bind Y "SendMenuResponse StartMenu_Main aae_flashlight 200"
-// argv[1] is the menu, argv[2] the response its GSC waits for; anything after them (the 200, which the GSC never
-// gets) is left alone. False without both, or when either has a character that could end the console line the
+// argv[1] is the menu, argv[2] the response its GSC waits for; the 200 after them is T7Overcharged's debounce, which
+// t7o_small.c applies first. False without both, or when either has a character that could end the console line the
 // response goes out on (a control character, ';' or '"').
 typedef struct {
     const char *menu;     // argv[1]

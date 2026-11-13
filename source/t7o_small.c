@@ -171,6 +171,31 @@ bool t7o_keymap_lua(char *buffer, size_t size, const char *name) {
     return true;
 }
 
+#pragma mark - SendMenuResponse's rules
+
+t7o_number t7o_menuresponse_debounce(int argc, const char *const *argv, int *debounce_ms) {
+    if (argc < 4 || argv == NULL) {
+        *debounce_ms = T7o_MenuResponse_Debounce_Ms;
+        return T7o_Number_Ok;
+    }
+    return t7o_stoi(argv[3] != NULL ? argv[3] : "", debounce_ms);
+}
+
+bool t7o_menuresponse_debounce_passes(t7o_debounce *debounce, int call_debounce_ms, int64_t now_ns) {
+    // the static is set up at the first call; unlike customkeymap's, every call puts its own debounce in it
+    if (!debounce->started) {
+        debounce->started = true;
+        debounce->first = true;
+        debounce->last_ns = now_ns;
+    }
+    debounce->debounce_ms = call_debounce_ms;
+    if (!debounce->first && elapsed_ms(now_ns, debounce->last_ns) < (int64_t)debounce->debounce_ms)
+        return false;
+    debounce->last_ns = now_ns;
+    debounce->first = false;
+    return true;
+}
+
 #pragma mark - the game's side
 
 #define ClientUIActive_KeyCatchers 0x4 // int in local client 0's clientUIActive_t (0x1078 bytes each)
@@ -297,6 +322,37 @@ static void customkeymap_f(void) {
         printf("T7Overcharged: customkeymap: %d mappings already, nothing changed\n", T7o_Keymap_Max);
         break;
     }
+}
+
+// SendMenuResponse: AAE's key binds pass 200 or 50 ms (bind Y "SendMenuResponse StartMenu_Main aae_flashlight 200"),
+// so on Windows a bind pressed again, or another one pressed, that soon after the last one is dropped
+static t7o_debounce menuresponse_debounce;     // under menuresponse_lock
+static os_unfair_lock menuresponse_lock = OS_UNFAIR_LOCK_INIT;
+static atomic_bool menuresponse_number_logged;
+
+bool t7o_small_menuresponse_passes(int argc, const char *const *argv) {
+    if (argc < 3 || argv == NULL)
+        return false;
+    int debounce = 0;
+    if (t7o_menuresponse_debounce(argc, argv, &debounce) != T7o_Number_Ok) {
+        if (!atomic_exchange_explicit(&menuresponse_number_logged, true, memory_order_relaxed))
+            printf("T7Overcharged: SendMenuResponse: \"%s\" isn't a time in milliseconds, nothing sent\n", argv[3]);
+        return false;
+    }
+    int64_t now = now_ns();
+    os_unfair_lock_lock(&menuresponse_lock);
+    int64_t since = menuresponse_debounce.started ? elapsed_ms(now, menuresponse_debounce.last_ns) : -1;
+    bool passes = t7o_menuresponse_debounce_passes(&menuresponse_debounce, debounce, now);
+    os_unfair_lock_unlock(&menuresponse_lock);
+    if (debug) {
+        if (passes)
+            printf("T7Overcharged: SendMenuResponse %s %s goes on (debounce %d ms, %lld ms after the last one)\n",
+                   argv[1], argv[2], debounce, (long long)since);
+        else
+            printf("T7Overcharged: SendMenuResponse %s %s dropped: %lld ms after the last one, debounce %d ms\n",
+                   argv[1], argv[2], (long long)since, debounce);
+    }
+    return passes;
 }
 
 void t7o_small_install(uint64_t base_address) {

@@ -114,7 +114,8 @@ messages show up on the left of the screen, as on Windows.
 
 AAE's key binds (the pause menu's "Enhanced Controls": flashlight, ping, third person, the overhead map, hiding
 the HUD...) run a `SendMenuResponse` console command the Mac build doesn't have either. BO3MacFix adds it, so those
-keys work.
+keys work. The number at the end of each bind (200, 50) is T7Overcharged's debounce, in milliseconds: as on Windows,
+a bind that comes that soon after the last one (any of them) is dropped, so a key that bounces doesn't toggle twice.
 
 AAE's loading screen lets you skip the map's loading movie with Escape or a left click, through T7Overcharged's
 `customkeymap` command; on the Mac only the controller's A button did that. BO3MacFix adds the command, with

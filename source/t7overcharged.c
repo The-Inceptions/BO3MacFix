@@ -547,7 +547,8 @@ static void printsubtitle_f(void) {
 // and its GSC waits for those menu responses. The Mac build has no SendMenuResponse console command (only the Lua
 // function), so every one of those keys printed "Unknown command" and did nothing. Ours sends the response the way
 // Engine.SendMenuResponse does for controller 0: the menu's and the response's indexes in the client's config
-// strings, then "cmd mrp"/"cmd mr" queued for the server. The number after the response is left alone.
+// strings, then "cmd mrp"/"cmd mr" queued for the server. The number after the response is T7Overcharged's debounce
+// (t7o_small.c): a call that soon after the last one is dropped, as on Windows.
 static int (*CL_ControllerToLocalClient)(int controller);
 static int (*CL_MenuIndex)(int instance, const char *menu);
 static int (*CL_MenuResponseIndex)(int instance, const char *response);
@@ -559,7 +560,9 @@ static void sendmenuresponse_f(void) {
     int argc = 0;
     const char *const *argv = t7o_command_args(&argc);
     t7o_menu_response response;
-    if (argv == NULL || !t7o_parse_sendmenuresponse(argc, argv, &response))
+    // the debounce comes first: a call it lets through counts as the last one even if it then sends nothing
+    if (argv == NULL || !t7o_small_menuresponse_passes(argc, argv) ||
+        !t7o_parse_sendmenuresponse(argc, argv, &response))
         return;
     int local_client = CL_ControllerToLocalClient(0);
     if (local_client < 0 || local_client >= *(const int *)(game_base_address + ADDR_LOCAL_CLIENT_COUNT))

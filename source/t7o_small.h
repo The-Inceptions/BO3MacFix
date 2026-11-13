@@ -1,6 +1,7 @@
 // T7Overcharged's smaller pieces that All-around Enhancement uses, done the way T7Overcharged does them (see
-// t7o_small.c): its customkeymap command, keys that call a function of the mod's Lua. The rules are plain functions
-// here, so they can be tested without the game; the game's side is at the end.
+// t7o_small.c): its customkeymap command, keys that call a function of the mod's Lua, and the debounce of its
+// SendMenuResponse command. The rules are plain functions here, so they can be tested without the game; the game's
+// side is at the end.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -76,7 +77,20 @@ bool t7o_keymap_debounce_passes(t7o_debounce *debounce, int mapping_debounce_ms,
 // the Lua T7Overcharged runs for a mapping (its text exactly, with the name); false when it doesn't fit
 bool t7o_keymap_lua(char *buffer, size_t size, const char *name);
 
+// ---- SendMenuResponse <menu> <response> [debounce ms]
+
+#define T7o_MenuResponse_Debounce_Ms 1000 // without a third number
+// the debounce of a call: argv[3] read with std::stoi, or 1000 without one; not T7o_Number_Ok where T7Overcharged
+// throws (nothing is sent then and nothing changes)
+t7o_number t7o_menuresponse_debounce(int argc, const char *const *argv, int *debounce_ms);
+// whether a call with at least a menu and a response goes on: T7Overcharged keeps one time for all SendMenuResponse
+// calls, set by every call it lets through (whether or not that one then sends anything), and each call's own
+// debounce decides
+bool t7o_menuresponse_debounce_passes(t7o_debounce *debounce, int call_debounce_ms, int64_t now_ns);
+
 // ---- the game's side
 
 // at start-up: the console command and the hook on the game's input events
 void t7o_small_install(uint64_t base_address);
+// SendMenuResponse (t7overcharged.c): whether this call goes on, by T7Overcharged's debounce
+bool t7o_small_menuresponse_passes(int argc, const char *const *argv);

@@ -469,6 +469,62 @@ static void test_keymap_game(void) {
           last_event.length == 7 && last_event.extra == 8 && last_event.pointer == 9);
 }
 
+static void test_menuresponse(void) {
+    // the number after the response: AAE's binds pass 200 or 50
+    int debounce = -1;
+    const char *flash[] = { "SendMenuResponse", "StartMenu_Main", "aae_flashlight", "200" };
+    const char *plain[] = { "SendMenuResponse", "StartMenu_Main", "aae_hud" };
+    const char *word[] = { "SendMenuResponse", "StartMenu_Main", "aae_hud", "soon" };
+    const char *huge[] = { "SendMenuResponse", "StartMenu_Main", "aae_hud", "3000000000" };
+    const char *junk[] = { "SendMenuResponse", "StartMenu_Main", "aae_hud", " 50ms" };
+    CHECK(t7o_menuresponse_debounce(ARGC(flash), flash, &debounce) == T7o_Number_Ok && debounce == 200);
+    CHECK(t7o_menuresponse_debounce(ARGC(plain), plain, &debounce) == T7o_Number_Ok && debounce == 1000);
+    CHECK(t7o_menuresponse_debounce(ARGC(junk), junk, &debounce) == T7o_Number_Ok && debounce == 50);
+    CHECK(t7o_menuresponse_debounce(ARGC(word), word, &debounce) == T7o_Number_Invalid);
+    CHECK(t7o_menuresponse_debounce(ARGC(huge), huge, &debounce) == T7o_Number_Range);
+
+    // one time for every call, each call's own debounce: the first always goes
+    const int64_t ms = 1000000;
+    t7o_debounce d;
+    memset(&d, 0, sizeof(d));
+    CHECK(t7o_menuresponse_debounce_passes(&d, 200, 1000 * ms));
+    CHECK(d.started && !d.first && d.last_ns == 1000 * ms && d.debounce_ms == 200);
+    CHECK(!t7o_menuresponse_debounce_passes(&d, 200, 1199 * ms)); // a bind pressed again too soon
+    CHECK(d.last_ns == 1000 * ms && d.debounce_ms == 200);
+    CHECK(t7o_menuresponse_debounce_passes(&d, 50, 1100 * ms)); // another one with 50 ms: 100 ms is enough for it
+    CHECK(d.last_ns == 1100 * ms && d.debounce_ms == 50);
+    CHECK(!t7o_menuresponse_debounce_passes(&d, 200, 1299 * ms));
+    CHECK(t7o_menuresponse_debounce_passes(&d, 200, 1300 * ms)); // exactly the debounce: goes
+    CHECK(!t7o_menuresponse_debounce_passes(&d, 1000, 2299 * ms)); // without a number: a second
+    CHECK(t7o_menuresponse_debounce_passes(&d, 0, 2299 * ms));
+    CHECK(t7o_menuresponse_debounce_passes(&d, 0, 2299 * ms)); // 0 drops nothing
+    CHECK(t7o_menuresponse_debounce_passes(&d, -10, 2299 * ms));
+    // whole milliseconds, cut towards zero
+    memset(&d, 0, sizeof(d));
+    CHECK(t7o_menuresponse_debounce_passes(&d, 1, 0));
+    CHECK(!t7o_menuresponse_debounce_passes(&d, 1, ms - 1));
+    CHECK(t7o_menuresponse_debounce_passes(&d, 1, ms));
+
+    // the console command's side: fewer than three words or a time that isn't one change nothing
+    memset(&menuresponse_debounce, 0, sizeof(menuresponse_debounce));
+    const char *two[] = { "SendMenuResponse", "StartMenu_Main" };
+    CHECK(!t7o_small_menuresponse_passes(ARGC(two), two) && !menuresponse_debounce.started);
+    CHECK(!t7o_small_menuresponse_passes(ARGC(word), word) && !menuresponse_debounce.started);
+    CHECK(!t7o_small_menuresponse_passes(3, NULL));
+    CHECK(t7o_small_menuresponse_passes(ARGC(flash), flash));
+    CHECK(!t7o_small_menuresponse_passes(ARGC(flash), flash)); // the same bind at once
+    menuresponse_debounce.last_ns -= 200 * ms;
+    debug = true; // its lines
+    CHECK(t7o_small_menuresponse_passes(ARGC(flash), flash));
+    CHECK(!t7o_small_menuresponse_passes(ARGC(plain), plain));
+    debug = false;
+    // a call that sends nothing (no such menu, say) still counts: the time is set by what passes
+    const char *empty[] = { "SendMenuResponse", "", "" };
+    menuresponse_debounce.last_ns -= 1000 * ms;
+    CHECK(t7o_small_menuresponse_passes(ARGC(empty), empty));
+    CHECK(!t7o_small_menuresponse_passes(ARGC(flash), flash));
+}
+
 int main(void) {
     test_stoi();
     test_keyset();
@@ -477,6 +533,7 @@ int main(void) {
     test_keymap_debounce();
     test_keymap_lua();
     test_keymap_game();
+    test_menuresponse();
     if (failures == 0)
         printf("test_t7o_small: all passed\n");
     return failures == 0 ? 0 : 1;
