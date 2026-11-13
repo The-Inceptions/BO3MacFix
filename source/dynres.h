@@ -45,6 +45,13 @@ int dynres_lowest_for(int base, int setting);
 // ResolutionPercent to render the next frames at.
 int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps);
 
+// The frame rate to reach (dynres_window's target): the display's refresh rate, our frame limit for the frame as the
+// display can show it (frame_limit_shown: BatteryFPS 45 on the 120 Hz panel is 40 fps, never 45), and the game's own
+// com_maxfps, whichever is lowest; 0 for none known. Aiming at the limit itself took the resolution down to the floor
+// on a light map at a steady 40.0 fps ("40.0 fps of 45, GPU busy 92%", 100 -> 60 in 5% steps): a frame rate the panel
+// never shows. com_maxfps isn't rounded: the engine's own limiter doesn't hold frames on screen, it only waits.
+int dynres_target(int display_fps, int frame_limit_fps, int max_fps);
+
 // Keeping the render targets of DynamicResolution's sizes. The engine's cache of render target sets (offsets.h) frees
 // sets 1-7 once they haven't been used for 11 frames (set 0, ResolutionPercent's own, stays), so every step to a size
 // other than the user's allocated its set again: one frame of 25-67 ms each time, 2-4 frames after the step. The glue

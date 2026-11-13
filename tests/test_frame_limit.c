@@ -330,7 +330,26 @@ static void test_low_power(void) {
     CHECK(frame_limit_for_frame(&limits, 12 * Second, &started, &stopped) == 60);
 }
 
+// what a limit comes out at on a display that shows each frame for whole refreshes
+static void test_shown(void) {
+    CHECK(frame_limit_shown(45, 120) == 40 && frame_limit_refreshes(45, 120) == 3);
+    CHECK(frame_limit_shown(90, 120) == 60 && frame_limit_refreshes(90, 120) == 2);
+    CHECK(frame_limit_shown(30, 120) == 30 && frame_limit_shown(40, 120) == 40 && frame_limit_shown(60, 120) == 60);
+    CHECK(frame_limit_shown(31, 120) == 30 && frame_limit_refreshes(31, 120) == 4);
+    CHECK(frame_limit_shown(120, 144) == 72 && frame_limit_shown(60, 144) == 48 && frame_limit_shown(45, 144) == 36);
+    CHECK(frame_limit_shown(45, 60) == 30 && frame_limit_shown(30, 60) == 30 && frame_limit_shown(40, 60) == 30);
+    CHECK(frame_limit_shown(45, 240) == 40 && frame_limit_shown(60, 240) == 60 && frame_limit_shown(90, 240) == 80);
+    // at or above the display's rate: the display's rate, one refresh
+    CHECK(frame_limit_shown(120, 120) == 120 && frame_limit_refreshes(120, 120) == 1);
+    CHECK(frame_limit_shown(144, 120) == 120 && frame_limit_refreshes(240, 120) == 1);
+    // no limit, or no display known: the limit itself, no refreshes
+    CHECK(frame_limit_shown(0, 120) == 0 && frame_limit_refreshes(0, 120) == 0);
+    CHECK(frame_limit_shown(45, 0) == 45 && frame_limit_refreshes(45, 0) == 0);
+    CHECK(frame_limit_shown(10, 144) == 9 && frame_limit_refreshes(10, 144) == 15); // BackgroundFPS's lowest
+}
+
 int main(void) {
+    test_shown();
     test_lowest();
     test_lowest_limit();
     test_pause_menu_open_and_close();

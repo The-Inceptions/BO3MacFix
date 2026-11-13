@@ -492,8 +492,8 @@ tests/test_prepatch: tests/test_prepatch.c source/prepatch.c source/prepatch.h s
 
 # the notices' queue and low battery levels (notice_queue.c) are plain C too
 # quick_save_rules.c: when L3 + R3 count as held, and the request waiting for checkpoint.lua
-tests/test_dynres: tests/test_dynres.c source/dynres.c source/dynres.h
-	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_dynres.c source/dynres.c
+tests/test_dynres: tests/test_dynres.c source/dynres.c source/dynres.h source/frame_limit.c source/frame_limit.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_dynres.c source/dynres.c source/frame_limit.c
 
 tests/test_launch_args: tests/test_launch_args.c source/launch_args.c source/launch_args.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_launch_args.c \

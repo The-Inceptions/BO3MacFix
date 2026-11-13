@@ -326,7 +326,48 @@ static void test_prewarm(void) {
     CHECK(!dynres_prewarm_running(&p) && !p.armed);
 }
 
+// the frame rate to reach: the display's, our limit as the display shows it, the game's own com_maxfps
+static void test_target(void) {
+    CHECK(dynres_target(120, 45, 120) == 40); // BatteryFPS 45 on the 120 Hz panel: 40 fps
+    CHECK(dynres_target(120, 90, 0) == 60);
+    CHECK(dynres_target(120, 40, 120) == 40 && dynres_target(120, 60, 120) == 60 && dynres_target(120, 30, 0) == 30);
+    CHECK(dynres_target(120, 0, 120) == 120 && dynres_target(120, 0, 0) == 120); // no limit: the display
+    CHECK(dynres_target(144, 120, 0) == 72 && dynres_target(60, 45, 0) == 30 && dynres_target(240, 45, 0) == 40);
+    CHECK(dynres_target(120, 144, 0) == 120); // a limit above the display's rate: the display's
+    CHECK(dynres_target(120, 45, 30) == 30);  // com_maxfps lower: it, not rounded (the engine only waits)
+    CHECK(dynres_target(120, 0, 50) == 50);
+    CHECK(dynres_target(0, 45, 0) == 45 && dynres_target(0, 0, 0) == 0); // no display known
+}
+
+// A limit the panel can't show exactly: BatteryFPS 45 on the 120 Hz panel comes out at a steady 40.0 fps, and the GPU's
+// busy share reads 92% there (the GPU clocks down to the pace it has: on Kino it stayed at 19-23 ms a frame from 85% down
+// to 60%). Aiming at 45 took it from 100% to the floor in 5% steps (gc11old_pwrgpu_stepskinoboom); aimed at what the
+// display shows, nothing changes. And a limit it shows exactly, the same.
+static void test_uneven_limit(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 60);
+    int moved = 0;
+    for (int i = 0; i < 400; i++)
+        moved += dynres_window(&d, 40.0, 0.92, dynres_target(120, 45, 120)) != 100;
+    CHECK(moved == 0);
+    dynres_reset(&d, 100, 60);
+    for (int i = 0; i < 400; i++)
+        moved += dynres_window(&d, 60.0, 0.94, dynres_target(120, 90, 120)) != 100;
+    CHECK(moved == 0);
+    dynres_reset(&d, 100, 60);
+    for (int i = 0; i < 400; i++)
+        moved += dynres_window(&d, 72.0, 0.95, dynres_target(144, 120, 0)) != 100;
+    CHECK(moved == 0);
+    // behind what the display can show, with the GPU busy: it still steps down (35 fps at the 40 the panel shows)
+    dynres_reset(&d, 100, 60);
+    for (int i = 0; i <= Dynres_Hold_Down; i++)
+        dynres_window(&d, 35.0, 0.97, dynres_target(120, 45, 120));
+    CHECK(d.percent == 95);
+}
+
 int main(void) {
+    test_target();
+    test_uneven_limit();
     test_lowest_for();
     test_reset();
     test_steps_down_after_hold();

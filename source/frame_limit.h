@@ -28,6 +28,18 @@ typedef struct {
 // the frame rate to pace at: the lowest of the limits that apply and are on, 0 when none is
 int frame_limit_lowest(const frame_limit_t *limits, int count);
 
+// The frame rate a limit of fps comes out at on a display_fps display. The limit keeps each frame on screen for at least
+// 1/fps s (presentDrawable:afterMinimumDuration:), and the display shows a frame for a whole number of its refreshes, so
+// a frame stays ceil(display_fps / fps) refreshes: 45 on 120 Hz is 3 refreshes, 40 fps; 90 is 2, 60 fps; 120 on 144 Hz
+// is 2, 72 fps. That holds on the built-in ProMotion panel too, which reports variable refresh: this game's window is
+// never in a fullscreen Space, and BatteryFPS 45 came out at exactly 40.0 fps there. A limit at or above the display's
+// rate comes out at the display's rate; with no limit (0) or no display known (0) it's the limit itself.
+int frame_limit_shown(int fps, int display_fps);
+
+// how many refreshes a frame of that limit stays on screen (the sum frame_limit_shown and the pacing log line use): 1 at
+// or above the display's rate, 0 with no limit or no display known
+int frame_limit_refreshes(int fps, int display_fps);
+
 typedef struct {
     // FramePacingFPS, BatteryFPS, PauseMenuFPS, MenuFPS, BackgroundFPS and LowPowerFPS, 0 = off
     atomic_int pacing_fps, battery_fps, pause_menu_fps, menu_fps, background_fps, low_power_fps;

@@ -1,6 +1,17 @@
 // See frame_limit.h.
 #include "frame_limit.h"
 
+int frame_limit_refreshes(int fps, int display_fps) {
+    if (fps <= 0 || display_fps <= 0)
+        return 0;
+    return (display_fps + fps - 1) / fps; // 1 at or above the display's rate
+}
+
+int frame_limit_shown(int fps, int display_fps) {
+    int refreshes = frame_limit_refreshes(fps, display_fps);
+    return refreshes > 0 ? display_fps / refreshes : fps;
+}
+
 int frame_limit_lowest(const frame_limit_t *limits, int count) {
     int fps = 0;
     for (int i = 0; i < count; i++)

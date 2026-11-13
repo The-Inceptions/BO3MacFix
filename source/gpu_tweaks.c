@@ -136,9 +136,9 @@ static void check_pacing(double min_duration) {
         return;
     last_fps = fps;
     last_display_fps = display_fps;
-    if (fps >= display_fps || display_fps % fps == 0 || present_display_variable_refresh())
+    int refreshes = frame_limit_refreshes(fps, display_fps);
+    if (refreshes <= 1 || display_fps % fps == 0 || present_display_variable_refresh())
         return;
-    int refreshes = (display_fps + fps - 1) / fps;
     printf("pacing at %i fps comes out at %i fps on this %i Hz display, %i or %i fps would be even\n", fps,
            display_fps / refreshes, display_fps, display_fps / refreshes, display_fps / (refreshes - 1));
 }
@@ -460,18 +460,14 @@ static bool dynres_prewarm_tick(char *dvar, uint64_t now, bool view_3d, int appe
     return true;
 }
 
-// the frame rate to reach: the display's refresh rate, or a lower limit (ours, or MaxFPS)
+// the frame rate to reach: the display's refresh rate, or a lower limit (ours as the display shows it, or MaxFPS), see
+// dynres_target
 static int dynres_target_fps(int frame_limit_fps) {
     static void *maxfps = NULL;
     if (maxfps == NULL)
         maxfps = ((void *(*)(uint32_t))(game_base_address + ADDR_Dvar_FindByHash))(Hash_com_maxfps);
-    int target = present_display_max_fps();
-    if (frame_limit_fps > 0 && (target <= 0 || frame_limit_fps < target))
-        target = frame_limit_fps;
     int max_fps = maxfps != NULL ? ((int (*)(void *))(game_base_address + ADDR_Dvar_GetInt))(maxfps) : 0;
-    if (max_fps > 0 && (target <= 0 || max_fps < target))
-        target = max_fps;
-    return target;
+    return dynres_target(present_display_max_fps(), frame_limit_fps, max_fps);
 }
 
 // BO3MACFIX_DYNRESTRACE=1: a step's next presents and the command buffers that complete around them, in ms from the

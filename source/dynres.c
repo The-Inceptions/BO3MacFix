@@ -1,5 +1,6 @@
 // See dynres.h.
 #include "dynres.h"
+#include "frame_limit.h"
 #include <dispatch/dispatch.h> // DISPATCH_MEMORYPRESSURE_*
 
 void dynres_reset(dynres_t *d, int base, int lowest) {
@@ -55,6 +56,16 @@ int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps) {
     if (++d->headroom_windows < Dynres_Hold_Up || !settled)
         return d->percent;
     return change(d, up);
+}
+
+int dynres_target(int display_fps, int frame_limit_fps, int max_fps) {
+    int target = display_fps > 0 ? display_fps : 0;
+    int limit = frame_limit_shown(frame_limit_fps, display_fps); // never above the display's rate
+    if (limit > 0)
+        target = limit;
+    if (max_fps > 0 && (target <= 0 || max_fps < target))
+        target = max_fps;
+    return target;
 }
 
 void dynres_keep_add(dynres_keep_t *keep, uint32_t size) {
