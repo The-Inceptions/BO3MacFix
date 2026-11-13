@@ -213,6 +213,9 @@ static uint8_t *map_image(const uint8_t *copy) {
 static void fake_function(void) {
 }
 
+static void other_function(void) {
+}
+
 static void check_runtime(uint8_t *image, const uint8_t *original) {
     uint64_t base = (uint64_t)image;
     CHECK(prepatch_init(base), "prepatch_init doesn't see the copy");
@@ -265,6 +268,7 @@ static void check_runtime(uint8_t *image, const uint8_t *original) {
 
     // hooks only set their slot, and the original is the trampoline
     uint32_t slot = ADDR_Prepatch_Slots;
+    int set_before = hooks_set;
     for (size_t i = 0; i < Hook_Count; i++, slot += 8) {
         void *orig = NULL;
         CHECK(BO3MacFix_Hook(image + hook_defs[i].function, (void *)fake_function, &orig) == 0, "hook %08x refused",
@@ -273,6 +277,18 @@ static void check_runtime(uint8_t *image, const uint8_t *original) {
         uint32_t stub = hook_defs[i].function + 5 + rel32(image + hook_defs[i].function + 1);
         CHECK(orig == image + stub + 16, "hook %08x: the original isn't the trampoline", hook_defs[i].function);
     }
+    CHECK(hooks_set == set_before + (int)Hook_Count, "%i hooks count as set", hooks_set - set_before);
+    // A function that has its hook doesn't get another one: the first would be gone without a word. The same hook
+    // again is fine, and isn't counted twice.
+    void *first_orig = NULL, *second_orig = (void *)&failures;
+    int refused_at_second = refused;
+    CHECK(BO3MacFix_Hook(image + hook_defs[0].function, (void *)other_function, &second_orig) == -1 &&
+              second_orig == (void *)&failures && *(void **)(image + ADDR_Prepatch_Slots) == (void *)fake_function &&
+              refused == refused_at_second + 1, "a second hook on a hooked function isn't refused");
+    CHECK(BO3MacFix_Hook(image + hook_defs[0].function, (void *)fake_function, &first_orig) == 0 &&
+              first_orig == image + hook_defs[0].function + 5 + rel32(image + hook_defs[0].function + 1) + 16 &&
+              hooks_set == set_before + (int)Hook_Count && refused == refused_at_second + 1,
+          "the same hook again on a hooked function");
     // a value patch goes into the setting's slot, a byte patch already in the copy is left alone
     uint8_t mov_edx_4[] = { 0xBA, 0x04, 0x00, 0x00, 0x00 };
     CHECK(BO3MacFix_CodePatch(image + ADDR_JobThreadsDvar_DefaultInstr, mov_edx_4, sizeof(mov_edx_4)) == 0, "JobThreads");
@@ -560,6 +576,9 @@ int main(void) {
             }
             CHECK(dobby_hooks == 0, "%i hooks of foreign copy %i were made in memory", dobby_hooks, which);
             void *orig = NULL;
+            CHECK(BO3MacFix_Hook(image + hook_defs[0].function, (void *)other_function, &orig) == -1 && orig == NULL &&
+                      *(void **)(image + ADDR_Prepatch_Slots) == (void *)fake_function && dobby_hooks == 0,
+                  "a second hook on a function foreign copy %i hooked isn't refused", which);
             CHECK(BO3MacFix_Hook(image + 0x3000, (void *)fake_function, &orig) == 0 && dobby_hooks == 1,
                   "a hook such a copy doesn't have");
             CHECK(!prepatch_has_hook(hook_defs[0].function), "foreign copy %i has detours", which);

@@ -465,10 +465,21 @@ static const value_def_t *value_def_at(uint32_t site) {
 
 // stores a hook in its stub's slot. The original first: a hook installed while the game runs can be called as soon as
 // its slot is set. The stub reads the slot twice (cmp, then jmp), so a slot must never go back to 0 once it's set.
-static void set_slot(uint32_t slot, uint32_t trampoline, void *fake_func, void **out_origin_func) {
+// A slot that holds a hook isn't given another one. Two pieces that hook the same function don't know of each other,
+// and the second would take the first one's place without a word: the first then never runs again. They have to share
+// one hook (aae_skeleton.c is such a one).
+static int set_slot(uint32_t function, uint32_t slot, uint32_t trampoline, void *fake_func, void **out_origin_func) {
+    void *held = __atomic_load_n((void **)(base + slot), __ATOMIC_ACQUIRE);
+    if (held != NULL && held != fake_func) {
+        refused++;
+        printf("BO3MacFix: can't hook %08x a second time, it keeps the hook it has\n", function);
+        return -1;
+    }
     *out_origin_func = (void *)(base + trampoline);
     __atomic_store_n((void **)(base + slot), fake_func, __ATOMIC_RELEASE);
-    hooks_set++;
+    if (held == NULL)
+        hooks_set++;
+    return 0;
 }
 
 bool prepatch_has_hook(uint32_t offset) {
@@ -485,10 +496,9 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
         // A copy whose changes aren't known: a function it hooked still begins with a jump to a stub, and a stub says
         // everything about itself. Hooking such a function in memory instead would put a jump over the copy's own,
         // and where that is longer than what the copy replaced, the stub's way back would land inside it.
-        if (stub_at((uint32_t)((uint64_t)address - base), 0xE9, &slot, &trampoline)) {
-            set_slot(slot, trampoline, fake_func, out_origin_func);
-            return 0;
-        }
+        uint32_t function = (uint32_t)((uint64_t)address - base);
+        if (stub_at(function, 0xE9, &slot, &trampoline))
+            return set_slot(function, slot, trampoline, fake_func, out_origin_func);
         return DobbyHook(address, fake_func, out_origin_func);
     }
     if (!prepatch_active() || !in_game_image(address))
@@ -500,8 +510,7 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
             printf("BO3MacFix: can't hook %08x, the pre-patched executable's stub for it isn't as expected\n", offset);
             return -1;
         }
-        set_slot(slot, trampoline, fake_func, out_origin_func);
-        return 0;
+        return set_slot(offset, slot, trampoline, fake_func, out_origin_func);
     }
     // a hook the copy doesn't have: hooking it in memory still works, but brings back Rosetta's JIT. Dobby's jump is
     // at most 14 bytes.
