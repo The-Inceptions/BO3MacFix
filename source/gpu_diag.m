@@ -199,3 +199,44 @@ int gpu_diag_trace_take(double times[][3], int max) {
     os_unfair_lock_unlock(&busy_lock);
     return count;
 }
+
+// FrameStats with BO3MACFIX_FRAMEPACESTATS=1: when each frame was shown, for frame_pace.c. The handlers run on a Metal
+// thread, the render thread takes the times every FrameStats window.
+enum { Presented_Max = 8192 };
+static os_unfair_lock presented_lock = OS_UNFAIR_LOCK_INIT;
+static double presented_times[Presented_Max];
+static int presented_count = 0;
+
+void gpu_diag_watch_presented(void *drawable) {
+    if (drawable == NULL)
+        return;
+    if (@available(macOS 10.15.4, *)) {
+        [(id<MTLDrawable>)drawable addPresentedHandler:^(id<MTLDrawable> shown) {
+            CFTimeInterval at = shown.presentedTime;
+            os_unfair_lock_lock(&presented_lock);
+            if (presented_count < Presented_Max)
+                presented_times[presented_count++] = at > 0 ? at : 0;
+            os_unfair_lock_unlock(&presented_lock);
+        }];
+    }
+}
+
+int gpu_diag_take_presented(double *times, int max) {
+    os_unfair_lock_lock(&presented_lock);
+    int count = presented_count < max ? presented_count : max;
+    memcpy(times, presented_times, sizeof(times[0]) * count);
+    double last = 0;
+    for (int i = 0; i < count; i++)
+        if (times[i] > last)
+            last = times[i];
+    presented_times[0] = last;
+    presented_count = last > 0 ? 1 : 0;
+    os_unfair_lock_unlock(&presented_lock);
+    return count;
+}
+
+void gpu_diag_forget_presented(void) {
+    os_unfair_lock_lock(&presented_lock);
+    presented_count = 0;
+    os_unfair_lock_unlock(&presented_lock);
+}

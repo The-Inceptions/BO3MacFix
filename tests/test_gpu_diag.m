@@ -35,6 +35,28 @@ static void (^last_handler)(id) = nil;
 }
 @end
 
+// a stand-in drawable for FrameStats' frame pacing: keeps the presented handler to call with a time of the test's
+@interface FakeDrawable : NSObject
+@property CFTimeInterval presentedTime;
+@property (nonatomic, copy) void (^handler)(id);
+- (void)addPresentedHandler:(void (^)(id))handler;
+@end
+
+@implementation FakeDrawable
+- (void)addPresentedHandler:(void (^)(id))handler {
+    self.handler = handler;
+}
+- (void)shownAt:(CFTimeInterval)time {
+    self.presentedTime = time;
+    if (self.handler != nil)
+        self.handler(self);
+}
+- (void)dealloc {
+    [_handler release];
+    [super dealloc];
+}
+@end
+
 static int failures = 0;
 #define CHECK(cond)                                                                                                    \
     do {                                                                                                               \
@@ -120,6 +142,31 @@ int main(void) {
         if (last_handler != nil)
             last_handler(buffer);
         CHECK(gpu_diag_trace_take(times, Gpu_Diag_Trace_Max) == 0);
+
+        // frame pacing: the times frames were shown, in the order recorded, a frame never shown as 0; the last one
+        // shown starts the next take, and forgetting drops it
+        double shown[8];
+        CHECK(gpu_diag_take_presented(shown, 8) == 0);
+        FakeDrawable *drawables[3];
+        for (int i = 0; i < 3; i++) {
+            drawables[i] = [[FakeDrawable alloc] init];
+            gpu_diag_watch_presented(drawables[i]);
+            CHECK(drawables[i].handler != nil);
+        }
+        gpu_diag_watch_presented(NULL);
+        [drawables[1] shownAt:10.025];
+        [drawables[0] shownAt:10.0];
+        [drawables[2] shownAt:0];
+        CHECK(gpu_diag_take_presented(shown, 8) == 3);
+        CHECK(shown[0] == 10.025 && shown[1] == 10.0 && shown[2] == 0);
+        [drawables[0] shownAt:10.05];
+        CHECK(gpu_diag_take_presented(shown, 8) == 2);
+        CHECK(shown[0] == 10.025 && shown[1] == 10.05);
+        CHECK(gpu_diag_take_presented(shown, 8) == 1 && shown[0] == 10.05);
+        gpu_diag_forget_presented();
+        CHECK(gpu_diag_take_presented(shown, 8) == 0);
+        for (int i = 0; i < 3; i++)
+            [drawables[i] release];
 
         // only the first call swizzles
         gpu_diag_watch_command_buffers(buffer);

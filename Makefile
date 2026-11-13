@@ -8,6 +8,7 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag \
 	tests/test_t7o_subtitle
 TEST_TARGETS += tests/test_launch_args
+TEST_TARGETS += tests/test_frame_pace
 # the plugin's packets and rules for joining a game on the local network, its listener over the loopback (aae_lan.c)
 TEST_TARGETS += tests/test_aae_lan
 # compiled scripts and All-around Enhancement 4's patch scripts (gsc_obj.c)
@@ -108,6 +109,8 @@ SOURCES += source/players_cfg.c
 # which frame rate limit applies to a frame, and the pause menu's and the menus' state for PauseMenuFPS and MenuFPS
 # (frame_limit.c), and whether the game is in the background for BackgroundFPS (app_focus.m)
 SOURCES += source/frame_limit.c source/app_focus.m
+# how many refreshes each frame stayed on screen, for FrameStats with BO3MACFIX_FRAMEPACESTATS=1 (frame_pace.c)
+SOURCES += source/frame_pace.c
 # DynamicResolution's controller (dynres.c), plain C like frame_limit.c
 SOURCES += source/dynres.c
 # PlayStation controllers through macOS's GameController framework (gc_bridge.m), weak-linked because it needs macOS 11.3
@@ -512,6 +515,9 @@ tests/test_notice_queue: tests/test_notice_queue.c source/notice_queue.c source/
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_notice_queue.c source/notice_queue.c
 
 # which frame rate limit applies to a frame and the pause menu's state (frame_limit.c), plain C as well
+tests/test_frame_pace: tests/test_frame_pace.c source/frame_pace.c source/frame_pace.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_frame_pace.c source/frame_pace.c
+
 tests/test_frame_limit: tests/test_frame_limit.c source/frame_limit.c source/frame_limit.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_frame_limit.c source/frame_limit.c
 

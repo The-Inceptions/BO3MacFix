@@ -14,3 +14,11 @@ double gpu_diag_busy_total(void);
 enum { Gpu_Diag_Trace_Max = 64 };
 void gpu_diag_trace_begin(int buffers);
 int gpu_diag_trace_take(double times[][3], int max);
+// FrameStats with BO3MACFIX_FRAMEPACESTATS=1: records when the frame of drawable (an id<MTLDrawable> about to be
+// presented) is shown (its presentedTime, seconds; 0 for a frame never shown), and gives the times recorded since the
+// last call, at most max, in the order recorded. The last frame shown is kept as the first of the next call's, so
+// that its time on screen counts there.
+void gpu_diag_watch_presented(void *drawable);
+int gpu_diag_take_presented(double *times, int max);
+// forgets the times recorded (FrameStats turned off and on again: the time in between isn't a frame's)
+void gpu_diag_forget_presented(void);

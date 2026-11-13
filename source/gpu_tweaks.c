@@ -39,6 +39,7 @@
 #include "app_focus.h"
 #include "dynres.h"
 #include "frame_limit.h"
+#include "frame_pace.h"
 #include "gpu_tweaks.h"
 #include "metalfx.h"
 #include "prepatch.h"
@@ -57,10 +58,32 @@ static int metalfx_active = 0;
 static int frame_stats_seconds = 0; // 0 when not logging frame stats
 static int frame_stats_detail = 0; // BO3MACFIX_FRAMESTATSDETAIL=1: also the script errors thrown in each window
 static atomic_uint frame_stats_session = 0; // goes up each time FrameStats is turned on from the menu
+// BO3MACFIX_FRAMEPACESTATS=1: also a "frame pacing:" line, how many refreshes each frame stayed on screen (frame_pace.h)
+static int frame_pace_stats = 0;
 
 static int compare_floats(const void *a, const void *b) {
     float x = *(const float *)a, y = *(const float *)b;
     return (x > y) - (x < y);
+}
+
+// the "frame pacing:" line for the frames shown since the last one (BO3MACFIX_FRAMEPACESTATS=1)
+static void frame_pace_log(int display_fps) {
+    static double shown[8192], work[8192];
+    int count = gpu_diag_take_presented(shown, (int)(sizeof(shown) / sizeof(shown[0])));
+    if (display_fps <= 0)
+        return;
+    frame_pace_t pace;
+    frame_pace_summarize(shown, count, 1.0 / display_fps, work, &pace);
+    if (pace.frames == 0) {
+        printf("frame pacing: no frame shown (%i presented)\n", count);
+        return;
+    }
+    double share = 100.0 / pace.frames;
+    printf("frame pacing: shown %.1f fps, 1%% low %.1f fps, worst %.1f ms; on screen 1 refresh %.0f%%, 2 %.0f%%, 3 %.0f%%, "
+           "4 or more %.0f%% (of %i Hz); %.0f%% changed from the frame before, %.0f%% off the refresh grid (%i frames)\n",
+           pace.fps, pace.low_1_fps, pace.worst_ms, pace.refreshes[0] * share, pace.refreshes[1] * share,
+           pace.refreshes[2] * share, pace.refreshes[3] * share, display_fps, pace.changes * share,
+           pace.off_grid * share, pace.frames);
 }
 
 // times each present, and every frame_stats_seconds logs the average frame rate, the 1% low (the frame rate of the
@@ -80,6 +103,8 @@ static void frame_stats_tick(void) {
         session = current;
         last_present = window_start = 0;
         frames = stored = 0;
+        if (frame_pace_stats)
+            gpu_diag_forget_presented();
     }
     if (last_present != 0) {
         if (stored < (int)(sizeof(frame_ms) / sizeof(frame_ms[0])))
@@ -122,6 +147,8 @@ static void frame_stats_tick(void) {
     }
     printf("frame stats: %.1f fps, 1%% low %.1f fps, worst frame %.1f ms (%i frames in %.1f s%s)%s\n",
            frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds, display, detail);
+    if (frame_pace_stats)
+        frame_pace_log(display_fps);
     frames = stored = 0;
     window_start = now;
 }
@@ -699,6 +726,8 @@ static void present_drawable(id command_buffer, SEL sel, id drawable) {
         supported = class_respondsToSelector(object_getClass(command_buffer), sel_present_after_minimum_duration);
     if (min_duration > 0)
         wait_for_turn(min_duration);
+    if (frame_pace_stats && frame_stats_seconds > 0)
+        gpu_diag_watch_presented((void *)drawable);
     if (min_duration > 0 && supported)
         ((void (*)(id, SEL, id, double))objc_msgSend)(command_buffer, sel_present_after_minimum_duration, drawable, min_duration);
     else
@@ -809,6 +838,8 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch) 
     const char *env = getenv("BO3MACFIX_FRAMESTATS");
     if (env != NULL)
         seconds = atoi(env);
+    const char *pace = getenv("BO3MACFIX_FRAMEPACESTATS");
+    frame_pace_stats = pace != NULL && atoi(pace) != 0;
     if (seconds <= 0)
         return;
     if (!redirect_present(checked_code_patch)) {
@@ -818,7 +849,7 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch) 
     frame_stats_seconds = seconds;
     const char *detail = getenv("BO3MACFIX_FRAMESTATSDETAIL");
     frame_stats_detail = detail != NULL && atoi(detail) != 0;
-    printf("logging frame stats every %i s\n", seconds);
+    printf("logging frame stats every %i s%s\n", seconds, frame_pace_stats ? ", and when the frames are shown" : "");
 }
 
 // whether the Mac is running on battery right now (BO3MACFIX_ONBATTERY=1 pretends it is, for testing)
