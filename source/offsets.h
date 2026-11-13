@@ -540,6 +540,8 @@
 #define ADDR_GScr_AllocString 0x1172afc // func - scr_string_t (const char *): SL_GetString(name, 1), one reference per name (Windows 0x141a77150)
 #define ADDR_Sys_IsMainThread 0xd05c19 // func - bool (void): the thread is the game's main one (Windows 0x14212aff0)
 #define ADDR_Com_IsRunningUILevel 0xe71737 // func - bool (void): the front end's UI level runs, the dvar with hash 0xd1eff758 and a flag (Windows 0x1420ef8f0)
+#define ADDR_BG_IsDualWield 0x1382008 // func - bool (Weapon): its definition's +0xe8c, or an attachment's +0x39 (Windows 0x14267aaf0)
+#define ADDR_BG_GetDualWieldWeapon 0x138472c // func - Weapon (Weapon): the weapon with its index from the definition's +0xf60 (Windows 0x1426762a0)
 // All-around Enhancement's widgets on the first person weapon, the plugin's viewmodel_ui_anchor (aae_vmwidget.c)
 #define ADDR_LUI_Startup 0xebeea9 // func - void (callback, callback), "LUI: Starting up...": makes the UI's Lua VM and registers the UI element methods of the list at ADDR_LUI_ElementMethods in it (Windows 0x14268c3d0, inlined here) - name is a guess
 #define ADDR_LUI_ElementMethods 0x119c6b80 // {name, lua_CFunction, next} *: the list of the UI element methods, built by static initializers (Windows 0x159bf7e00) - name is a guess

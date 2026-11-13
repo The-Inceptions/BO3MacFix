@@ -1,5 +1,6 @@
 // All-around Enhancement 4's gun position, and the other moves of the first person gun's bones it makes: what the
-// mod's T7Overcharged does with the dvars viewmodel_p<N>_move<M> (AAEGunPosition).
+// mod's T7Overcharged does with the dvars viewmodel_p<N>_move<M> (AAEGunPosition). Further down, its bullets that
+// leave a belt-fed gun's belt as the magazine empties (AAEBulletDepletion).
 //
 // The mod's pause menu has a gun position option (sliders for X, Y, Z and three rotations). It writes
 //     viewmodel_p<N>_move0 "tag_ads <Y - 100> <Z - 100> <X - 100> <Y rotation> <Z rotation> <X rotation>"
@@ -212,7 +213,8 @@ void aae_viewmodel_entries_clear(aae_viewmodel_entries_t *entries) {
 
 #define Client_Prefix "viewmodel_p"
 
-// T7O 0x18007a470: a line is up to a '\n', one '\r' before it dropped, up to a "//", without white space around
+// T7O 0x18007a470: a line is up to a '\n' and up to a "//". T7Overcharged also drops one '\r' before the '\n' and
+// trims white space around the line, which are white space to the pieces anyway.
 void aae_viewmodel_read_move_config(const char *text, size_t length, aae_viewmodel_config_move_t each, void *context) {
     const size_t prefix = strlen(Client_Prefix);
     while (length > 0) {
@@ -221,17 +223,11 @@ void aae_viewmodel_read_move_config(const char *text, size_t length, aae_viewmod
         const char *line = text;
         text += newline != NULL ? line_length + 1 : length;
         length -= newline != NULL ? line_length + 1 : length;
-        if (line_length > 0 && line[line_length - 1] == '\r')
-            line_length--;
         for (size_t at = 0; at + 1 < line_length; at++)
             if (line[at] == '/' && line[at + 1] == '/') {
                 line_length = at;
                 break;
             }
-        while (line_length > 0 && is_space(line[0]))
-            line++, line_length--;
-        while (line_length > 0 && is_space(line[line_length - 1]))
-            line_length--;
         // the pieces, with viewmodel_p0 in front of a line whose first piece doesn't begin with viewmodel_p
         const char *pieces[9] = { NULL };
         size_t lengths[9] = { 0 };
@@ -254,6 +250,95 @@ void aae_viewmodel_read_move_config(const char *text, size_t length, aae_viewmod
     }
 }
 
+// ---- the bullets on a belt
+//
+// T7Overcharged's other half of the same component. The mod lists in T7Overcharged/viewmodel_hide.cfg the bones of
+// the bullets of belt-fed guns (from custom maps' weapon packs: "IW4 RPD", "T9 MG82", ...), and every frame, behind
+// the moves, T7Overcharged hides each listed bullet the magazine no longer holds: with n rounds in the clip, bullets
+// n and up (and all of them in an empty clip), by moving the bone 1000 units back with the same local tag as a move
+// ("0 0 -1000", "0 0 0"). A dual wield weapon's second gun is done the same with its own clip and the left hand's
+// suffix. The dvar bullet_depletion_disabled switches it off; the mod's client script sets it, by the script's texts
+// around machine gun reloads (so that the belt is full while one is put in). The file is read once, at the first
+// frame.
+// T7Overcharged's three more ways of hiding (only one bullet shown, or counted from the other end) can't be had: its
+// reading of the file always gives the first. Its switches per hand and a "reload mode" are set only through
+// rumbles with names of their own, which the mod never plays; so both hands stay on and the reload mode off. A
+// gamedata/viewmodel_hide.cfg in the fastfiles would come first and be read as moves (a slip in T7Overcharged); the
+// mod has none, and that isn't done here.
+
+#define Hide_Line "viewmodel_hide"
+#define Hide_Line_Client "viewmodel_hide_p"
+
+// A piece without double quotes around it (T7O 0x180079de0), cut at 127 characters: no more of it can be in a bone's
+// name. (T7Overcharged's names of it end at a '\0' inside, as this C string does.)
+static void quoteless(const char *piece, size_t length, char out[128]) {
+    if (length >= 2 && piece[0] == '"' && piece[length - 1] == '"')
+        piece++, length -= 2;
+    if (length > 127)
+        length = 127;
+    memcpy(out, piece, length);
+    out[length] = '\0';
+}
+
+// T7O 0x180079f14 and 0x1800797a8: a line is up to a '\n' (std::getline) and up to a "//"; the white space it trims
+// around a line is white space to the pieces as well
+void aae_viewmodel_read_hide_config(const char *text, size_t length, aae_viewmodel_config_hide_t each, void *context) {
+    const size_t named = strlen(Hide_Line), named_client = strlen(Hide_Line_Client);
+    while (length > 0) {
+        const char *newline = memchr(text, '\n', length);
+        size_t line_length = newline != NULL ? (size_t)(newline - text) : length;
+        const char *line = text;
+        text += newline != NULL ? line_length + 1 : length;
+        length -= newline != NULL ? line_length + 1 : length;
+        for (size_t at = 0; at + 1 < line_length; at++)
+            if (line[at] == '/' && line[at + 1] == '/') {
+                line_length = at;
+                break;
+            }
+        const char *pieces[6] = { NULL };
+        size_t lengths[6] = { 0 };
+        int count = split(line, line_length, pieces, lengths, 6);
+        aae_viewmodel_hide_t hide;
+        memset(&hide, 0, sizeof(hide));
+        if (count == 0)
+            continue;
+        if (lengths[0] == named && memcmp(pieces[0], Hide_Line, named) == 0)
+            hide.local_client = 0;
+        else if (lengths[0] < named_client || memcmp(pieces[0], Hide_Line_Client, named_client) != 0 ||
+                 !aae_viewmodel_integer(pieces[0] + named_client, lengths[0] - named_client, &hide.local_client))
+            continue;
+        if (count < 6 || !aae_viewmodel_integer(pieces[4], lengths[4], &hide.start) ||
+            !aae_viewmodel_integer(pieces[5], lengths[5], &hide.end))
+            continue;
+        // the width: the digits in <start> as it is written, counted in a byte, 1 for none
+        uint8_t digits = 0;
+        for (size_t i = 0; i < lengths[4]; i++)
+            if (pieces[4][i] >= '0' && pieces[4][i] <= '9')
+                digits++;
+        hide.width = digits != 0 ? digits : 1;
+        quoteless(pieces[1], lengths[1], hide.prefix);
+        quoteless(pieces[2], lengths[2], hide.suffix);
+        quoteless(pieces[3], lengths[3], hide.left_suffix);
+        each(context, &hide);
+    }
+}
+
+// T7O 0x1800795ac: as many as from <start> to <end>, in its 32 bits
+int aae_viewmodel_bullets(const aae_viewmodel_hide_t *hide) {
+    int count = (int)((uint32_t)hide->end - (uint32_t)hide->start + 1u);
+    return count > 0 ? count : 0;
+}
+
+void aae_viewmodel_bullet_bone(const aae_viewmodel_hide_t *hide, bool left_hand, int number, char name[128]) {
+    const char *suffix = left_hand ? hide->left_suffix : hide->suffix;
+    snprintf(name, 128, "%s%0*d%s", hide->prefix, hide->width, number, suffix);
+}
+
+// T7O 0x18007c96c, the one way of its four the file gives
+bool aae_viewmodel_bullet_hidden(int number, int clip) {
+    return clip <= number || clip == 0;
+}
+
 // ---- the game's side
 
 #define Local_Clients 4    // the view model's local client, the byte at DObj +0x123, is 0 to 3 for a real one
@@ -262,10 +347,14 @@ void aae_viewmodel_read_move_config(const char *text, size_t length, aae_viewmod
 #define Part_Bits 12       // the parts mask a local tag is set through: 384 bits, all set
 #define Config_Folder "T7Overcharged" // in the mod's folder: T7Overcharged's own (its DLL's name without .ff)
 #define Move_Config "viewmodel_move.cfg"
+#define Hide_Config "viewmodel_hide.cfg"
+#define Hide_Position "0 0 -1000" // a hidden bullet's move: 1000 units back
+#define Hide_Angles "0 0 0"
 
 typedef struct DObj DObj;
 
 static int debug;
+static bool gun_position, bullet_depletion; // the two settings
 static void *(*Dvar_FindByHash)(uint32_t hash);
 static const char *(*Dvar_GetString)(void *dvar);
 static bool (*Sys_IsMainThread)(void);
@@ -275,17 +364,22 @@ static uint32_t (*GScr_AllocString)(const char *name);
 static int (*DObjGetBoneIndex)(const DObj *obj, uint32_t name, uint16_t *index, int models);
 static void (*DObjSetLocalTag)(DObj *obj, int32_t *part_bits, int index, const float *translation,
                                const float *angles);
+static int (*BG_GetAmmoInClip)(void *ps, uint64_t weapon);
+static bool (*BG_IsDualWield)(uint64_t weapon);
+static uint64_t (*BG_GetDualWieldWeapon)(uint64_t weapon);
 
 // what is kept for each local client
 typedef struct {
     aae_viewmodel_entries_t dvar_moves;
     aae_viewmodel_move_t *config_moves;
     int config_count, config_capacity;
+    aae_viewmodel_hide_t *hides; // viewmodel_hide.cfg's lines for it
+    int hide_count, hide_capacity;
 } client_t;
 static client_t clients[Local_Clients];
-// the mod folder viewmodel_move.cfg was read from, "" before it was; T7Overcharged reads it once (after the
-// commands above, again)
-static char move_config_from[4096];
+// the mod folder viewmodel_move.cfg and viewmodel_hide.cfg were read from, "" before they were; T7Overcharged reads
+// each once (after the commands above, again)
+static char move_config_from[4096], hide_config_from[4096];
 
 // A switch dvar as the game reads a bool: a bool's byte, a text's atoi (the mod sets them from scripts, which makes
 // text dvars here where T7Overcharged had registered bools); none, or another kind, is off.
@@ -336,38 +430,45 @@ static void note_move(int local_client, int place, const char *bone, int index, 
     last[local_client][place] = hash;
 }
 
-// T7O 0x180078e0c and 0x180078d64. T7Overcharged hands DObjGetBoneIndex a bone index it never set, which the game
-// takes as a guess (0xffff would even be "not there"); its own callers start with 0xfffe, "don't know", as this does.
-static void move_bone(int local_client, int place, DObj *obj, const char *bone, const char *position,
-                      const char *angles) {
-    float translation[3], rotation[3];
+// T7O 0x180078e0c and 0x180078d64: the bone's local tag; its index, -1 when the view model has no such bone, -2 for
+// texts that aren't three numbers each. T7Overcharged hands DObjGetBoneIndex a bone index it never set, which the
+// game takes as a guess (0xffff would even be "not there"); its own callers start with 0xfffe, "don't know", as
+// this does.
+static int set_tag(DObj *obj, const char *bone, const char *position, const char *angles, float translation[3],
+                   float rotation[3]) {
     if (!aae_viewmodel_transform(position, angles, translation, rotation) || bone[0] == '\0')
-        return;
+        return -2;
     uint32_t name = GScr_AllocString(bone);
     uint16_t index = 0xfffe;
-    if (!DObjGetBoneIndex(obj, name, &index, -1)) {
-        note_move(local_client, place, bone, -1, translation, rotation);
-        return;
-    }
+    if (!DObjGetBoneIndex(obj, name, &index, -1))
+        return -1;
     int32_t part_bits[Part_Bits];
     memset(part_bits, 0xff, sizeof(part_bits));
     DObjSetLocalTag(obj, part_bits, index, translation, rotation);
-    note_move(local_client, place, bone, index, translation, rotation);
+    return index;
 }
 
+static void move_bone(int local_client, int place, DObj *obj, const char *bone, const char *position,
+                      const char *angles) {
+    float translation[3], rotation[3];
+    int index = set_tag(obj, bone, position, angles, translation, rotation);
+    if (index != -2)
+        note_move(local_client, place, bone, index, translation, rotation);
+}
+
+// (the clients are indexed in each use, so that the sanitizers of the tests see one that isn't there)
 static void config_move(void *context, int local_client, const aae_viewmodel_move_t *move) {
     (void)context;
     if (local_client < 0 || local_client >= Local_Clients)
         return;
-    client_t *client = &clients[local_client];
-    if (client->config_count == client->config_capacity) {
-        int capacity = client->config_capacity > 0 ? client->config_capacity * 2 : 8;
-        aae_viewmodel_move_t *more = realloc(client->config_moves, (size_t)capacity * sizeof(*more));
+    if (clients[local_client].config_count == clients[local_client].config_capacity) {
+        int capacity = clients[local_client].config_capacity > 0 ? clients[local_client].config_capacity * 2 : 8;
+        aae_viewmodel_move_t *more = realloc(clients[local_client].config_moves, (size_t)capacity * sizeof(*more));
         if (more == NULL)
             return;
-        client->config_moves = more, client->config_capacity = capacity;
+        clients[local_client].config_moves = more, clients[local_client].config_capacity = capacity;
     }
-    client->config_moves[client->config_count++] = *move;
+    clients[local_client].config_moves[clients[local_client].config_count++] = *move;
 }
 
 // a file's text, NULL for none; T7Overcharged reads it whole
@@ -453,25 +554,127 @@ static void move_bones(int local_client, DObj *obj) {
     }
 }
 
-// What T7Overcharged's hook does behind the game's own work (T7O 0x18007d940).
-static void after_dynamic_bones(void *cg, DObj *obj) {
+static void config_hide(void *context, const aae_viewmodel_hide_t *hide) {
+    (void)context;
+    const int which = hide->local_client;
+    if (which < 0 || which >= Local_Clients)
+        return;
+    if (clients[which].hide_count == clients[which].hide_capacity) {
+        int capacity = clients[which].hide_capacity > 0 ? clients[which].hide_capacity * 2 : 8;
+        aae_viewmodel_hide_t *more = realloc(clients[which].hides, (size_t)capacity * sizeof(*more));
+        if (more == NULL)
+            return;
+        clients[which].hides = more, clients[which].hide_capacity = capacity;
+    }
+    clients[which].hides[clients[which].hide_count++] = *hide;
+}
+
+// viewmodel_hide.cfg, read at the first frame of the mod as viewmodel_move.cfg is
+static void read_hide_config(void) {
+    const char *folder = t7o_mod_folder();
+    char path[sizeof(hide_config_from) + 64];
+    if (strcmp(hide_config_from, folder) == 0)
+        return;
+    snprintf(hide_config_from, sizeof(hide_config_from), "%s", folder);
+    for (int i = 0; i < Local_Clients; i++)
+        clients[i].hide_count = 0;
+    snprintf(path, sizeof(path), "%s/%s/%s", folder, Config_Folder, Hide_Config);
+    size_t length = 0;
+    char *text = read_file(path, &length);
+    if (text != NULL && length > 0)
+        aae_viewmodel_read_hide_config(text, length, config_hide, NULL);
+    free(text);
+    if (debug)
+        printf("view model: %s: %d lines of bullets for local client 0\n", path, clients[0].hide_count);
+}
+
+// A line when the clip or what is hidden is another than in the last frame (BO3MACFIX_VIEWMODELDEBUG=1).
+static void note_hidden(int local_client, bool left_hand, int clip, int hidden, int missing, const char *first,
+                        const char *last) {
+    static uint32_t noted[Local_Clients][2];
+    char line[512];
+    if (!debug)
+        return;
+    snprintf(line, sizeof(line), "%d in the clip: hides %d bullet bones (%s to %s); %d more of its listed ones are "
+             "no bones of this view model", clip, hidden, first, last, missing);
+    uint32_t hash = gsc_hash(line) | 1;
+    if (noted[local_client][left_hand] != hash)
+        printf("view model: local client %d, %s hand: %s\n", local_client, left_hand ? "left" : "right", line);
+    noted[local_client][left_hand] = hash;
+}
+
+// T7O 0x18007d300 and 0x18007c96c: one gun's clip, and its listed bullets hidden from the clip's count on
+static void hide_hand(int local_client, void *ps, DObj *obj, uint64_t weapon, bool left_hand) {
+    int clip = BG_GetAmmoInClip(ps, weapon), hidden = 0, missing = 0;
+    char first[128] = "-", last[128] = "-";
+    read_hide_config();
+    const client_t *client = &clients[local_client];
+    for (int line = 0; line < client->hide_count; line++) {
+        const aae_viewmodel_hide_t *hide = &client->hides[line];
+        int bullets = aae_viewmodel_bullets(hide);
+        for (int i = 0; i < bullets; i++) {
+            int number = (int)((uint32_t)hide->start + (uint32_t)i);
+            if (!aae_viewmodel_bullet_hidden(number, clip))
+                continue;
+            char bone[128];
+            float translation[3], rotation[3];
+            aae_viewmodel_bullet_bone(hide, left_hand, number, bone);
+            if (set_tag(obj, bone, Hide_Position, Hide_Angles, translation, rotation) < 0) {
+                missing++;
+                continue;
+            }
+            if (hidden++ == 0)
+                memcpy(first, bone, sizeof(first));
+            memcpy(last, bone, sizeof(last));
+        }
+    }
+    note_hidden(local_client, left_hand, clip, hidden, missing, first, last);
+}
+
+// a line when bullet_depletion_disabled changes (BO3MACFIX_VIEWMODELDEBUG=1)
+static void note_disabled(bool disabled) {
+    static int noted = -1;
+    if (!debug)
+        return;
+    if (noted != (int)disabled)
+        printf("view model: bullet_depletion_disabled is %d%s\n", disabled, disabled ? ": no bullet is hidden" : "");
+    noted = disabled;
+}
+
+// T7O 0x18007d494, every frame, behind the moves
+static void hide_bullets(int local_client, void *ps, DObj *obj, uint64_t weapon) {
+    bool disabled = switch_dvar("bullet_depletion_disabled");
+    note_disabled(disabled);
+    if (disabled)
+        return;
+    hide_hand(local_client, ps, obj, weapon, false);
+    if (BG_IsDualWield(weapon))
+        hide_hand(local_client, ps, obj, BG_GetDualWieldWeapon(weapon), true);
+}
+
+// What T7Overcharged's hook does behind the game's own work (T7O 0x18007d940): the moves, then the bullets.
+static void after_dynamic_bones(void *cg, void *ps, DObj *obj, uint64_t weapon) {
     if (cg == NULL || obj == NULL || !aae_plugin_loaded_lately() || !Sys_IsMainThread() || Com_IsRunningUILevel())
         return;
     int local_client = DObjGetLocalClientIndex(obj);
     if (local_client < 0 || local_client >= Local_Clients)
         return;
-    move_bones(local_client, obj);
+    if (gun_position)
+        move_bones(local_client, obj);
+    if (bullet_depletion)
+        hide_bullets(local_client, ps, obj, weapon);
 }
 
 // The game sets the bones of the first person weapon it moves by itself: (cg_t *, playerState_s *, the view model's
 // DObj, the weapon, centity_t *)
 install_hook_name(CG_UpdateViewModelDynamicBones, void, void *cg, void *ps, DObj *obj, uint64_t weapon, void *cent) {
     orig_CG_UpdateViewModelDynamicBones(cg, ps, obj, weapon, cent);
-    after_dynamic_bones(cg, obj);
+    after_dynamic_bones(cg, ps, obj, weapon);
 }
 
-void aae_viewmodel_init(uint64_t game_base_address, int gun_position) {
-    if (!gun_position)
+void aae_viewmodel_init(uint64_t game_base_address, int gun_position_on, int bullet_depletion_on) {
+    gun_position = gun_position_on != 0, bullet_depletion = bullet_depletion_on != 0;
+    if (!gun_position && !bullet_depletion)
         return;
     const char *env = getenv("BO3MACFIX_VIEWMODELDEBUG");
     debug = env != NULL ? atoi(env) : 0;
@@ -484,7 +687,14 @@ void aae_viewmodel_init(uint64_t game_base_address, int gun_position) {
     GScr_AllocString = (void *)(game_base_address + ADDR_GScr_AllocString);
     DObjGetBoneIndex = (void *)(game_base_address + ADDR_DObjGetBoneIndex);
     DObjSetLocalTag = (void *)(game_base_address + ADDR_DObjSetLocalTag);
+    BG_GetAmmoInClip = (void *)(game_base_address + ADDR_BG_GetAmmoInClip);
+    BG_IsDualWield = (void *)(game_base_address + ADDR_BG_IsDualWield);
+    BG_GetDualWieldWeapon = (void *)(game_base_address + ADDR_BG_GetDualWieldWeapon);
     install_hook_CG_UpdateViewModelDynamicBones((void *)(game_base_address + ADDR_CG_UpdateViewModelDynamicBones));
-    printf("view model: AAEGunPosition on: All-around Enhancement's moves of the first person gun's bones, as its "
-           "T7Overcharged makes them\n");
+    if (gun_position)
+        printf("view model: AAEGunPosition on: All-around Enhancement's moves of the first person gun's bones, as its "
+               "T7Overcharged makes them\n");
+    if (bullet_depletion)
+        printf("view model: AAEBulletDepletion on: the bullets of a belt-fed gun leave its belt as the magazine "
+               "empties, as All-around Enhancement's T7Overcharged hides them\n");
 }

@@ -1242,9 +1242,11 @@ __attribute__((constructor)) static void dylib_main() {
     // plugin gives it (AAECoopPause, on by default), see aae_coop_pause.c
     aae_coop_pause_init(game_base_address, read_int_setting_or_env("AAECoopPause", 1));
 
-    // All-around Enhancement 4's gun position and its other moves of the first person gun's bones, as the mod's
-    // T7Overcharged makes them (AAEGunPosition, on by default), see aae_viewmodel.c
-    aae_viewmodel_init(game_base_address, read_int_setting_or_env("AAEGunPosition", 1));
+    // All-around Enhancement 4's gun position and its other moves of the first person gun's bones, and the bullets
+    // that leave a belt-fed gun's belt, as the mod's T7Overcharged makes them (AAEGunPosition and AAEBulletDepletion,
+    // on by default), see aae_viewmodel.c
+    aae_viewmodel_init(game_base_address, read_int_setting_or_env("AAEGunPosition", 1),
+                       read_int_setting_or_env("AAEBulletDepletion", 1));
 
     // the two UI element methods All-around Enhancement 4's Windows plugin adds for HUD widgets on the first person
     // weapon, which the mod doesn't use yet (AAEViewmodelWidgets, on by default), see aae_vmwidget.c

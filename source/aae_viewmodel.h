@@ -1,11 +1,12 @@
 // T7Overcharged's moves of the first person gun's bones, which All-around Enhancement 4 uses for its gun position
-// option and more (AAEGunPosition). See aae_viewmodel.c.
+// option and more (AAEGunPosition), and its bullets that leave a belt-fed gun's belt as the magazine empties
+// (AAEBulletDepletion). See aae_viewmodel.c.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-void aae_viewmodel_init(uint64_t game_base_address, int gun_position);
+void aae_viewmodel_init(uint64_t game_base_address, int gun_position, int bullet_depletion);
 
 // ---- what T7Overcharged makes of the texts
 
@@ -58,3 +59,25 @@ void aae_viewmodel_entries_clear(aae_viewmodel_entries_t *entries);
 // viewmodel_p<N> the line is for local client 0): each one T7Overcharged takes is handed to the function, in order.
 typedef void (*aae_viewmodel_config_move_t)(void *context, int local_client, const aae_viewmodel_move_t *move);
 void aae_viewmodel_read_move_config(const char *text, size_t length, aae_viewmodel_config_move_t each, void *context);
+
+// ---- the bullets on a belt
+
+// A line of viewmodel_hide.cfg, "viewmodel_hide[_p<N>] <prefix> <suffix> <left hand's suffix> <start> <end>": the
+// bones of bullets <start> to <end> of local client N's view model (0 without _p<N>). A bullet's bone is the prefix,
+// its number with zeros in front to as many digits as <start> has, and the suffix (the left hand's for the second gun
+// of a dual wield weapon; "" for none). Kept as T7Overcharged prints the names, so 127 characters at most.
+typedef struct {
+    int local_client;
+    int start, end, width;
+    char prefix[128], suffix[128], left_suffix[128];
+} aae_viewmodel_hide_t;
+// Each line of viewmodel_hide.cfg T7Overcharged takes ("//" begins a comment) is handed to the function, in order.
+typedef void (*aae_viewmodel_config_hide_t)(void *context, const aae_viewmodel_hide_t *hide);
+void aae_viewmodel_read_hide_config(const char *text, size_t length, aae_viewmodel_config_hide_t each, void *context);
+// How many bullets a line names: <end> - <start> + 1 in 32 bits, 0 for none.
+int aae_viewmodel_bullets(const aae_viewmodel_hide_t *hide);
+// The bone of bullet <number>.
+void aae_viewmodel_bullet_bone(const aae_viewmodel_hide_t *hide, bool left_hand, int number, char name[128]);
+// Whether bullet <number> is hidden with <clip> rounds in the clip: from the clip's count on, and all of them when it
+// is empty.
+bool aae_viewmodel_bullet_hidden(int number, int clip);
