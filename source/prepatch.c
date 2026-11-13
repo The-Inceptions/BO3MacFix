@@ -163,6 +163,10 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Lua_GetBuildIntField, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
     { ADDR_Lua_GetBuildStringField, Push_R14 },
     { ADDR_Lua_HeapCreate, Push_R14 },
+    { ADDR_PM_Accelerate, Push_R15 },
+    { ADDR_PM_CheckJump_DelayCmp, 6, 0, { 0x81, 0xF9, 0xF4, 0x01, 0x00, 0x00 } }, // cmp ecx, 500 (a detour)
+    { ADDR_PM_Friction, Push_R15 },
+    { ADDR_PM_Friction_GotFriction, 5, 0, { 0xF3, 0x0F, 0x59, 0x45, 0xE4 } }, // mulss xmm0, [rbp-0x1c] (a detour)
     { ADDR_PM_PlayerTrace, Push_R15 },
     { ADDR_PMem_Alloc, Push_R15 },
     { ADDR_Projectile_Spawn, Push_R15 },

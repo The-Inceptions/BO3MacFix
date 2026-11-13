@@ -216,6 +216,15 @@
 #define ADDR_PM_PlayerTrace 0x113b850 // func - void (pmove_t *, trace_t *, start, mins, maxs, end, passEntityNum, contentMask)
 #define ADDR_GameTypeSettings_GetFloat 0xd973da // func - float (const char *name, bool)
 
+// T7Overcharged's movement patch fastjump (aae_move_fastjump.c)
+#define ADDR_PM_Accelerate 0x1147ed9 // func - void (playerState_s *, pml_t *, const vec3 wishdir, float wishspeed, float accel): adds to the velocity towards wishdir, at most up to wishspeed (Windows 0x14260ecd0, wishspeed in xmm3 and accel on the stack)
+#define ADDR_PM_AirMove_AccelerateReturn 0x1147411 // where PM_AirMove (0x1147137) goes on after the first of its two calls of it (Windows 0x14260f320)
+#define ADDR_PM_WalkMove_AccelerateReturn 0x1147096 // where PM_WalkMove (0x1146cf7) goes on after the first of its two (Windows 0x14261a6d5)
+#define ADDR_PM_CheckJump_DelayCmp 0x14dd451 // "cmp ecx, 500 ; jl <no jump>" in PM_CheckJump (0x14dd41e), ecx the command's time minus the player state's jump time (+0x110) (Windows 0x1425fce51)
+#define ADDR_PM_Friction 0x113c32e // func - void (pml_t *, pmove_t *): the ground's friction on the velocity (Windows 0x142613540)
+#define ADDR_PM_Friction_GotFriction 0x113c500 // "mulss xmm0, [rbp - 0x1c]" right behind PM_Friction's main call of BG_GetFriction (0x1073e6b, the constant 5.5): the friction in xmm0, the player state in rbx, the pmove in r15, the pml in r14 (Windows: behind the call at 0x1426136cd)
+#define ADDR_PM_IsInAir 0x113d293 // func - bool (pmove_t *, pml_t *): no ground entity (0x3ff), pm_type not 1 or 7, not 0x1398d1f(ps), and pml + 0x34 is 0 (Windows 0x142614860)
+
 // T7Overcharged's jumpslowdown, which All-around Enhancement switches on (aae_move_jump.c) - names are T7Overcharged's
 #define ADDR_BG_GetViewDip 0x113caec // func - int (playerState_s *, float fall speed): how far the camera dips on a landing; called by the landing (0x114669c) and the client's view (0x121e7f9) (Windows 0x14260e710, the speed in xmm1)
 #define ADDR_Jump_ReduceFriction 0x14dcf3a // func - float (playerState_s *): PM_Friction's (0x113c32e) multiplier of the ground's friction while movement flag 18 is set, 2 down to 1 over the slowdown after a jump (Windows 0x1425fd630)

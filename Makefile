@@ -26,6 +26,9 @@ TEST_TARGETS += tests/test_pmem_spill
 TEST_TARGETS += tests/test_aae_mantle
 # the plugin's rules for a host who leaves, and the handlers of its detour and hooks (aae_hostmig.c)
 TEST_TARGETS += tests/test_aae_hostmig
+# T7Overcharged's fastjump: its rules, its table of times in the air, its handlers (aae_move_fastjump.c), and again with
+# the thread sanitizer, since the server's and the client's movement use that table at once
+TEST_TARGETS += tests/test_aae_move_fastjump tests/test_aae_move_fastjump_tsan
 # T7Overcharged's movement switches: its commands, its start and its dvars (aae_movement.c)
 TEST_TARGETS += tests/test_aae_movement tests/test_aae_movement_x86_64
 # startweaponanim's weapAnim value (weapon_anim.h)
@@ -125,6 +128,8 @@ SOURCES += source/aae_mantle.c
 SOURCES += source/aae_hostmig.c
 # AAEMovement: T7Overcharged's movement changes that the mod switches on; the switches (aae_movement.c)
 SOURCES += source/aae_movement.c
+# its patch fastjump: the next jump at once, more air control, the speed kept through a landing (aae_move_fastjump.c)
+SOURCES += source/aae_move_fastjump.c
 # its jumpslowdown: no penalty for jumping again and again (aae_move_jump.c)
 SOURCES += source/aae_move_jump.c
 # its changes to sprinting (aae_move_sprint.c)
@@ -285,6 +290,16 @@ tests/test_aae_hostmig: tests/test_aae_hostmig.c source/aae_hostmig.c source/aae
 		source/aae_plugin.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_hostmig.c
+
+# aae_move_fastjump.c: T7Overcharged's rules and its table of times in the air, the hooks and detours against a
+# made-up game, and the same cases as T7Overcharged's own code under Wine (tests/fastjump_cases.h)
+FASTJUMP_TEST_FILES = tests/test_aae_move_fastjump.c tests/fastjump_cases.h source/aae_move_fastjump.c \
+		source/aae_move_fastjump.h source/aae_movement.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h
+tests/test_aae_move_fastjump: $(FASTJUMP_TEST_FILES)
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_move_fastjump.c
+tests/test_aae_move_fastjump_tsan: $(FASTJUMP_TEST_FILES)
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=thread -o $@ tests/test_aae_move_fastjump.c
 
 # aae_movement.c: T7Overcharged's movement switches against a made-up game (the test includes the source)
 tests/test_aae_movement: tests/test_aae_movement.c source/aae_movement.c source/aae_movement.h source/aae_plugin.h \
