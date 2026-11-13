@@ -791,9 +791,11 @@ detour_with_registers(Arc_Marker) {
         printf("arc: no end marker behind %d segments (the first time)\n", segments);
 }
 
-// the job adds a segment to the arc: (int local client, the trace ...)
-install_hook_name(CG_ArcPrediction_AddSegment, void, int local_client, uint64_t second, uint64_t third,
-                  uint64_t fourth, uint64_t fifth, uint64_t sixth) {
+// The job adds a segment to the arc: (int local client, the trace, and in xmm0 and xmm1 the segment's thickness at
+// its two ends, which the draw function scales by 0.09). The floats are declared so that the compiler keeps them for
+// the game across active(), whose look at the mod now and then uses xmm0 and xmm1 itself.
+install_hook_name(CG_ArcPrediction_AddSegment, void, int local_client, const void *trace, float start_thickness,
+                  float end_thickness) {
     if (active()) {
         int segments = (unsigned)local_client < Local_Clients ? as_int(arc_block(local_client) + Arc_Segments) : 0;
         if (!aae_arc_may_add_segment(local_client, segments)) {
@@ -803,7 +805,7 @@ install_hook_name(CG_ArcPrediction_AddSegment, void, int local_client, uint64_t 
             return;
         }
     }
-    orig_CG_ArcPrediction_AddSegment(local_client, second, third, fourth, fifth, sixth);
+    orig_CG_ArcPrediction_AddSegment(local_client, trace, start_thickness, end_thickness);
 }
 
 void aae_arc_init(uint64_t game_base_address, int enabled) {

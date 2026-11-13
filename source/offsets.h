@@ -153,7 +153,7 @@
 #define ADDR_CG_ArcPrediction_NoTacticalMode 0x11f29a5 // "movss xmm0, [rbp - 0x2c]" in the job (it starts at 0x11f255f): the branch for Tactical Mode (0x11f187c) being off; only the je at 0x11f2975 comes here, right behind the test's call (Windows: the call at 0x1405fbf3e, "OFF_CG_ArcPrediction_TmodeNop2")
 #define ADDR_CG_ArcPrediction_TacticalMode 0x11f2977 // the branch for it being on: at most 3000 ms ahead, in steps of a 50th of that, at least 3
 #define ADDR_CG_ArcPrediction_WeaponDef 0x11f2643 // "mov [rbp - 0xa0], rax" in the job right behind its BG_GetWeaponDef: the definition in rax, the weapon in rbx (Windows: the call at 0x1405fbbd3)
-#define ADDR_CG_ArcPrediction_AddSegment 0x11f531b // func - void (int localClientNum, trace *): adds a segment to the arc; the job's two calls (Windows 0x1405f11b0)
+#define ADDR_CG_ArcPrediction_AddSegment 0x11f531b // func - void (int localClientNum, trace *, float, float): adds a segment to the arc, the floats are its thickness at both ends (xmm0, xmm1); the job's two calls (Windows 0x1405f11b0)
 #define ADDR_CG_ArcBlocks 0x148a13e0 // per local client, 0xeec bytes: 5 segments of 60 points (vec3), their point counts at +0xe10, the number of segments at +0xe60, the end marker's byte at +0xee9 (Windows 0x1447992b0)
 #define ADDR_CG_DrawArc_FirstLine 0x11f4b37 // "lea rdi, [rbp - 0xa8] ; call" in the arc's draw function (it starts at 0x11f4926 with the local client at rbp - 0xac): the first loop over the segments hands the game a draw command (start +4, end +0x10, last point +0x40, points +0x68) (Windows: the call at 0x1405f684d)
 #define ADDR_CG_DrawArc_SecondLine 0x11f4c4a // the same in its second loop (Windows: the call at 0x1405f697c)

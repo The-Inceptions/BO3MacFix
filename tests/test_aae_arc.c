@@ -85,16 +85,18 @@ static uint64_t game_calc_skeleton(const uint8_t *object, uint64_t second, uint6
     memcpy(game_skeleton.arguments, got, sizeof(got));
     return 0x5ca1ab1e;
 }
+// the game's function as the job calls it: the two floats come in xmm0 and xmm1
+typedef void (*add_segment_t)(int local_client, const void *trace, float start_thickness, float end_thickness);
 static struct {
     int calls, local_client;
-    uint64_t arguments[5];
+    const void *trace;
+    float start_thickness, end_thickness;
 } game_segment;
-static void game_add_segment(int local_client, uint64_t second, uint64_t third, uint64_t fourth, uint64_t fifth,
-                             uint64_t sixth) {
-    const uint64_t got[5] = { second, third, fourth, fifth, sixth };
+static void game_add_segment(int local_client, const void *trace, float start_thickness, float end_thickness) {
     game_segment.calls++;
     game_segment.local_client = local_client;
-    memcpy(game_segment.arguments, got, sizeof(got));
+    game_segment.trace = trace;
+    game_segment.start_thickness = start_thickness, game_segment.end_thickness = end_thickness;
 }
 
 static struct {
@@ -287,6 +289,19 @@ static void set_mod(bool loaded) {
     if (loaded)
         snprintf(loaded_name, sizeof(loaded_name), "%s", strrchr(mod_folder, '/') + 1);
     plugin_time += Plugin_Look_Ms;
+}
+
+// The hook called as the game calls it, with the mod looked at anew first (its look copies the mod's name through
+// xmm0 and xmm1), so that floats the hook doesn't keep would come to the game changed.
+static void add_segment_as_the_game(int local_client, float start_thickness, float end_thickness) {
+    static const char trace[0x40];
+    plugin_time += Plugin_Look_Ms;
+    game_segment.calls = 0;
+    ((add_segment_t)(void *)fake_CG_ArcPrediction_AddSegment)(local_client, trace, start_thickness, end_thickness);
+    if (game_segment.calls != 0)
+        CHECK(game_segment.local_client == local_client && game_segment.trace == trace &&
+              memcmp(&game_segment.start_thickness, &start_thickness, sizeof(float)) == 0 &&
+              memcmp(&game_segment.end_thickness, &end_thickness, sizeof(float)) == 0);
 }
 
 // ---- T7Overcharged's test
@@ -1198,22 +1213,17 @@ static void test_guard_places(void) {
         for (int segments = 3; segments <= 6; segments++) {
             if (which >= 0 && which < Local_Clients)
                 put_int(image + ADDR_CG_ArcBlocks + (size_t)which * Arc_Block_Size + Arc_Segments, segments);
-            game_segment.calls = 0;
-            fake_CG_ArcPrediction_AddSegment(which, 2, 3, 4, 5, 6);
+            add_segment_as_the_game(which, 2.25f + (float)segments, 5.0f);
             bool added = which >= 0 && which <= 3 && segments < 5;
             CHECK(game_segment.calls == added);
-            const uint64_t expected[5] = { 2, 3, 4, 5, 6 };
-            if (added)
-                CHECK(game_segment.local_client == which &&
-                      memcmp(game_segment.arguments, expected, sizeof(expected)) == 0);
         }
     }
     set_mod(false);
     put_int(image + ADDR_CG_ArcBlocks + Arc_Segments, 9);
-    game_segment.calls = 0;
-    fake_CG_ArcPrediction_AddSegment(0, 2, 3, 4, 5, 6);
-    fake_CG_ArcPrediction_AddSegment(7, 2, 3, 4, 5, 6);
-    CHECK(game_segment.calls == 2);
+    add_segment_as_the_game(0, 0.75f, 5.0f);
+    CHECK(game_segment.calls == 1);
+    add_segment_as_the_game(7, -1.5f, 1e30f);
+    CHECK(game_segment.calls == 1);
     set_mod(true);
 }
 
