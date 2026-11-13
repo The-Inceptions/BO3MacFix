@@ -67,3 +67,4 @@ tests/test_lua_unref
 tests/test_pmem_spill
 tests/test_aae_mantle
 tests/test_aae_hostmig
+tests/test_aae_move_jump

@@ -204,6 +204,16 @@
 #define ADDR_PM_PlayerTrace 0x113b850 // func - void (pmove_t *, trace_t *, start, mins, maxs, end, passEntityNum, contentMask)
 #define ADDR_GameTypeSettings_GetFloat 0xd973da // func - float (const char *name, bool)
 
+// T7Overcharged's jumpslowdown, which All-around Enhancement switches on (aae_move_jump.c) - names are T7Overcharged's
+#define ADDR_BG_GetViewDip 0x113caec // func - int (playerState_s *, float fall speed): how far the camera dips on a landing; called by the landing (0x114669c) and the client's view (0x121e7f9) (Windows 0x14260e710, the speed in xmm1)
+#define ADDR_Jump_ReduceFriction 0x14dcf3a // func - float (playerState_s *): PM_Friction's (0x113c32e) multiplier of the ground's friction while movement flag 18 is set, 2 down to 1 over the slowdown after a jump (Windows 0x1425fd630)
+#define ADDR_Jump_SlowDown 0x14dceb2 // func - void (playerState_s *): PM_WalkMove's start while movement flag 18 is set: the first frame on the ground after a jump multiplies the velocity by 0.8 and starts the slowdown (pm_time 1000) (Windows 0x1425fcd70)
+#define ADDR_Jump_Start_ClampSpeed 0x14dd2c0 // "movsd xmm1, [r12 + 0x3c]" in Jump_Start (0x14dd05e, (pmove_t *, pml_t *, float height)): the cap of the jump's horizontal speed (Windows' Jump_ClampHorizontalVelocity 0x1425fd040, inlined here) is in xmm0, the player state in r12, the pmove_t in r14; next "ucomiss speed squared, cap squared ; jbe <no cap>"
+#define ADDR_Jump_Start_SlowdownTest 0x14dd146 // "mov esi, 13 ; mov rdi, r15 ; call <active gadget> ; test al, al ; je" in Jump_Start: a jump while the slowdown is pending asks whether gadget 13 spares the lowered jump (Windows 0x1425fd7b4; T7Overcharged's OFF_Jump_SlowdownPatch is its je at 0x1425fd7c3)
+#define ADDR_Jump_Start_SlowdownTest_Yes 0x14dd15b // where that goes on after a yes: the divisor of the upward speed's square is 1
+#define ADDR_PM_GroundTrace_CrashLandBegin 0x1146389 // "mov r12, [r12] ; mov rdi, r12" in PM_GroundTrace (0x1145e07): the landing begins (Windows' PM_CrashLand 0x142611a30, inlined here); r12 the pmove_t, r13 the pml_t, r15 the player state
+#define ADDR_PM_GroundTrace_CrashLandEnd 0x114698d // "and byte [r15 + 0x908], 0xf9": every way through the landing comes out here, and only those (Windows: where PM_CrashLand returns to, 0x1426145e5); r15 the player state
+
 // T7Overcharged's changes to sprinting (aae_move_sprint.c); the names are T7Overcharged's (its OFF_... records)
 #define ADDR_Jump_Start_SprintLeapCmp1 0x14dd0c1 // "cmp ecx, 1500 ; jg" in Jump_Start (it starts at 0x14dd05e, (pmove_t *, pml_t *, float height)): ecx the ms of sprint, full sprint-leap height past 1500; pmove_t in r14, playerState in r15 (Windows 0x1425fd726, "cmp eax, 1500", OFF_Jump_SprintLeapMs1)
 #define ADDR_Jump_Start_SprintLeapCmp2 0x14dd200 // "cmp eax, 1500 ; jg" there: eax the ms of sprint, full sprint-leap speed past 1500; the same registers (Windows 0x1425fd849, OFF_Jump_SprintLeapMs2)

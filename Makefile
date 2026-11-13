@@ -42,6 +42,8 @@ TEST_TARGETS += tests/test_aae_freeaim
 TEST_TARGETS += tests/test_aae_linkcam
 # free aim for players on other machines: what is sent, what the server keeps (aae_freeaim_net.c)
 TEST_TARGETS += tests/test_aae_freeaim_net
+# T7Overcharged's jumpslowdown: its rules, hooks and detours against a made-up game (aae_move_jump.c)
+TEST_TARGETS += tests/test_aae_move_jump
 # T7Overcharged's bigger table of client effects: its rules, and the six hooks against a made-up cache (aae_clientfx.c)
 TEST_TARGETS += tests/test_aae_clientfx
 # T7Overcharged's weapon attachment and local client guards (t7o_guards.c)
@@ -121,6 +123,8 @@ SOURCES += source/aae_mantle.c
 SOURCES += source/aae_hostmig.c
 # AAEMovement: T7Overcharged's movement changes that the mod switches on; the switches (aae_movement.c)
 SOURCES += source/aae_movement.c
+# its jumpslowdown: no penalty for jumping again and again (aae_move_jump.c)
+SOURCES += source/aae_move_jump.c
 # its changes to sprinting (aae_move_sprint.c)
 SOURCES += source/aae_move_sprint.c
 # whether the mod with that plugin is the one loaded (aae_plugin.c)
@@ -313,6 +317,14 @@ tests/test_aae_freeaim_net: tests/test_aae_freeaim_net.c tests/freeaim_net_cases
 		source/aae_freeaim_net.c source/aae_freeaim_net.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_freeaim_net.c
+
+# aae_move_jump.c: T7Overcharged's jumpslowdown rules, its hooks and detours against a made-up game, two threads
+# landing at once, and the cases T7Overcharged's own code gave under Wine
+tests/test_aae_move_jump: tests/test_aae_move_jump.c tests/move_jump_cases.h tests/move_jump_side.h \
+		source/aae_move_jump.c source/aae_move_jump.h source/aae_movement.h source/detour.h source/offsets.h \
+		source/dobby.h source/prepatch.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_move_jump.c
 
 # t7o_guards.c: the weapon attachment guard against a made-up weapon field lookup, the local client guard against a
 # made-up controller lookup

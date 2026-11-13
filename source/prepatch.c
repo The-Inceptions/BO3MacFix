@@ -77,6 +77,14 @@ static const hook_def_t hook_defs[] = {
     { ADDR_ASL_Window_UpdateLetterbox, Push_R14 },
     { ADDR_ASL_XInputGetState, Push_R14 },
     { ADDR_ASL_XInputSetState, Push_R14 },
+    // T7Overcharged's jumpslowdown (aae_move_jump.c)
+    { ADDR_BG_GetViewDip, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xC9 } }, // ...; xor ecx, ecx
+    { ADDR_Jump_ReduceFriction, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
+    { ADDR_Jump_SlowDown, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
+    { ADDR_Jump_Start_ClampSpeed, 7, 0, { 0xF2, 0x41, 0x0F, 0x10, 0x4C, 0x24, 0x3C } }, // movsd xmm1, [r12+0x3c] (a detour)
+    { ADDR_Jump_Start_SlowdownTest, 5, 0, { 0xBE, 0x0D, 0x00, 0x00, 0x00 } }, // mov esi, 13 (a detour)
+    { ADDR_PM_GroundTrace_CrashLandBegin, 7, 0, { 0x4D, 0x8B, 0x24, 0x24, 0x4C, 0x89, 0xE7 } }, // mov r12, [r12]; mov rdi, r12 (a detour)
+    { ADDR_PM_GroundTrace_CrashLandEnd, 8, 0, { 0x41, 0x80, 0xA7, 0x08, 0x09, 0x00, 0x00, 0xF9 } }, // and byte [r15+0x908], 0xf9 (a detour)
     { ADDR_BG_Cache_GetClientFx, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x89, 0xF8 } },          // ...; mov eax, edi
     { ADDR_BG_Cache_GetClientFxIndex, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x89, 0xF0 } }, // ...; mov rax, rsi
     { ADDR_BG_Cache_GetClientFxName, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x89, 0xF8 } },      // ...; mov eax, edi
