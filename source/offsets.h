@@ -143,6 +143,15 @@
 #define ADDR_UIModel_Child 0x10365c3 // func - uint16_t (uint16_t model, const char *name): the model's child of that name, made if it isn't there (0x1036418 doesn't make it)
 #define ADDR_UIModel_SetBool 0x1036a60 // func - bool (uint16_t model, bool value): whether that changed it
 
+// the host's leave decision and the migration that follows it (aae_hostmig.c) - names are guesses
+#define ADDR_HostMigrationStart_Decision 0x140daf1 // "test al, al ; je <end the match> ; mov edi, 4" in the server command hostmigration_start (it starts at 0x140dae8): right behind its call of the game's test whether it may migrate (0x127b0c2: no mod loaded, online, game mode not 1, 5 or 6; Windows 0x1420ead00), al its answer. Then it asks Com_SessionMode_IsGameMode(4) (0x127af8e, freerun) and ends the match (0xff422b) on either (Windows: the command at 0x1421e8cf0, its calls at 0x1421e8cf4 and 0x1421e8d02)
+#define ADDR_HostMigrationStart_Migrate 0x140db09 // where it goes on to migrate: sv_running, no migration in progress, then the migration's start (0xe06d3e, Windows 0x1421f9bb0)
+#define ADDR_SessionMode 0x6939a14 // uint32_t: the session's mode, its network mode in bits 6 to 9 (2 online), its game mode in bits 14 to 17 (1 a custom game, 4 freerun) (Windows 0x15686e874)
+#define ADDR_HostMigration 0x28290e0 // the migration: int state at +0 (1 the players are asked to rate themselves, 4 they're told where the new host is), 18 entries of 0x20 bytes for the players at +8, the new host's entry (int, -1 none) at +0x3c8 and xuid at +0x3d0, a byte "in progress" at +0x3e4 (Windows 0x157756be0)
+#define ADDR_HostMigration_PickNewHost 0xe07413 // func - void (void): picks the new host, the best rating above 1, or ends the match (Windows 0x1421f9530, jumped to by the migration's frame at 0x1421f9853, here 0xe071e7)
+#define ADDR_HostMigration_SendToNewHost 0x123297b // func - bool (int controller, uint64_t new host's xuid, int lobby type, uint64_t xuids[], int count): the "migrate to" message to those players, through that lobby if the new host is a member of it (Windows 0x141ed50b0, its one call at 0x1421fa299, here 0xe076b9)
+#define ADDR_LobbySessions 0x101c8760 // the lobby sessions, 0x66828 bytes each: 0 the private (party) one, 1 the game's; state at +0x40 (2 when it can migrate), 18 members of 0x30 bytes at +0xf8, their xuid first (Windows 0x1555fd410)
+
 // traversal, the way over obstacles from multiplayer and the campaign (aae_mantle.c) - names are guesses
 #define ADDR_level_clients 0x1096ee40 // gclient_s *: the game's players, 0x17210 bytes each (0x20 more than in the Windows game: what comes after the player's state is that much further). The number one was connected as is at +0x16c18 (Windows +0x16bf8)
 #define ADDR_sv_gentities 0x144fbde8 // gentity_s *: the entities the server was last given (what the game's start gives it is the array at 0x110cea410), 0x4f8 bytes each: type (a word, 15 a vehicle) at +0x1a0, origin +0x230, angles +0x23c, client +0x250, vehicle data +0x270

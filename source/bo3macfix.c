@@ -27,6 +27,7 @@
 #include "aae_cheats.h"
 #include "aae_mantle.h"
 #include "aae_freeaim.h"
+#include "aae_hostmig.h"
 #include "aae_prompt.h"
 #include "gsc_detours.h"
 #include "script_vars.h"
@@ -1198,6 +1199,10 @@ __attribute__((constructor)) static void dylib_main() {
     // a crosshair in All-around Enhancement 4's third person view, as its Windows plugin gives it one (AAEFreeAim, on
     // by default), see aae_freeaim.c
     aae_freeaim_init(game_base_address, read_int_setting_or_env("AAEFreeAim", 1));
+
+    // a host who leaves an online game with All-around Enhancement hands it to another player instead of ending it for
+    // everyone, as its Windows plugin makes the game do (AAEHostMigration, on by default), see aae_hostmig.c
+    aae_hostmig_init(game_base_address, read_int_setting_or_env("AAEHostMigration", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);

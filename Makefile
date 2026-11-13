@@ -24,6 +24,8 @@ TEST_TARGETS += tests/test_lua_unref
 TEST_TARGETS += tests/test_pmem_spill
 # All-around Enhancement's rules for traversal (aae_mantle.c)
 TEST_TARGETS += tests/test_aae_mantle
+# the plugin's rules for a host who leaves, and the handlers of its detour and hooks (aae_hostmig.c)
+TEST_TARGETS += tests/test_aae_hostmig
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
 # the thunks for detours inside the game's functions (detour.h); x86_64 code, so this test is built for x86_64
@@ -93,6 +95,8 @@ SOURCES += source/lua_unref.c
 SOURCES += source/pmem_spill.c
 # AAEMantling: mantling by the rules All-around Enhancement 4 gives its Windows plugin (aae_mantle.c)
 SOURCES += source/aae_mantle.c
+# AAEHostMigration: a host who leaves hands the game on instead of ending it, as the plugin makes it (aae_hostmig.c)
+SOURCES += source/aae_hostmig.c
 # whether the mod with that plugin is the one loaded (aae_plugin.c)
 SOURCES += source/aae_plugin.c
 # AAEPrompts: the mod's prompts in the world, kept by distance as the plugin makes the game keep them (aae_prompt.c)
@@ -213,6 +217,12 @@ tests/test_aae_mantle: tests/test_aae_mantle.c source/aae_mantle.c source/aae_ma
 # detour.h: its thunks against two made-up game functions in assembly
 tests/test_detour: tests/test_detour.c source/detour.h
 	$(CLANG) -arch x86_64 -std=gnu11 -O1 -g -Wall -Wextra -Werror -o $@ tests/test_detour.c
+
+# aae_hostmig.c: the plugin's rules and the detour's and hooks' handlers against a made-up game
+tests/test_aae_hostmig: tests/test_aae_hostmig.c source/aae_hostmig.c source/aae_hostmig.h source/aae_plugin.c \
+		source/aae_plugin.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_hostmig.c
 
 # aae_prompt.c and aae_plugin.c: the handlers against a made-up prompt element and made-up models
 tests/test_aae_prompt: tests/test_aae_prompt.c tests/prompt_glide_frames.h source/aae_prompt.c source/aae_prompt.h \
