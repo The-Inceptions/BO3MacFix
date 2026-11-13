@@ -34,7 +34,8 @@ static struct {
     int lock_held; // the VM's critical section was held while it ran
     bool load_fails, leaves_one; // the call leaves a value on the stack
 } lua;
-static int held_lock = -1; // the critical section the made-up game's lock holds, -1 for none
+static int held_lock = -1; // the critical section the made-up game's lock holds last, -1 for none
+static int held_locks[4], held_count; // all it holds, in the order taken
 
 bool hks_load_source(lua_State *s, const char *source, size_t source_len, const char *chunk_name) {
     lua.loads++;
@@ -90,16 +91,21 @@ static uint8_t game_lua_state[0x100], game_lua_lock_info[8];
 static HksObject game_lua_stack[16];
 static lua_State *game_ui_vm;
 
+// the game's scoped critical sections: each object goes on a per-thread list, so they're left the other way round
 static void game_critical_section_enter(void *lock, int critical_section, int mode) {
-    CHECK(mode == 0 && held_lock == -1);
+    CHECK(mode == 0 && held_count < 4);
     memcpy(lock, &critical_section, sizeof(critical_section));
+    if (held_count < 4)
+        held_locks[held_count++] = critical_section;
     held_lock = critical_section;
 }
 static void game_critical_section_leave(void *lock) {
     int critical_section;
     memcpy(&critical_section, lock, sizeof(critical_section));
-    CHECK(critical_section == held_lock);
-    held_lock = -1;
+    CHECK(held_count > 0 && critical_section == held_locks[held_count - 1]);
+    if (held_count > 0)
+        held_count--;
+    held_lock = held_count > 0 ? held_locks[held_count - 1] : -1;
 }
 
 static void set_key_down(int local_client, int key, bool down) {
@@ -744,10 +750,12 @@ static void test_cursoroverride(void) {
 
 // DB_FreeUnusedResources: T7Overcharged's arguments, and the Mac's function with the second flag
 static int freed;
-static bool freed_with;
+static bool freed_with, freed_locked;
 static void game_free_unused(bool second) {
     freed++;
     freed_with = second;
+    // with the zone function's two critical sections, in its order
+    freed_locked = held_count == 2 && held_locks[0] == 0x28 && held_locks[1] == 0x60;
 }
 
 static void test_free_unused(void) {
@@ -774,9 +782,11 @@ static void test_free_unused(void) {
     CHECK(t7o_free_unused_args(3, NULL, &first, &second) == T7o_Number_Ok && !first && second);
 
     DB_FreeUnusedResources = game_free_unused;
+    CritSec_ScopedLock = game_critical_section_enter;
+    CritSec_ScopedUnlock = game_critical_section_leave;
     freed = 0;
     run_command(freeunused_f, ARGC(lobby), lobby);
-    CHECK(freed == 1 && freed_with);
+    CHECK(freed == 1 && freed_with && freed_locked && held_count == 0); // and both left again
     run_command(freeunused_f, ARGC(other), other);
     CHECK(freed == 2 && !freed_with);
     run_command(freeunused_f, ARGC(word), word);

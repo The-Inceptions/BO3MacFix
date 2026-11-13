@@ -498,6 +498,15 @@ static void updatevidconfig_f(void) {
 // it. The Mac's DB_FreeUnusedResources (text "unloaded inuse", the same three callers) takes only the second flag: it
 // branches on its one flag where the Windows one branches on its second, and the part the Windows one skips for a
 // true first flag (the game always passes false) is always done. So the Mac's gets the second flag.
+// The function takes no lock itself: it walks and unlinks the asset hash's chains and publishes a buffer on its own
+// stack through globals for the whole walk. The game calls it only with the database's critical sections held: its
+// zone load and unload function (0x1013471e5) takes 0x28 (0x10134763b), then 0x60, the asset hash's (0x101347653),
+// and releases them the other way round (0x1013478a2, 0x1013478ae); its database shutdown holds 0x60. T7Overcharged
+// calls it bare, while AAE starts a match, which is when the database unloads and loads zones; here it takes the
+// zone function's two locks in its order first. The game's critical sections are recursive per thread, so a caller
+// that holds them already doesn't wait for itself.
+#define Critical_Section_Zones 0x28
+#define Critical_Section_Assets 0x60
 static void (*DB_FreeUnusedResources)(bool second);
 static _Alignas(8) uint8_t freeunused_command[0x30];
 static atomic_bool freeunused_first_logged;
@@ -516,7 +525,12 @@ static void freeunused_f(void) {
         printf("T7Overcharged: DB_FreeUnusedResources: the Mac's has no first flag, it does what it does without\n");
     if (debug)
         printf("T7Overcharged: DB_FreeUnusedResources(%d, %d)\n", first, second);
+    uint64_t zones_lock[2] = { 0, 0 }, assets_lock[2] = { 0, 0 };
+    CritSec_ScopedLock(zones_lock, Critical_Section_Zones, 0);
+    CritSec_ScopedLock(assets_lock, Critical_Section_Assets, 0);
     DB_FreeUnusedResources(second);
+    CritSec_ScopedUnlock(assets_lock);
+    CritSec_ScopedUnlock(zones_lock);
 }
 
 // T7Overcharged's changes when it starts: on Windows its components start once, when the mod's Lua loads it
