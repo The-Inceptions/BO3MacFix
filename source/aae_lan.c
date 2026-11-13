@@ -732,6 +732,12 @@ void aae_lan_init(uint64_t game_base_address, int enabled) {
     install_hook_LanJoin_SendLobbyPacket((void *)(game_base_address + ADDR_LanJoin_SendLobbyPacket));
     Dvar_FindByHash = (void *(*)(uint32_t))(game_base_address + ADDR_Dvar_FindByHash);
     Dvar_GetString = (const char *(*)(void *))(game_base_address + ADDR_Dvar_GetString);
+    // the host's answers don't need the pre-patched executable: only the join checks below do
+    pthread_t thread;
+    if (start_thread(&thread, NULL, listener_main, NULL) == 0)
+        pthread_detach(thread);
+    else
+        printf("lan join: no thread for answering the mod's queries\n");
     if (!prepatch_has_hook(ADDR_LanJoin_JoinerNetworkMode) || !prepatch_has_hook(ADDR_LanJoin_PlaylistRejected) ||
         !prepatch_has_hook(ADDR_LanJoin_FFOTDRejected)) {
         printf("lan join: not running from the pre-patched executable: the host's join checks are the game's own\n");
@@ -742,9 +748,4 @@ void aae_lan_init(uint64_t game_base_address, int enabled) {
                                            (void *)(game_base_address + ADDR_LanJoin_PlaylistChecked));
     install_detour_LanJoin_FFOTDVersion((void *)(game_base_address + ADDR_LanJoin_FFOTDRejected),
                                         (void *)(game_base_address + ADDR_LanJoin_FFOTDChecked));
-    pthread_t thread;
-    if (start_thread(&thread, NULL, listener_main, NULL) == 0)
-        pthread_detach(thread);
-    else
-        printf("lan join: no thread for answering the mod's queries\n");
 }

@@ -1071,14 +1071,16 @@ static void test_init(void) {
     start_thread = test_start;
     aae_lan_init(base, 0);
     CHECK(started == NULL && lobby_network_mode == NULL && hooks == 0);
-    // without the stubs of the three places in the join handler: none of them
+    // without the stubs of the three places in the join handler: none of them, but the host's answers all the same
     const int places[] = { ADDR_LanJoin_JoinerNetworkMode, ADDR_LanJoin_PlaylistRejected, ADDR_LanJoin_FFOTDRejected };
     for (int i = 0; i < 4; i++) {
         have_stubs = i < 3, stub_missing_for = i < 3 ? places[i] : -1;
         hooks = 0;
+        started = NULL;
         aae_lan_init(base, 1);
         CHECK(hooks == 5 && !was_hooked(places[0], (void *)handler_LanJoin_JoinerNetworkMode,
                                         &orig_LanJoin_JoinerNetworkMode));
+        CHECK(started == (void *)listener_main);
     }
     have_stubs = true, stub_missing_for = -1;
     hooks = 0;
