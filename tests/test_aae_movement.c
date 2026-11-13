@@ -1,5 +1,5 @@
 // aae_movement.c: T7Overcharged's movement switches (its commands' rules, its start, its dvars, what the movement code
-// is told) against a made-up game.
+// is told) and its fast ADS against a made-up game.
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -20,6 +20,9 @@ static int failures;
 
 #include "../source/aae_movement.c"
 
+// the sums below are compared with T7Overcharged's to the bit: nothing is to be folded into one operation
+#pragma STDC FP_CONTRACT OFF
+
 // ---- what the code asks of the rest of BO3MacFix
 
 static bool mod_loaded = true; // the loaded mod is All-around Enhancement with its plugin
@@ -29,6 +32,28 @@ void aae_plugin_init(uint64_t game_base_address) {
 }
 bool aae_plugin_loaded_lately(void) {
     return mod_loaded;
+}
+// which places the pre-patched executable has stubs for, and what was hooked
+static bool have_stubs = true;
+static int stub_missing_for = -1;
+bool prepatch_has_hook(uint32_t offset) {
+    return have_stubs && (int)offset != stub_missing_for;
+}
+static struct {
+    void *address, *replacement, **original;
+} hooked[8];
+static int hooks;
+int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
+    if (hooks < 8)
+        hooked[hooks] = (typeof(hooked[0])){ address, fake_func, out_origin_func };
+    hooks++;
+    return 0;
+}
+static bool was_hooked(uint32_t place, void *replacement, void **original) {
+    for (int i = 0; i < hooks && i < 8; i++)
+        if (hooked[i].address == (void *)(0x100000000 + (uint64_t)place))
+            return hooked[i].replacement == replacement && hooked[i].original == original;
+    return false;
 }
 
 // ---- the made-up game: its console commands
@@ -259,8 +284,10 @@ static const char *name_in(const char *name) {
 }
 
 static uint64_t made_up_base;
+static const int game_sniper_anim_types[2] = { 7, 8 };
 static void made_up_game(uint64_t base) {
     made_up_base = base;
+    sniper_anim_types = game_sniper_anim_types;
     Cmd_FindCommand = game_find_command;
     Cmd_AddCommandInternal = game_add_command;
     Sys_GetTLS = game_get_tls;
@@ -325,6 +352,12 @@ static void reset(void) {
     forced = debug = false;
     switched = record_switch;
     find_game = made_up_game;
+    hooks = 0;
+    have_stubs = true;
+    stub_missing_for = -1;
+    atomic_store(&fastads_lines, 0);
+    atomic_store(&fastads_choice_said, UINT64_MAX);
+    atomic_store(&fastads_rate_said, UINT64_MAX);
     unsetenv("BO3MACFIX_MOVEFORCE");
     unsetenv("BO3MACFIX_MOVEDEBUG");
     aae_movement_init(0x100000000, 1);
@@ -582,7 +615,8 @@ static void test_init(void) {
           Sys_GetTLS == (void *)(0x100000000 + ADDR_Sys_GetTLS) &&
           Dvar_RegisterInt == (void *)(0x100000000 + ADDR_Dvar_RegisterInt) &&
           Dvar_RegisterFloat == (void *)(0x100000000 + ADDR_Dvar_RegisterFloat) &&
-          Dvar_RegisterBool == (void *)(0x100000000 + ADDR_Dvar_RegisterBool));
+          Dvar_RegisterBool == (void *)(0x100000000 + ADDR_Dvar_RegisterBool) &&
+          sniper_anim_types == (const int *)(0x100000000 + ADDR_ADS_SniperAnimTypes));
     CHECK(ADDR_Dvar_RegisterBool == 0xfa1328 && ADDR_Dvar_RegisterInt == 0xfa149e &&
           ADDR_Dvar_RegisterFloat == 0xfa1614 && ADDR_Cmd_FindCommand == 0xf764e8 &&
           ADDR_Cmd_AddCommandInternal == 0xf7651d && ADDR_Sys_GetTLS == 0xd0604f);
@@ -1071,6 +1105,206 @@ static void test_first_state(void) {
     CHECK(!aae_movement_enabled() && !aae_movement_started() && !aae_movement_omni());
 }
 
+// ---- fast ADS
+
+// the game's doubling behind the detour, "addss xmm0, xmm0", on what the rule leaves for a rate
+static float doubled(float rate, float multiplier) {
+    float halved = aae_movement_fastads_halved(rate, multiplier);
+    return halved + halved;
+}
+// Windows with T7Overcharged's patch: "mulss xmm6, [multiplier]"
+static float windows(float rate, float multiplier) {
+    return rate * multiplier;
+}
+static bool exact(float rate, float multiplier) {
+    return float_bits(doubled(rate, multiplier)) == float_bits(windows(rate, multiplier));
+}
+
+static void test_fastads_rule(void) {
+    // every ADS time of 1 to 2000 ms (the game's integer branch: 1 / (float)ms, negative when lowering) by multipliers
+    // from 1 to 3 every 1/1024, T7Overcharged's default and AAE's, and the floats right around them
+    static const float special[] = { 1.0f, 1.4f, 2.0f, 2.15f, 3.0f };
+    int wrong = 0;
+    long cases = 0;
+    for (int ms = 1; ms <= 2000; ms++) {
+        for (int sign = 0; sign < 2; sign++) {
+            float rate = (sign ? -1.0f : 1.0f) / (float)ms;
+            for (int step = 0; step <= 2048; step++, cases++)
+                wrong += !exact(rate, 1.0f + (float)step / 1024.0f);
+            for (size_t i = 0; i < sizeof(special) / sizeof(special[0]); i++, cases += 3) {
+                wrong += !exact(rate, special[i]);
+                wrong += !exact(rate, nextafterf(special[i], 0.0f)) + !exact(rate, nextafterf(special[i], 4.0f));
+            }
+        }
+    }
+    CHECK(wrong == 0 && cases == 2000 * 2 * (2049 + 15));
+    // every float multiplier from 1 to 3 with a few rates of the sights
+    cases = 0;
+    static const float rates[] = { 1.0f / 300.0f, -1.0f / 250.0f, 0.0033333334f, -0.0066666668f, 1.0f / 7.0f };
+    for (size_t i = 0; i < sizeof(rates) / sizeof(rates[0]); i++)
+        for (float multiplier = 1.0f; multiplier <= 3.0f; multiplier = nextafterf(multiplier, 4.0f), cases++)
+            wrong += !exact(rates[i], multiplier);
+    CHECK(wrong == 0 && cases == 5L * ((1L << 23) + (1L << 22) + 1));
+    cases = 0;
+    // the float branches' rates can be anything: every exponent from -125 to 127, mantissas from a fixed generator
+    uint32_t seed = 12345;
+    for (int exponent = -125 + 2; exponent <= 127 - 2; exponent++) {
+        for (int i = 0; i < 2000; i++) {
+            seed = seed * 1103515245u + 12345u;
+            float rate = ldexpf(1.0f + (float)(seed >> 9) / 8388608.0f, exponent - 2);
+            seed = seed * 1103515245u + 12345u;
+            float multiplier = 1.0f + 2.0f * (float)(seed >> 9) / 8388608.0f;
+            wrong += !exact((seed & 1) ? -rate : rate, multiplier);
+            cases++;
+        }
+    }
+    CHECK(wrong == 0 && cases == 249L * 2000);
+    // the edges: no ADS time (1 / 0), and the sights at rest
+    CHECK(exact(INFINITY, 1.4f) && exact(-INFINITY, 1.4f) && exact(0.0f, 1.4f) && exact(-0.0f, 2.15f));
+    CHECK(isnan(doubled(NAN, 1.4f)));
+    CHECK(same_float(aae_movement_fastads_halved(1.0f / 300.0f, 1.4f), (1.0f / 300.0f * 1.4f) * 0.5f));
+}
+
+static void test_fastads_detours(void) {
+    // installed only with the setting on and the pre-patched executable's two stubs
+    reset();
+    CHECK(hooks == 2);
+    CHECK(was_hooked(ADDR_ADS_FastAdsClassTests, (void *)handler_FastAds_AnimTypeTests,
+                     &orig_FastAds_AnimTypeTests) &&
+          other_FastAds_AnimTypeTests == (void *)(0x100000000 + ADDR_ADS_FastAdsClassTestsPassed));
+    CHECK(was_hooked(ADDR_ADS_FastAdsDouble, (void *)handler_FastAds_Double, &orig_FastAds_Double));
+    CHECK(ADDR_ADS_FastAdsClassTests == 0xed5e30 && ADDR_ADS_FastAdsClassTestsPassed == 0xed5e58 &&
+          ADDR_ADS_FastAdsDouble == 0xed5e5c && ADDR_ADS_SniperAnimTypes == 0x4076854);
+    hooks = 0;
+    aae_movement_init(0x100000000, 0);
+    CHECK(hooks == 0);
+    printing_begin();
+    have_stubs = false;
+    aae_movement_init(0x100000000, 1);
+    have_stubs = true;
+    stub_missing_for = ADDR_ADS_FastAdsDouble;
+    aae_movement_init(0x100000000, 1);
+    stub_missing_for = ADDR_ADS_FastAdsClassTests;
+    aae_movement_init(0x100000000, 1);
+    stub_missing_for = -1;
+    const char *no_stubs = "movement: not running from the pre-patched executable: fast ADS stays the game's own\n";
+    char three[512];
+    snprintf(three, sizeof(three), "%s%s%s", no_stubs, no_stubs, no_stubs);
+    CHECK(strcmp(printing_end(), three) == 0);
+    CHECK(hooks == 0);
+
+    // the anim type tests: skipped only while fastads is on
+    reset();
+    uint8_t ps[0x400] = { 0 }, weapon[0x80] = { 0 };
+    float sights = 0.25f;
+    memcpy(ps + 0x2fc, &sights, sizeof(sights));
+    int anim_type = 5;
+    memcpy(weapon + 0x68, &anim_type, sizeof(anim_type));
+    uint64_t first = (uint64_t)(uintptr_t)ps, second = (uint64_t)(uintptr_t)weapon;
+    CHECK(!handler_FastAds_AnimTypeTests(first, second));
+    mod_loader();
+    CHECK(handler_FastAds_AnimTypeTests(first, second));
+    RUN("movement_patch", "fastads", "0");
+    CHECK(!handler_FastAds_AnimTypeTests(first, second));
+    RUN("movement_patch", "fastads", "1");
+    mod_loaded = false;
+    CHECK(!handler_FastAds_AnimTypeTests(first, second));
+    mod_loaded = true;
+    CHECK(handler_FastAds_AnimTypeTests(first, 0));
+
+    // the doubling: the rate in xmm0 left so that the game's own doubling gives rate * the copied multiplier
+    detour_registers_t registers, before;
+    memset(&registers, 0x5a, sizeof(registers));
+    registers.rbx = (uint64_t)(uintptr_t)ps;
+    float rate = -1.0f / 300.0f;
+    memcpy(registers.xmm[0], &rate, sizeof(rate));
+    before = registers;
+    handler_FastAds_Double(&registers);
+    float left;
+    memcpy(&left, registers.xmm[0], sizeof(left));
+    CHECK(same_float(left + left, rate * 1.4f) && same_float(left, aae_movement_fastads_halved(rate, 1.4f)));
+    CHECK(memcmp(registers.xmm[0] + 4, before.xmm[0] + 4, 12) == 0);
+    CHECK(memcmp(registers.xmm[1], before.xmm[1], sizeof(registers) - 16) == 0);
+    // the multiplier as copied: a later dvar value counts only after fastads is switched on again
+    CHECK(set_float("t7o_perk_fastads_multiplier", 2.0f));
+    registers = before;
+    handler_FastAds_Double(&registers);
+    memcpy(&left, registers.xmm[0], sizeof(left));
+    CHECK(same_float(left + left, rate * 1.4f));
+    RUN("movement_patch", "fastads", "1");
+    registers = before;
+    handler_FastAds_Double(&registers);
+    memcpy(&left, registers.xmm[0], sizeof(left));
+    CHECK(same_float(left + left, rate * 2.0f));
+    // off, without the mod: the game's own rate, every register as it was (with a multiplier whose half isn't 1)
+    CHECK(set_float("t7o_perk_fastads_multiplier", 1.4f));
+    RUN("movement_patch", "fastads", "1");
+    RUN("movement_patch_all", "0");
+    registers = before;
+    handler_FastAds_Double(&registers);
+    CHECK(memcmp(&registers, &before, sizeof(registers)) == 0);
+    RUN("movement_patch_all", "1");
+    mod_loaded = false;
+    handler_FastAds_Double(&registers);
+    CHECK(memcmp(&registers, &before, sizeof(registers)) == 0);
+    mod_loaded = true;
+    // forced: AAE's 1.4 whatever the switches say
+    forced = true;
+    RUN("movement_patch_all", "0");
+    registers = before;
+    handler_FastAds_Double(&registers);
+    memcpy(&left, registers.xmm[0], sizeof(left));
+    CHECK(same_float(left + left, rate * 1.4f) && handler_FastAds_AnimTypeTests(first, second));
+    forced = false;
+
+    // the debug lines: when what they say changes, and 40 at most
+    reset();
+    mod_loader();
+    switched = print_switch;
+    debug = true;
+    printing_begin();
+    handler_FastAds_AnimTypeTests(first, second);
+    handler_FastAds_AnimTypeTests(first, second);
+    registers = before;
+    handler_FastAds_Double(&registers);
+    registers = before;
+    handler_FastAds_Double(&registers);
+    RUN("movement_patch", "fastads", "0");
+    handler_FastAds_AnimTypeTests(first, second);
+    registers = before;
+    handler_FastAds_Double(&registers);
+    debug = false;
+    const char *expected = "movement: fast ADS: the perk is there, weapon anim type 5 (sniper rifles: 7 and 8): "
+                           "fastads on, the game's tests for sniper rifles skipped\n"
+                           "movement: fast ADS: rate -0.00333333 a ms x multiplier 1.4 = -0.00466667 (the game alone: "
+                           "-0.00666667), sights at 0.25\n"
+                           "movement: fastads off\n"
+                           "movement: after \"movement_patch fastads 0\": on [slide_preserve_momentum jumpslowdown "
+                           "fast_sprintleap fast_sprintlerpin slideslowdown canslidethensprint instant_slide fastjump "
+                           "slideangles], off [fastswap fastads]; t7o_omnimovement 1, t7o_strafe_speed_scale 0.9 "
+                           "(strafe scale 0.9), fast ADS multiplier 1.4\n"
+                           "movement: fast ADS: the perk is there, weapon anim type 5 (sniper rifles: 7 and 8): "
+                           "fastads off, the game's own tests\n"
+                           "movement: fast ADS: rate -0.00333333 a ms x 2 = -0.00666667 (the game's own), sights at "
+                           "0.25\n";
+    const char *out = printing_end();
+    CHECK(strcmp(out, expected) == 0);
+    if (strcmp(out, expected) != 0)
+        printf("  printed:\n%s", out);
+    debug = true;
+    printing_begin();
+    for (int i = 0; i < 100; i++) {
+        anim_type = i;
+        memcpy(weapon + 0x68, &anim_type, sizeof(anim_type));
+        handler_FastAds_AnimTypeTests(first, second);
+    }
+    debug = false;
+    int lines = 0;
+    for (const char *p = printing_end(); *p != '\0'; p++)
+        lines += *p == '\n';
+    CHECK(lines == Fastads_Lines_Max - 4);
+}
+
 int main(void) {
     test_first_state();
     test_stoi();
@@ -1088,6 +1322,8 @@ int main(void) {
     test_words();
     test_printed();
     test_threads();
+    test_fastads_rule();
+    test_fastads_detours();
     if (failures != 0) {
         printf("test_aae_movement: %d failed\n", failures);
         return 1;

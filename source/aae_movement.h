@@ -66,3 +66,6 @@ move_all_command aae_movement_patch_all_command(int argc, const char *const *arg
 // T7Overcharged's sprint strafe scale: the dvar's value when there is the dvar and its value is above 0.667, else
 // 0.667 (also for what isn't a number)
 float aae_movement_strafe_rule(bool have_dvar, float value);
+// fast ADS: what to leave in place of the rate (how far the sights move a millisecond) before the game doubles it,
+// so that the doubling gives rate * multiplier, the float T7Overcharged's patched code gives
+float aae_movement_fastads_halved(float rate, float multiplier);

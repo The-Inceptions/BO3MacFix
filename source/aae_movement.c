@@ -35,14 +35,19 @@
 // BO3MACFIX_MOVEFORCE=1 in the environment: everything as the mod leaves it in an ordinary game, at once and whatever
 // the mod's switches say (all patches but fastswap, omni-movement, a strafe scale of 0.9, a fast ADS multiplier of
 // 1.4), for trying one of the pieces in the game. BO3MACFIX_MOVEDEBUG=1: the start and every switch that changes.
+//
+// The fastads patch itself is here too (further down): fast ADS, the perk that raises the sights faster.
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "aae_movement.h"
 #include "aae_plugin.h"
+#include "detour.h"
+#include "dobby.h"
 #include "gsc_obj.h"
 #include "offsets.h"
+#include "prepatch.h"
 
 // the sums below are T7Overcharged's, in its order: nothing is to be folded into one operation
 #pragma STDC FP_CONTRACT OFF
@@ -147,6 +152,14 @@ move_all_command aae_movement_patch_all_command(int argc, const char *const *arg
         return Move_All_Nothing;
     *on = value != 0;
     return Move_All_Switch;
+}
+
+float aae_movement_fastads_halved(float rate, float multiplier) {
+    // T7Overcharged's patched code multiplies the rate by the multiplier with one mulss; the game here then adds what
+    // this gives to itself. Halving and doubling are exact for any float but a tiny one (below 2^-125), and the
+    // sights never move that slowly: the result is the float Windows has.
+    float product = rate * multiplier;
+    return product * 0.5f;
 }
 
 float aae_movement_strafe_rule(bool have_dvar, float value) {
@@ -429,7 +442,77 @@ void aae_movement_t7o_started(void) {
                strafe != NULL ? (double)bits_float(dvar_bits(strafe)) : 0.0, omni != NULL && dvar_bool(omni));
 }
 
-// the game's functions, at its base address (a test puts a made-up game's here instead)
+// ---- fast ADS: T7Overcharged's fastads patch
+//
+// With the fast-ADS perk (perk 23, specialty_fastads: All-around Enhancement gives it with Speed Cola; or a gadget
+// slot's weapon whose definition says so) the game moves the sights up and down twice as fast, but not for sniper
+// rifles. In its ADS update (0x100ed5ad3, Windows 0x14265e2ad..0x14265e33a):
+//     fast = has perk 23; if (gadget 28 is active) fast |= that weapon's definition +0x286
+//     if (fast && anim type != sniper && anim type != rearclipsniper) rate *= 2      (rate: sights a ms, < 0 down)
+//     sights (the player state's +0x2fc) += msec * rate
+// T7Overcharged's fastads (T7Overcharged.dll 0x1800f23cc) makes the two "je" of the anim type tests "nop" and the
+// "mulss xmm6, [2.0]" read the multiplier it copied: with the perk, every weapon gets rate * multiplier.
+// The Mac's code is the same; its "rate *= 2" is "addss xmm0, xmm0" on the rate. Two detours, from the pre-patched
+// executable only:
+// - at the anim type tests (0x100ed5e30, reached only when fast is true): with fastads on the game goes on at the
+//   doubling (0x100ed5e58), past both tests. They read the anim type (+0x68 of what r12 points at) and call a getter
+//   (0x100fdcf14) that only reads one of five globals; r15, which the first one loads, isn't read behind them before
+//   the function returns. The place's instruction sets no flags and nothing reads them before the compare at
+//   0x100ed5ebe (yes) or the compare behind the call (no).
+// - at the doubling (0x100ed5e5c): with fastads on the rate becomes aae_movement_fastads_halved(rate, multiplier),
+//   so the game's own doubling makes it rate * multiplier. The two replaced instructions set no flags; nothing
+//   reads them before the compare at 0x100ed5ebe.
+// Between the two places a command could switch fastads (one pass with the tests skipped and x2, or the tests done and
+// x multiplier); T7Overcharged's patches are written one after the other while the game runs as well.
+
+// the debug lines for fast ADS: on two threads, every frame while the sights move, so only when what they say
+// changes, and not more than these
+#define Fastads_Lines_Max 40
+static _Atomic int fastads_lines;
+static _Atomic uint64_t fastads_choice_said = UINT64_MAX, fastads_rate_said = UINT64_MAX;
+// the two anim types the game leaves out (sniper, rearclipsniper), for the debug line
+static const int *sniper_anim_types;
+static bool fastads_news(_Atomic uint64_t *said, uint64_t now) {
+    return debug && atomic_exchange_explicit(said, now, memory_order_relaxed) != now &&
+           atomic_fetch_add_explicit(&fastads_lines, 1, memory_order_relaxed) < Fastads_Lines_Max;
+}
+
+// (the player state, what the anim type is read from): with fastads on, past the anim type tests to the doubling
+detour_choice(FastAds_AnimTypeTests, "mov %rbx, %rdi\n mov %r12, %rsi\n") {
+    bool on = aae_movement_patch_on(Move_FastAds);
+    if (debug && second != 0) {
+        int anim_type = *(const int *)(second + 0x68);
+        if (fastads_news(&fastads_choice_said, (uint64_t)on << 32 | (uint32_t)anim_type))
+            printf("movement: fast ADS: the perk is there, weapon anim type %d (sniper rifles: %d and %d): %s\n",
+                   anim_type, sniper_anim_types[0], sniper_anim_types[1],
+                   on ? "fastads on, the game's tests for sniper rifles skipped" : "fastads off, the game's own tests");
+    }
+    (void)first;
+    return on;
+}
+
+// the rate in xmm0, about to be doubled
+detour_with_registers(FastAds_Double) {
+    bool on = aae_movement_patch_on(Move_FastAds);
+    float rate, multiplier = aae_movement_fastads_multiplier();
+    memcpy(&rate, registers->xmm[0], sizeof(rate));
+    float halved = on ? aae_movement_fastads_halved(rate, multiplier) : rate;
+    if (on)
+        memcpy(registers->xmm[0], &halved, sizeof(halved));
+    uint64_t now = (uint64_t)float_bits(rate) << 32 | (on ? float_bits(multiplier) : 0);
+    if (debug && fastads_news(&fastads_rate_said, now)) {
+        float sights;
+        memcpy(&sights, (const uint8_t *)registers->rbx + 0x2fc, sizeof(sights));
+        if (on)
+            printf("movement: fast ADS: rate %g a ms x multiplier %g = %g (the game alone: %g), sights at %g\n",
+                   (double)rate, (double)multiplier, (double)(halved + halved), (double)(rate + rate), (double)sights);
+        else
+            printf("movement: fast ADS: rate %g a ms x 2 = %g (the game's own), sights at %g\n", (double)rate,
+                   (double)(rate + rate), (double)sights);
+    }
+}
+
+// the game's functions and the data read here, at its base address (a test puts a made-up game's here instead)
 static void game_functions(uint64_t game_base_address) {
     Cmd_FindCommand = (void *)(game_base_address + ADDR_Cmd_FindCommand);
     Cmd_AddCommandInternal = (void *)(game_base_address + ADDR_Cmd_AddCommandInternal);
@@ -437,6 +520,7 @@ static void game_functions(uint64_t game_base_address) {
     Dvar_RegisterInt = (void *)(game_base_address + ADDR_Dvar_RegisterInt);
     Dvar_RegisterFloat = (void *)(game_base_address + ADDR_Dvar_RegisterFloat);
     Dvar_RegisterBool = (void *)(game_base_address + ADDR_Dvar_RegisterBool);
+    sniper_anim_types = (const int *)(game_base_address + ADDR_ADS_SniperAnimTypes);
 }
 static void (*find_game)(uint64_t game_base_address) = game_functions;
 
@@ -464,4 +548,12 @@ void aae_movement_init(uint64_t game_base_address, int setting) {
                "say\n");
     else if (debug)
         printf("movement: AAEMovement is 1: the switches wait for the mod to start T7Overcharged\n");
+    // fast ADS: the two detours, which act only while fastads is on
+    if (!prepatch_has_hook(ADDR_ADS_FastAdsClassTests) || !prepatch_has_hook(ADDR_ADS_FastAdsDouble)) {
+        printf("movement: not running from the pre-patched executable: fast ADS stays the game's own\n");
+        return;
+    }
+    install_detour_FastAds_AnimTypeTests((void *)(game_base_address + ADDR_ADS_FastAdsClassTests),
+                                         (void *)(game_base_address + ADDR_ADS_FastAdsClassTestsPassed));
+    install_detour_FastAds_Double((void *)(game_base_address + ADDR_ADS_FastAdsDouble));
 }

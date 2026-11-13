@@ -265,7 +265,7 @@ tests/test_aae_hostmig: tests/test_aae_hostmig.c source/aae_hostmig.c source/aae
 
 # aae_movement.c: T7Overcharged's movement switches against a made-up game (the test includes the source)
 tests/test_aae_movement: tests/test_aae_movement.c source/aae_movement.c source/aae_movement.h source/aae_plugin.h \
-		source/gsc_obj.c source/gsc_obj.h source/offsets.h
+		source/gsc_obj.c source/gsc_obj.h source/offsets.h source/detour.h source/dobby.h source/prepatch.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_movement.c source/gsc_obj.c
 
