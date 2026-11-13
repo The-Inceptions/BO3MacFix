@@ -44,6 +44,8 @@ TEST_TARGETS += tests/test_aae_clientfx
 TEST_TARGETS += tests/test_t7o_guards
 # the pause for everybody in a co-op game: the plugin's packets and rules, machines playing together (aae_coop_pause.c)
 TEST_TARGETS += tests/test_aae_coop_pause
+# a client field nobody registered: which places get a script error or a field that reads as 0 (clientfield_guard.c)
+TEST_TARGETS += tests/test_clientfield_guard
 # the grenade's prediction line: T7Overcharged's test, the plugin's sums and the hooks (aae_arc.c)
 TEST_TARGETS += tests/test_aae_arc
 
@@ -126,6 +128,8 @@ SOURCES += source/aae_arc.c
 SOURCES += source/t7o_subtitle.c
 # T7OCrashGuards: two of T7Overcharged's guards against crashes of the game itself (t7o_guards.c)
 SOURCES += source/t7o_guards.c
+# ClientFieldGuard: a script error instead of a crash for a client field nobody registered (clientfield_guard.c)
+SOURCES += source/clientfield_guard.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
 # weapons back with their camo, attachments and ammo types, and its perks (zm_inventory.c, zm_loadout.c)
 SOURCES += source/checkpoint.c source/zm_inventory.c source/zm_loadout.c
@@ -293,6 +297,12 @@ tests/test_aae_coop_pause: tests/test_aae_coop_pause.c source/aae_coop_pause.c s
 		source/dobby.h source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_coop_pause.c source/gsc_obj.c
+
+# clientfield_guard.c: its rules, and its hook against a made-up lookup, script engine and mod
+tests/test_clientfield_guard: tests/test_clientfield_guard.c source/clientfield_guard.c source/clientfield_guard.h \
+		source/offsets.h source/dobby.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_clientfield_guard.c
 
 # aae_arc.c: T7Overcharged's arc test, the plugin's checks and sums, and the hooks against a made-up game
 tests/test_aae_arc: tests/test_aae_arc.c tests/arc_bend_cases.h source/aae_arc.c source/aae_arc.h source/aae_plugin.c \

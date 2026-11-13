@@ -50,6 +50,7 @@ tests/test_aae_linkcam
 tests/test_aae_freeaim_net
 tests/test_t7o_guards
 tests/test_aae_coop_pause
+tests/test_clientfield_guard
 tests/test_aae_arc
 tests/test_gsc_obj
 tests/test_gsc_detours

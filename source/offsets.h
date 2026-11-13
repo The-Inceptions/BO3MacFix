@@ -480,4 +480,28 @@
 // connection data at *ADDR_CLIENT_GLOBALS (0x25780 bytes each): the server's netadr at +0x2455c, its 8-byte id at
 // +0x24b68
 // -- end coop pause
+// -- client fields (clientfield_guard.c). The lookup, and the places that read through what it returns without
+// checking it, each given as the instruction right after its call (where the lookup returns to). Windows places are
+// those of the build T7Overcharged's names fit (BlackOps3.exe CheckSum 0x6531394); see wip/night/impl-clientfield.md
+#define ADDR_ClientField_Find 0x13b95ed // func - ClientField *(int set, scr_string_t name, bool error_if_missing): the field of that name in the set (the thread's bgs + 8: 0x4018 bytes a set, count at +8, fields from +0x10; a field's name at +0x120, type byte at +0x12d), else NULL, after Com_Error(2, "No ClientField named %s found in set %s") when error_if_missing and com_clientFieldsDebug (0x1118df788, hash 0x92ac62) is on. Windows 0x140133ad0
+#define ADDR_ClientField_SetNames 0x1b7a850 // const char *[14]: the sets' names in that message, "world" (0) .. "item" (13); 7 is "clientuimodel"
+#define ADDR_Scr_Error 0x119f219 // func - void (scriptInstance_t inst, const char *message, bool terminal): keeps the message (unless one waits already) and throws it through Scr_ErrorInternal, which comes back only with developer_script on. Windows 0x1412ea450
+#define ADDR_SL_ConvertToString 0x11b6940 // func - const char *(scr_string_t). Windows 0x1412d7180
+#define ADDR_GScr_CodeGetClientField_Read 0x1293ef5 // in codegetclientfield (server) 0x1293e7d; Windows 0x141a5f94b, T7O ScriptError_GscClientFieldFault1
+#define ADDR_GScr_CodeGetPlayerStateClientField_Read 0x1294286 // in 0x129421a; Windows 0x141a5fa5e, T7O ...Fault2
+#define ADDR_GScr_CodeGetUIModelClientField_Read 0x1294592 // in 0x1294526; Windows 0x141a5fb5e, T7O ...Fault3 (DEIMOS 935's crash)
+#define ADDR_GScr_CodeGetWorldClientField_Read 0x12947e3 // in 0x12947c4; Windows 0x141a5fbfd, T7O ...Fault4
+#define ADDR_GScr_CodeIncrementPlayerStateClientField_Read 0x129466a // in 0x12945fb; Windows 0x141a5fe76, T7O ...Fault5
+#define ADDR_GScr_CodeIncrementUIModelClientField_Read 0x129435e // in 0x12942ef; Windows 0x141a5ff86, T7O ...Fault6
+#define ADDR_GScr_CodeIncrementWorldClientField_Read 0x1294877 // in 0x1294858; Windows 0x141a6003d, T7O ...Fault7
+#define ADDR_GScr_CodeSetPlayerStateClientField_Read 0x1294168 // in 0x12940f9; Windows 0x141a602c7, T7O ...Fault8
+#define ADDR_GScr_CodeSetWorldClientField_Read 0x1294730 // in 0x1294710; Windows 0x141a604c4, T7O NonExistentClientfield_CrashRip
+#define ADDR_CScr_CodeGetClientField_Read 0xef0719 // in codegetclientfield (client) 0xef05e2; Windows 0x140c15954, no T7O name
+#define ADDR_CScr_CodeGetPlayerStateClientField_Read 0xef07e9 // in 0xef07a6; Windows 0x140c15b80, T7O ClientFieldFault_Csc1
+#define ADDR_CScr_CodeGetUIModelClientField_Read 0xef0896 // in 0xef0853; Windows 0x140c15c50, T7O ClientFieldFault_Csc2
+#define ADDR_CScr_CodeGetWorldClientField_Read 0xef094f // in 0xef0900; Windows 0x140c18cf5, T7O ClientFieldFault_Csc3
+#define ADDR_ClientField_GetInt_Read 0x13b9d75 // in the int value getter 0x13b9d62 (set, name, values); Windows 0x140133f31 in 0x140133f20, T7O ClientFieldFault_MissingRip
+#define ADDR_ClientField_GetFloat_Read 0x13b9e24 // in the float value getter 0x13b9dfd; Windows 0x140133ec1 in 0x140133ea0, T7O ClientFieldFault_NullRip1
+#define ADDR_ClientField_GetFloat_ReadBits 0x13b9e4c // its second lookup, for the bits; Windows 0x140133eeb, T7O ClientFieldFault_NullRip2
+// -- end client fields
 // -- END OFFSETS

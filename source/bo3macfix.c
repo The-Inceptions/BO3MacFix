@@ -31,6 +31,7 @@
 #include "aae_hostmig.h"
 #include "aae_prompt.h"
 #include "aae_coop_pause.h"
+#include "clientfield_guard.h"
 #include "aae_arc.h"
 #include "gsc_detours.h"
 #include "script_vars.h"
@@ -1225,6 +1226,11 @@ __attribute__((constructor)) static void dylib_main() {
     // the pause for everybody in a co-op game and for players sharing a Mac, as All-around Enhancement 4's Windows
     // plugin gives it (AAECoopPause, on by default), see aae_coop_pause.c
     aae_coop_pause_init(game_base_address, read_int_setting_or_env("AAECoopPause", 1));
+
+    // a script asking for a client field nobody registered gets a script error instead of crashing the game, at the
+    // places T7Overcharged names for that, while the mod's T7Overcharged is loaded (ClientFieldGuard, on by default),
+    // see clientfield_guard.c
+    clientfield_guard_init(game_base_address, read_int_setting_or_env("ClientFieldGuard", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);
