@@ -213,7 +213,22 @@ static void fake_unref(lua_State *s, int table, int reference) {
 static void line_update(int local_client, uint8_t *element, uint64_t root, uint64_t fourth, uint64_t fifth,
                         lua_State *s);
 static uint8_t *reenter; // the element whose update the made-up function runs once more, from inside the call
+// The made-up function needs more room than the stack has: the VM moves the stack to a bigger block and frees the
+// old one (the game's 0x10145885e), with its top and base at the same places in the new one.
+#define Stack_Block_Slots 64
+static bool stack_moves;
+static HksObject *stack_block; // the block the made-up stack is in, when it has one of its own
+static void move_stack(lua_State *s) {
+    HksObject *bigger = calloc(2 * Stack_Block_Slots, sizeof(HksObject));
+    memcpy(bigger, stack_block, Stack_Block_Slots * sizeof(HksObject));
+    HKS_TOP(s) = bigger + (HKS_TOP(s) - stack_block);
+    HKS_BASE(s) = bigger + (HKS_BASE(s) - stack_block);
+    free(stack_block);
+    stack_block = bigger;
+}
 static int fake_pcall(lua_State *s, int arguments, int results, int handler) {
+    if (stack_moves)
+        move_stack(s);
     if (reenter != NULL) {
         uint8_t *element = reenter;
         reenter = NULL;
@@ -354,6 +369,7 @@ static void fresh(void) {
     projection_writes = true;
     between_reads = NULL;
     element_answer = NULL;
+    stack_moves = false;
     clients_in_game = 1;
     ready = true;
     LUI_ToElement = fake_to_element;
@@ -1543,6 +1559,35 @@ static void test_restart(void) {
           line->function_reference == 5 && line->table_reference == 6);
 }
 
+// The line's function needs a bigger stack: after the call the top is where it was before, in the new block.
+static void test_stack_moves(void) {
+    fresh();
+    aae_vmwidget_line_t *line = line_on(elements[2], 0, 0, 0);
+    const float position[3] = { 100, 200, 300 };
+    bone_for(line->tag, 0, identity, position);
+    // the Lua stack in a block of its own, its base not at the block's start
+    stack_block = calloc(Stack_Block_Slots, sizeof(HksObject));
+    HKS_BASE(L) = stack_block + 3;
+    HKS_TOP(L) = stack_block + 11;
+    stack_moves = true;
+    line_update(0, elements[2], 0, 0, 0, L);
+    CHECK(asked.pcalls == 1 && handed_the_table(640.0f, 360.0f) && line->off == 0);
+    CHECK(HKS_BASE(L) == stack_block + 3 && HKS_TOP(L) == stack_block + 11);
+    // the next push goes into the new block (with the top left in the freed block it would be a use after free)
+    HKS_TOP(L)->t = HKS_TNIL;
+    HKS_TOP(L)++;
+    CHECK(HKS_TOP(L) == stack_block + 12);
+    // a call that fails moves it as well: put back the same way
+    pcall_answer = 1;
+    HKS_TOP(L) = stack_block + 11;
+    line_update(0, elements[2], 0, 0, 0, L);
+    CHECK(asked.pcalls == 2 && line->off == 1 && HKS_BASE(L) == stack_block + 3 && HKS_TOP(L) == stack_block + 11);
+    stack_moves = false;
+    HKS_BASE(L) = stack, HKS_TOP(L) = stack + 8;
+    free(stack_block);
+    stack_block = NULL;
+}
+
 static void test_startup(void) {
     fresh();
     game_list();
@@ -1805,6 +1850,7 @@ int main(void) {
     test_line_method();
     test_widget_update();
     test_line_update();
+    test_stack_moves();
     test_startup();
     test_forget_lines();
     test_restart();

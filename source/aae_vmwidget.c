@@ -754,6 +754,10 @@ static void line_update(int local_client, uint8_t *element, uint64_t root, uint6
     HksObject *top = HKS_TOP(s);
     if (top == NULL)
         return;
+    // The top as a place on the stack, for after the call: the mod's function can make the VM move its stack to a
+    // bigger block (0x10145885e copies it and frees the old one). The plugin keeps the pointer itself, which then
+    // points into the freed block, and the next push corrupts the heap. Until the call nothing can move the stack.
+    ptrdiff_t top_at = top - HKS_BASE(s);
     if (!is_function(line->function.t)) {
         line->off = 1;
         return;
@@ -794,7 +798,7 @@ static void line_update(int local_client, uint8_t *element, uint64_t root, uint6
     line->calling = 1;
     int failed = hksi_lua_pcall(s, 1, 0, 0);
     line->calling = 0;
-    HKS_TOP(s) = top;
+    HKS_TOP(s) = HKS_BASE(s) + top_at;
     if (failed != 0) {
         line->off = 1;
         if (debug)
