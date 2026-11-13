@@ -118,10 +118,28 @@ uint32_t aae_vmwidget_element_slot(const void *element) {
 #define VMWIDGET_WHILE_WRITING(bone)
 #endif
 
+// A writer takes a bone: from an even count (nobody is writing it) to the odd one, in one step. When another writer
+// has it (the count odd, or changed under this one) this one gives way at once and writes nothing: the other's copy
+// stands, and nobody waits. The plugin moves the count with a plain read and two writes (s + 1, then s + 2), so two
+// writers at once can leave it odd for good (the second read the first one's odd count and finished after it), and
+// the widget on that bone would then never move again. Two can meet here: the view model's two DObjCalcSkel calls
+// run on job threads, from different places of the client's frame, and a tag's first widget makes the main thread
+// write its bones. With one writer the counts are the plugin's.
+static bool take_bone(aae_vmwidget_bone_t *bone, uint32_t *sequence) {
+    uint32_t seen = __atomic_load_n(&bone->sequence, __ATOMIC_RELAXED);
+    if ((seen & 1) != 0 ||
+        !__atomic_compare_exchange_n(&bone->sequence, &seen, seen + 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+        return false;
+    *sequence = seen;
+    return true;
+}
+
 // the bone of a tag for one local client is not to be used: written as the plugin writes it, the count odd in between
 static void invalidate(aae_vmwidget_bone_t *bone) {
-    uint32_t sequence = __atomic_load_n(&bone->sequence, __ATOMIC_RELAXED);
-    __atomic_store_n(&bone->sequence, sequence + 1, __ATOMIC_RELAXED);
+    uint32_t sequence;
+    if (!take_bone(bone, &sequence))
+        return;
+    __atomic_thread_fence(__ATOMIC_RELEASE);
     VMWIDGET_WHILE_WRITING(bone);
     __atomic_store_n(&bone->valid, 0, __ATOMIC_RELAXED);
     __atomic_store_n(&bone->sequence, sequence + 2, __ATOMIC_RELEASE);
@@ -429,8 +447,9 @@ void aae_vmwidget_skeleton(aae_vmwidget_state_t *state, const uint8_t *model, aa
         if (!within(position[0]) || !within(position[1]) || !within(position[2]))
             continue;
         aae_vmwidget_bone_t *bone = &tag->bone[client];
-        uint32_t sequence = __atomic_load_n(&bone->sequence, __ATOMIC_RELAXED);
-        __atomic_store_n(&bone->sequence, sequence + 1, __ATOMIC_RELAXED);
+        uint32_t sequence;
+        if (!take_bone(bone, &sequence))
+            continue;
         __atomic_thread_fence(__ATOMIC_RELEASE);
         VMWIDGET_WHILE_WRITING(bone);
         memcpy(bone->rotation, rotation, sizeof(rotation));

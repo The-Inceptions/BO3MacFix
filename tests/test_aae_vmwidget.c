@@ -862,6 +862,33 @@ static void test_writing(void) {
     CHECK(kept_as(far, 0, identity, at) && far->lookup[0].index == 4 && written_while_even == 0);
 }
 
+// A writer that finds a bone being written (its count odd) gives way: it writes nothing, the count stays as it is.
+static void test_give_way(void) {
+    tags_in_use(&tables);
+    memset(models, 0, sizeof(models));
+    set_model(&models[0], trees[0], 8, true);
+    set_bone(&models[0], 3, 0x500, turned, at);
+    aae_vmwidget_note(&tables, 0, models[0].bytes);
+    aae_vmwidget_skeleton(&tables, models[0].bytes, fake_bone_index);
+    aae_vmwidget_bone_t *bone = &tag0->bone[0];
+    CHECK(kept_as(tag0, 0, turned, at) && bone->sequence == 6);
+    // another writer has it
+    bone->sequence = 7;
+    written_while_odd = written_while_even = 0;
+    invalidate(bone);
+    CHECK(bone->sequence == 7 && bone->valid == 1 && written_while_odd == 0);
+    const float moved[3] = { 1.0f, 2.0f, 3.0f };
+    set_bone(&models[0], 3, 0x500, turned, moved);
+    aae_vmwidget_skeleton(&tables, models[0].bytes, fake_bone_index);
+    CHECK(bone->sequence == 7 && memcmp(bone->position, at, sizeof(at)) == 0 && written_while_odd == 0);
+    // the other writer is done: the next one writes as before, the count two on
+    bone->sequence = 8;
+    aae_vmwidget_skeleton(&tables, models[0].bytes, fake_bone_index);
+    CHECK(kept_as(tag0, 0, turned, moved) && bone->sequence == 10 && written_while_odd == 1);
+    invalidate(bone);
+    CHECK(bone->sequence == 12 && bone->valid == 0 && written_while_odd == 2);
+}
+
 // the plugin's tests of a bone before it is kept
 static bool keeps(const float rotation[4], const float position[3]) {
     tags_in_use(&tables);
@@ -1845,6 +1872,7 @@ int main(void) {
     test_skeleton();
     test_bone_rules();
     test_writing();
+    test_give_way();
     test_splice();
     test_widget_method();
     test_line_method();

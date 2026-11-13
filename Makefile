@@ -50,6 +50,8 @@ TEST_TARGETS += tests/test_clientfield_guard
 TEST_TARGETS += tests/test_aae_arc
 # the mod's widgets on the first person weapon: the plugin's tables, sums and methods (aae_vmwidget.c)
 TEST_TARGETS += tests/test_aae_vmwidget
+# two writers of one of its bones at once, under the thread sanitizer (aae_vmwidget.c)
+TEST_TARGETS += tests/test_aae_vmwidget_tsan
 # the one hook on DObjCalcSkel for both pieces that work after the view model's skeleton (aae_skeleton.c)
 TEST_TARGETS += tests/test_aae_skeleton
 
@@ -328,6 +330,14 @@ tests/test_aae_vmwidget: tests/test_aae_vmwidget.c source/aae_vmwidget.c source/
 		source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_vmwidget.c
+
+# aae_vmwidget.c's bones written by two threads at once, in the order that left the plugin's count odd, and many at once
+# (it uses only the bone writers of the piece it includes, so the rest may go unused)
+tests/test_aae_vmwidget_tsan: tests/test_aae_vmwidget_tsan.c source/aae_vmwidget.c source/aae_vmwidget.h \
+		source/aae_plugin.c source/aae_plugin.h source/aae_skeleton.h source/havok.h source/offsets.h source/dobby.h \
+		source/prepatch.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-unused-function -fsanitize=thread -o $@ \
+		tests/test_aae_vmwidget_tsan.c
 
 # aae_skeleton.c: the one hook on DObjCalcSkel, the order of the pieces' work and the two calls, against a made-up
 # game; it finds out where the hook returns to through the frame pointers
