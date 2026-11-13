@@ -275,6 +275,23 @@ static int int_of(const char *name) {
         memcpy(&value, dvar->game_side + 0x28, sizeof(value));
     return value;
 }
+// the game's way of naming a dvar: its own copy of the text at +8, the one there released first
+static char game_strings[16][40];
+static int game_string_count, game_names_released, game_namings;
+static void game_set_name(uint8_t *dvar, const char *name) {
+    const char *old;
+    memcpy(&old, dvar + 8, sizeof(old));
+    if (old != NULL)
+        game_names_released++;
+    char *copy = game_strings[game_string_count++ % 16];
+    snprintf(copy, sizeof(game_strings[0]), "%s", name);
+    memcpy(dvar + 8, &copy, sizeof(copy));
+    game_namings++;
+}
+// whether a pointer is one of the game's own strings
+static bool game_string(const char *text) {
+    return text >= &game_strings[0][0] && text < &game_strings[0][0] + sizeof(game_strings);
+}
 static const char *name_in(const char *name) {
     game_dvar_t *dvar = game_dvar(name);
     const char *in = NULL;
@@ -294,6 +311,7 @@ static void made_up_game(uint64_t base) {
     Dvar_RegisterInt = game_register_int;
     Dvar_RegisterFloat = game_register_float;
     Dvar_RegisterBool = game_register_bool;
+    Dvar_SetName = game_set_name;
 }
 
 // ---- what the switches did, in order
@@ -342,6 +360,7 @@ static void reset(void) {
     atomic_store(&fastads_dvar, NULL);
     memset(game_dvars, 0, sizeof(game_dvars));
     game_dvar_count = game_registrations = 0;
+    game_string_count = game_names_released = game_namings = 0;
     game_refuses_registration = game_refuses_floats = false;
     game_command_count = 0;
     game_has_command = NULL;
@@ -616,11 +635,12 @@ static void test_init(void) {
           Dvar_RegisterInt == (void *)(0x100000000 + ADDR_Dvar_RegisterInt) &&
           Dvar_RegisterFloat == (void *)(0x100000000 + ADDR_Dvar_RegisterFloat) &&
           Dvar_RegisterBool == (void *)(0x100000000 + ADDR_Dvar_RegisterBool) &&
+          Dvar_SetName == (void *)(0x100000000 + ADDR_Dvar_SetName) &&
           sniper_anim_types == (const int *)(0x100000000 + ADDR_ADS_SniperAnimTypes));
     CHECK(ADDR_Dvar_RegisterBool == 0xfa1328 && ADDR_Dvar_RegisterInt == 0xfa149e &&
           ADDR_Dvar_RegisterFloat == 0xfa1614 && ADDR_Cmd_FindCommand == 0xf764e8 &&
-          ADDR_Cmd_AddCommandInternal == 0xf7651d && ADDR_Sys_GetTLS == 0xd0604f);
-    CHECK(Dvar_Name == 8 && Dvar_Value == 0x28);
+          ADDR_Cmd_AddCommandInternal == 0xf7651d && ADDR_Sys_GetTLS == 0xd0604f && ADDR_Dvar_SetName == 0xfa4242);
+    CHECK(Dvar_Value == 0x28);
     made_up_game(0x100000000);
 }
 
@@ -669,6 +689,10 @@ static void test_start(void) {
     CHECK(name_in("t7o_strafe_speed_scale") != NULL &&
           strcmp(name_in("t7o_strafe_speed_scale"), "t7o_strafe_speed_scale") == 0);
     CHECK(name_in("t7o_omnimovement") != NULL && strcmp(name_in("t7o_omnimovement"), "t7o_omnimovement") == 0);
+    // through the game's own function, so that +8 holds the game's own copy, the one its shutdown releases
+    CHECK(game_namings == 4 && game_names_released == 0);
+    CHECK(game_string(name_in("hook_movement_perks")) && game_string(name_in("t7o_perk_fastads_multiplier")) &&
+          game_string(name_in("t7o_strafe_speed_scale")) && game_string(name_in("t7o_omnimovement")));
     // all off, then fastswap off once more: they were off
     CHECK(only_on(0) && seen_count == Move_Patch_Count + 1);
     for (int i = 0; i < seen_count && i < 64; i++)
@@ -687,7 +711,7 @@ static void test_start(void) {
     set_before("hook_movement_perks", "0");
     aae_movement_t7o_started();
     CHECK(!atomic_load(&started) && !aae_movement_started() && game_registrations == 1 && game_dvar_count == 1 &&
-          seen_count == 0);
+          seen_count == 0 && game_namings == 1);
     CHECK(int_of("hook_movement_perks") == 0);
     RUN("movement_patch_all", "1");
     CHECK(only_on(0) && switch_bits() == 0);
@@ -717,7 +741,7 @@ static void test_start(void) {
     reset();
     game_refuses_registration = true;
     aae_movement_t7o_started();
-    CHECK(!atomic_load(&started) && !aae_movement_started());
+    CHECK(!atomic_load(&started) && !aae_movement_started() && game_namings == 0);
     // the setting off: nothing registered
     reset();
     enabled = false;

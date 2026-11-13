@@ -291,6 +291,7 @@
 #define ADDR_Dvar_RegisterBool 0xfa1328 // func - dvar_t *(uint32_t hash, const char *name, bool value, uint32_t flags, const char *description) (Windows 0x142273de0)
 #define ADDR_Dvar_RegisterInt 0xfa149e // func - dvar_t *(uint32_t hash, const char *name, int value, int min, int max, uint32_t flags, const char *description) (Windows 0x142273fc0)
 #define ADDR_Dvar_RegisterFloat 0xfa1614 // func - dvar_t *(uint32_t hash, const char *name, float value, float min, float max, uint32_t flags, const char *description) (Windows 0x142273f40)
+#define ADDR_Dvar_SetName 0xfa4242 // func - void (dvar_t *, const char *name): gives a dvar its name (+8) the game's way: releases the one there (FreeString 0x1254262) and stores the game's own copy (CopyString 0x125420f), which Dvar_Shutdown (0xfa0aa4) releases at every quit; the register function calls it for dvars with flag 0x20000 (0xfa49cf) - name is a guess
 // fast ADS in the ADS update (0xed5ad3: how far the sights are up, the player state's +0x2fc, moves by msec * rate), as
 // T7Overcharged's fastads patch changes it (aae_movement.c); reached only when the player has the fast-ADS perk
 #define ADDR_ADS_FastAdsClassTests 0xed5e30 // mid-func - "mov r15d, [r12 + 0x68]": the first of the two weapon class tests that keep the rate from being doubled (the class against the getter 0xfdcf14's 1 and 2); rbx the player state (Windows 0x14265e2f7..0x14265e313, the two "je" T7Overcharged makes "nop")

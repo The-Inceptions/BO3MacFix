@@ -54,7 +54,6 @@
 
 #define Strafe_Least 0.667f      // the game's own sprint strafe scale (0x3f2ac083), T7Overcharged's least one
 #define Fastads_Default 2.15f    // t7o_perk_fastads_multiplier's default
-#define Dvar_Name 0x8            // dvar_t: the name (the game keeps only the hash of the dvars registered here)
 #define Dvar_Value 0x28          // dvar_t: the current value (a bool's byte, an int, a float)
 
 // ---- T7Overcharged's rules
@@ -232,6 +231,7 @@ static uint8_t *(*Dvar_RegisterFloat)(uint32_t hash, const char *name, float val
                                       uint32_t flags, const char *description);
 static uint8_t *(*Dvar_RegisterBool)(uint32_t hash, const char *name, bool value, uint32_t flags,
                                      const char *description);
+static void (*Dvar_SetName)(uint8_t *dvar, const char *name);
 // the game's cmd_function_s for each command, which Cmd_AddCommandInternal links into its list
 static _Alignas(8) uint8_t patch_command[0x30], patch_all_command[0x30];
 
@@ -399,10 +399,13 @@ static void movement_patch_all_f(void) {
         print_state(argc, argv);
 }
 
-// T7Overcharged's dvars, with the name written into the dvar after it is registered, as T7Overcharged does
+// T7Overcharged's dvars get their names after they are registered, as T7Overcharged gives them (it writes a pointer to
+// its own text into the dvar's +8, where the game keeps a dvar's name). Here it is the game's own copy of the text,
+// through the game's own function for it: when the game shuts its dvars down, at every quit, it releases that field
+// with FreeString, which only knows its own strings. The text, which is all anybody reads there, is the same.
 static uint8_t *named(uint8_t *dvar, const char *name) {
     if (dvar != NULL)
-        memcpy(dvar + Dvar_Name, &name, sizeof(name));
+        Dvar_SetName(dvar, name);
     return dvar;
 }
 
@@ -520,6 +523,7 @@ static void game_functions(uint64_t game_base_address) {
     Dvar_RegisterInt = (void *)(game_base_address + ADDR_Dvar_RegisterInt);
     Dvar_RegisterFloat = (void *)(game_base_address + ADDR_Dvar_RegisterFloat);
     Dvar_RegisterBool = (void *)(game_base_address + ADDR_Dvar_RegisterBool);
+    Dvar_SetName = (void *)(game_base_address + ADDR_Dvar_SetName);
     sniper_anim_types = (const int *)(game_base_address + ADDR_ADS_SniperAnimTypes);
 }
 static void (*find_game)(uint64_t game_base_address) = game_functions;
