@@ -110,6 +110,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_CG_DrawCrosshair_Tests, 5, 4, { 0x80, 0xFB, 0x00, 0x75, 0x1B } }, // cmp bl, 0; jne +0x1b (a detour)
     { ADDR_CG_DrawCrosshairTest, Push_R15 },
     { ADDR_CG_DrawMantleHint, Push_R15 },
+    { ADDR_CG_UpdateViewModelDynamicBones, Push_R15 },
     { ADDR_CG_ShouldPredictArc, Push_R15 },
     { ADDR_CG_UpdateViewWeaponAnim, Push_R15 },
     { ADDR_CheatsOk, Push_R14 },

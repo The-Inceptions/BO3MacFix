@@ -36,6 +36,7 @@
 #include "aae_move_sprint.h"
 #include "aae_prompt.h"
 #include "aae_coop_pause.h"
+#include "aae_viewmodel.h"
 #include "clientfield_guard.h"
 #include "aae_arc.h"
 #include "aae_vmwidget.h"
@@ -1240,6 +1241,10 @@ __attribute__((constructor)) static void dylib_main() {
     // the pause for everybody in a co-op game and for players sharing a Mac, as All-around Enhancement 4's Windows
     // plugin gives it (AAECoopPause, on by default), see aae_coop_pause.c
     aae_coop_pause_init(game_base_address, read_int_setting_or_env("AAECoopPause", 1));
+
+    // All-around Enhancement 4's gun position and its other moves of the first person gun's bones, as the mod's
+    // T7Overcharged makes them (AAEGunPosition, on by default), see aae_viewmodel.c
+    aae_viewmodel_init(game_base_address, read_int_setting_or_env("AAEGunPosition", 1));
 
     // the two UI element methods All-around Enhancement 4's Windows plugin adds for HUD widgets on the first person
     // weapon, which the mod doesn't use yet (AAEViewmodelWidgets, on by default), see aae_vmwidget.c

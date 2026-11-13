@@ -55,6 +55,8 @@ TEST_TARGETS += tests/test_aae_clientfx
 TEST_TARGETS += tests/test_t7o_guards
 # the pause for everybody in a co-op game: the plugin's packets and rules, machines playing together (aae_coop_pause.c)
 TEST_TARGETS += tests/test_aae_coop_pause
+# T7Overcharged's moves of the first person gun's bones: the texts, the rules and the hook (aae_viewmodel.c)
+TEST_TARGETS += tests/test_aae_viewmodel
 # a client field nobody registered: which places get a script error or a field that reads as 0 (clientfield_guard.c)
 TEST_TARGETS += tests/test_clientfield_guard
 # the grenade's prediction line: T7Overcharged's test, the plugin's sums and the hooks (aae_arc.c)
@@ -149,6 +151,8 @@ SOURCES += source/aae_clientfx.c
 SOURCES += source/aae_linkcam.c
 # AAECoopPause: the pause for everybody in a co-op game, as the mod's plugin does it (aae_coop_pause.c)
 SOURCES += source/aae_coop_pause.c
+# AAEGunPosition: the mod's moves of the first person gun's bones, as its T7Overcharged makes them (aae_viewmodel.c)
+SOURCES += source/aae_viewmodel.c
 # AAEGrenadeArc: the line that shows where a held grenade will fly (aae_arc.c)
 SOURCES += source/aae_arc.c
 # AAEViewmodelWidgets: the two UI element methods the plugin adds for widgets on the first person weapon
@@ -377,6 +381,12 @@ tests/test_aae_coop_pause: tests/test_aae_coop_pause.c source/aae_coop_pause.c s
 		source/dobby.h source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_coop_pause.c source/gsc_obj.c
+# aae_viewmodel.c: T7Overcharged's reading of the dvars and the file, its rules, and the hook against a made-up game
+tests/test_aae_viewmodel: tests/test_aae_viewmodel.c source/aae_viewmodel.c source/aae_viewmodel.h \
+		source/aae_plugin.c source/aae_plugin.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h \
+		source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_viewmodel.c source/gsc_obj.c
 
 # clientfield_guard.c: its rules, and its hook against a made-up lookup, script engine and mod
 tests/test_clientfield_guard: tests/test_clientfield_guard.c source/clientfield_guard.c source/clientfield_guard.h \

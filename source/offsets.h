@@ -532,6 +532,14 @@
 // connection data at *ADDR_CLIENT_GLOBALS (0x25780 bytes each): the server's netadr at +0x2455c, its 8-byte id at
 // +0x24b68
 // -- end coop pause
+// T7Overcharged's moves of the first person gun's bones (aae_viewmodel.c): what its bullet_depletion component calls
+#define ADDR_CG_UpdateViewModelDynamicBones 0xd37a72 // func - void (cg_t *, playerState_s *, DObj *, Weapon, centity_t *): sets the bones of the view model the game moves by itself (a spinning barrel...) on its DObj, every frame; T7Overcharged's hook (Windows 0x14126eeb0)
+#define ADDR_DObjGetBoneIndex 0xf74d4f // func - int (DObj *, scr_string_t name, uint16_t *index, int model mask): *index goes in as a guess (0xfffe none, 0xffff known missing) and comes out as the bone (Windows 0x1422c4240)
+#define ADDR_DObjSetLocalTag 0xf74879 // func - void (DObj *, int *part bits, int bone, const float trans[3], const float angles[3]): the bone's local tag; a bone's first one in a frame counts (a bit at DObj +0x68) (Windows 0x1422c50b0)
+#define ADDR_DObjGetLocalClientIndex 0xf94a1b // func - int (const DObj *): the signed byte at +0x123, -1 for none (Windows 0x1422bdd00)
+#define ADDR_GScr_AllocString 0x1172afc // func - scr_string_t (const char *): SL_GetString(name, 1), one reference per name (Windows 0x141a77150)
+#define ADDR_Sys_IsMainThread 0xd05c19 // func - bool (void): the thread is the game's main one (Windows 0x14212aff0)
+#define ADDR_Com_IsRunningUILevel 0xe71737 // func - bool (void): the front end's UI level runs, the dvar with hash 0xd1eff758 and a flag (Windows 0x1420ef8f0)
 // All-around Enhancement's widgets on the first person weapon, the plugin's viewmodel_ui_anchor (aae_vmwidget.c)
 #define ADDR_LUI_Startup 0xebeea9 // func - void (callback, callback), "LUI: Starting up...": makes the UI's Lua VM and registers the UI element methods of the list at ADDR_LUI_ElementMethods in it (Windows 0x14268c3d0, inlined here) - name is a guess
 #define ADDR_LUI_ElementMethods 0x119c6b80 // {name, lua_CFunction, next} *: the list of the UI element methods, built by static initializers (Windows 0x159bf7e00) - name is a guess
