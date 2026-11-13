@@ -146,6 +146,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Rocket_Spawn, Push_R15 },
     { ADDR_Scr_ErrorInternal, Push_R15 },
     { ADDR_Scr_EvalEquality, Push_R15 },
+    { ADDR_Scr_GetCodePosInfo, Push_R15 },
     { ADDR_Scr_InitVariables, Push_R15 },
     { ADDR_Scr_LoadScript, Push_R15 },
     { ADDR_Scr_LoadSourceText, Push_R15 },
