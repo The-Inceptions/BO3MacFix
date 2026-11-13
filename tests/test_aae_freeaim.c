@@ -1291,14 +1291,14 @@ static void test_client_shots(void) {
     }
     CHECK(client_fires(1, fire_frame));
     // Each of the plugin's questions whether free aim is on reads the clock anew: the first (any local client), the
-    // second (the first local client with the shooter's number) and the third (that client again). When the client's
-    // quarter of a second since the crosshair code was last at work for it runs out between the second and the third,
-    // nothing is turned.
+    // second (the first local client with the shooter's number), the third (that client again) and the fourth (before
+    // the gun's flash is looked for, which isn't when that one says no). When the client's quarter of a second since
+    // the crosshair code was last at work for it runs out between the second and the third, nothing is turned.
     uint64_t seen = test_now;
     both_seen();
     now_ms = ticking_clock;
     test_now = seen + Seen_For_Ms - 2;
-    CHECK(client_fires(1, fire_frame) && test_now == seen + Seen_For_Ms + 1);
+    CHECK(client_fires(1, fire_frame) && test_now == seen + Seen_For_Ms + 2);
     test_now = seen + Seen_For_Ms - 1;
     CHECK(!client_fires(1, fire_frame) && test_now == seen + Seen_For_Ms + 2);
     now_ms = test_clock;
@@ -1309,6 +1309,561 @@ static void test_client_shots(void) {
     crosshair_asks(0, false);
     CHECK(!client_fires(1, fire_frame) && clients[1].third_person == (test_now * 4 | 1));
     set_view(0, true, 0, 0);
+    memset(clients, 0, sizeof(clients));
+}
+
+// ---- the client's side of a shot: the tracer from the gun
+
+// a kept shot as it should be
+static bool kept_shot(const aae_freeaim_shot_t *shot, const float start[3], const float flash[3],
+                      const float target[3], uint64_t made_at, bool used) {
+    return memcmp(shot->start, start, sizeof(shot->start)) == 0 &&
+           memcmp(shot->flash, flash, sizeof(shot->flash)) == 0 &&
+           memcmp(shot->target, target, sizeof(shot->target)) == 0 && shot->made_at == made_at && shot->used == used;
+}
+static bool same_point(const float a[3], const float b[3]) {
+    return memcmp(a, b, 3 * sizeof(float)) == 0;
+}
+
+static void test_flash(void) {
+    aae_freeaim_tracers_t kept;
+    memset(&kept, 0, sizeof(kept));
+    const float start[3] = { 100.0f, 200.0f, 300.0f };
+    float flash[3] = { 9, 9, 9 };
+    // none found and none found before: none (also right after the clock began)
+    CHECK(!aae_freeaim_flash(&kept, start, NULL, 1000, flash) && flash[0] == 9);
+    memcpy(kept.flash, start, sizeof(kept.flash));
+    CHECK(!aae_freeaim_flash(&kept, start, NULL, 100, flash) && flash[0] == 9);
+    // found at a time after now, however far after it: not
+    kept.flash_at = UINT64_MAX;
+    CHECK(!aae_freeaim_flash(&kept, start, NULL, 100, flash) && flash[0] == 9);
+    kept.flash_at = 0;
+    // one just found, 128 from the start at the most: it is the flash, and the one last found
+    const float near_by[3] = { 100.0f, 200.0f + 128.0f, 300.0f }, farther[3] = { 100.0f, 200.0f + 128.01f, 300.0f };
+    CHECK(aae_freeaim_flash(&kept, start, near_by, 1000, flash) && same_point(flash, near_by) &&
+          same_point(kept.flash, near_by) && kept.flash_at == 1000);
+    const float askew[3] = { 100.0f + 73.9f, 200.0f + 73.9f, 300.0f + 73.9f }; // just within 128 by a sum in floats
+    CHECK(aae_freeaim_flash(&kept, start, askew, 1001, flash) && same_point(flash, askew) && kept.flash_at == 1001);
+    const float askew_farther[3] = { 100.0f + 73.91f, 200.0f + 73.9f, 300.0f + 73.9f };
+    CHECK(!aae_freeaim_flash(&kept, start, askew_farther, 1002, flash) && same_point(kept.flash, askew) &&
+          kept.flash_at == 1001);
+    CHECK(aae_freeaim_flash(&kept, start, near_by, 1003, flash) && kept.flash_at == 1003);
+    // farther: not, and the one last found stays
+    flash[0] = 9;
+    CHECK(!aae_freeaim_flash(&kept, start, farther, 1100, flash) && flash[0] == 9 && kept.flash_at == 1003 &&
+          same_point(kept.flash, near_by));
+    // none found: the one last found, for 250 ms (and it doesn't become any newer by that)
+    CHECK(aae_freeaim_flash(&kept, start, NULL, 1003 + Flash_Kept_Ms, flash) && same_point(flash, near_by) &&
+          kept.flash_at == 1003);
+    flash[0] = 9;
+    CHECK(!aae_freeaim_flash(&kept, start, NULL, 1003 + Flash_Kept_Ms + 1, flash) && flash[0] == 9);
+    CHECK(aae_freeaim_flash(&kept, start, NULL, 1003, flash));
+    CHECK(!aae_freeaim_flash(&kept, start, NULL, 1002, flash)); // found after now: a clock gone back
+    // the one last found has to be near enough too
+    const float elsewhere[3] = { 400.0f, 200.0f, 300.0f };
+    CHECK(!aae_freeaim_flash(&kept, elsewhere, NULL, 1010, flash));
+    // what isn't a point within 1e7: not, whether found now or before
+    const float not_points[][3] = { { NAN, 200, 300 }, { 100, INFINITY, 300 }, { 100, 200, -INFINITY },
+                                    { 10000000.0f, 200, 300 } };
+    for (size_t i = 0; i < sizeof(not_points) / sizeof(not_points[0]); i++) {
+        CHECK(!aae_freeaim_flash(&kept, start, not_points[i], 1020, flash) && kept.flash_at == 1003);
+        aae_freeaim_tracers_t before = kept;
+        memcpy(kept.flash, not_points[i], sizeof(kept.flash));
+        kept.flash_at = 1020;
+        CHECK(!aae_freeaim_flash(&kept, start, NULL, 1020, flash));
+        kept = before;
+    }
+    const float far_out[3] = { 9999999.0f, 0.0f, 0.0f }, past[3] = { 10000000.0f, 0.0f, 0.0f };
+    CHECK(aae_freeaim_flash(&kept, far_out, far_out, 1030, flash) && kept.flash_at == 1030);
+    CHECK(!aae_freeaim_flash(&kept, far_out, past, 1031, flash) && kept.flash_at == 1030); // 1 from the start
+    // a start that isn't a number: no distance, so none
+    CHECK(!aae_freeaim_flash(&kept, (float[3]){ NAN, 0, 0 }, far_out, 1040, flash) && kept.flash_at == 1030);
+}
+
+static void test_keep(void) {
+    aae_freeaim_tracers_t kept;
+    memset(&kept, 0, sizeof(kept));
+    const float start[3] = { 1, 2, 3 }, flash[3] = { 4, 5, 6 }, target[3] = { 70, 80, 90 };
+    CHECK(aae_freeaim_keep(&kept, start, flash, target, 500) && kept.count == 1 && kept.pending &&
+          kept_shot(&kept.shots[0], start, flash, target, 500, false));
+    // round and round: the 33rd goes where the first was
+    kept.shots[0].used = true;
+    for (int i = 1; i <= AAE_FREEAIM_SHOTS; i++)
+        CHECK(aae_freeaim_keep(&kept, start, flash, (float[3]){ (float)i, 0, 0 }, 500 + (uint64_t)i));
+    CHECK(kept.count == AAE_FREEAIM_SHOTS + 1 && kept.shots[0].target[0] == AAE_FREEAIM_SHOTS &&
+          !kept.shots[0].used && kept.shots[0].made_at == 500 + AAE_FREEAIM_SHOTS && kept.shots[1].target[0] == 1);
+    kept.count = UINT32_MAX;
+    CHECK(aae_freeaim_keep(&kept, start, flash, target, 600) && kept.count == 0 &&
+          kept_shot(&kept.shots[AAE_FREEAIM_SHOTS - 1], start, flash, target, 600, false));
+    // each of the three a point within 1e7, or nothing is kept
+    const float bad[3] = { 0, 10000000.0f, 0 }, worse[3] = { NAN, 0, 0 };
+    kept.pending = false;
+    const float *points[3] = { start, flash, target };
+    for (int i = 0; i < 3; i++)
+        for (int b = 0; b < 2; b++) {
+            const float *with[3] = { points[0], points[1], points[2] };
+            with[i] = b == 0 ? bad : worse;
+            CHECK(!aae_freeaim_keep(&kept, with[0], with[1], with[2], 700) && kept.count == 0 && !kept.pending);
+        }
+}
+
+// The made-up scene for finding a kept shot: a queued shot fired from the origin, its tracer from the muzzle; a kept
+// shot from where the origin is, the gun 20 to the side, the point 500 ahead.
+static const float scene_origin[3] = { 1000.0f, 2000.0f, 100.0f }, scene_muzzle[3] = { 1030.0f, 2000.0f, 100.0f },
+                   scene_flash[3] = { 1010.0f, 2020.0f, 90.0f }, scene_target[3] = { 1500.0f, 2000.0f, 100.0f };
+static aae_freeaim_tracers_t scene;
+static void scene_keep(int slot, const float start[3], const float flash[3], const float target[3], uint64_t at) {
+    aae_freeaim_shot_t *shot = &scene.shots[slot];
+    memcpy(shot->start, start, sizeof(shot->start));
+    memcpy(shot->flash, flash, sizeof(shot->flash));
+    memcpy(shot->target, target, sizeof(shot->target));
+    shot->made_at = at, shot->used = false;
+}
+static void scene_reset(void) {
+    memset(&scene, 0, sizeof(scene));
+    scene.count = 1;
+    scene_keep(0, scene_origin, scene_flash, scene_target, 5000);
+    scene.pending = true;
+}
+// whether the queued shot finds a kept one at this time; which one it found goes into found_slot
+static float found_flash[3], found_target[3];
+static int found_slot;
+static bool finds(const float origin[3], const float start[3], const float muzzle[3], uint64_t now) {
+    aae_freeaim_tracers_t before = scene;
+    for (int i = 0; i < 3; i++)
+        found_flash[i] = found_target[i] = -7.0f;
+    bool found = aae_freeaim_match(&scene, origin, start, muzzle, now, found_flash, found_target);
+    found_slot = -1;
+    for (int i = 0; i < AAE_FREEAIM_SHOTS; i++)
+        if (scene.shots[i].used != before.shots[i].used) {
+            CHECK(found_slot == -1 && found && scene.shots[i].used);
+            found_slot = i;
+        }
+    if (found)
+        CHECK(found_slot >= 0 && same_point(found_flash, scene.shots[found_slot].flash) &&
+              same_point(found_target, scene.shots[found_slot].target));
+    else
+        CHECK(found_flash[0] == -7.0f && found_target[0] == -7.0f);
+    // nothing else of the kept shots changes
+    for (int i = 0; i < AAE_FREEAIM_SHOTS; i++)
+        before.shots[i].used = scene.shots[i].used;
+    before.pending = scene.pending;
+    CHECK(memcmp(&before, &scene, sizeof(scene)) == 0);
+    return found;
+}
+static bool scene_finds(uint64_t now) {
+    return finds(scene_origin, scene_origin, scene_muzzle, now);
+}
+// with the kept shot's start, flash or point moved by this much along x (0: start, 1: flash, 2: point)
+static bool finds_with(int which, float by) {
+    scene_reset();
+    float *point = which == 0 ? scene.shots[0].start : which == 1 ? scene.shots[0].flash : scene.shots[0].target;
+    point[0] = point[0] + by;
+    return scene_finds(5000);
+}
+
+static void test_match(void) {
+    scene_reset();
+    // it fits: found once, and nothing is left to find
+    CHECK(scene_finds(5000) && found_slot == 0 && !scene.pending);
+    CHECK(!scene_finds(5000) && !scene.pending);
+    // within 500 ms of being kept, not before it nor after
+    scene_reset();
+    CHECK(scene_finds(5000 + Shot_Kept_Ms));
+    scene_reset();
+    CHECK(!scene_finds(5000 + Shot_Kept_Ms + 1) && !scene.pending);
+    scene_reset();
+    CHECK(!scene_finds(4999) && !scene.pending);
+    scene_reset();
+    scene.shots[0].made_at = 0;
+    CHECK(!scene_finds(0));
+    scene_reset();
+    scene.shots[0].made_at = UINT64_MAX;
+    CHECK(!scene_finds(100) && !scene.pending);
+    // the newest first, counting back from the next place in the ring
+    scene_reset();
+    scene.count = 7;
+    scene_keep(5, scene_origin, scene_flash, (float[3]){ 1600, 2000, 100 }, 5001);
+    scene_keep(6, scene_origin, scene_flash, (float[3]){ 1700, 2000, 100 }, 5002);
+    scene_keep(7, scene_origin, scene_flash, (float[3]){ 1800, 2000, 100 }, 5003); // the oldest one: count is 7
+    CHECK(scene_finds(5003) && found_slot == 6 && scene.pending);
+    CHECK(scene_finds(5003) && found_slot == 5 && scene.pending);
+    CHECK(scene_finds(5003) && found_slot == 0 && scene.pending);
+    CHECK(scene_finds(5003) && found_slot == 7 && !scene.pending);
+    scene_reset();
+    scene.count = 0; // the ring wrapped: the newest is in the last place
+    scene_keep(31, scene_origin, scene_flash, (float[3]){ 1600, 2000, 100 }, 5001);
+    CHECK(scene_finds(5001) && found_slot == 31 && scene.pending);
+    // still something to find: one not used yet, of the last 500 ms (whether it fits or not)
+    scene_reset();
+    scene_keep(9, (float[3]){ 0, 0, 0 }, scene_flash, scene_target, 5000);
+    CHECK(scene_finds(5000) && found_slot == 0 && scene.pending);
+    CHECK(!scene_finds(5000) && scene.pending);
+    CHECK(!scene_finds(5501) && !scene.pending);
+    scene_reset();
+    scene_keep(AAE_FREEAIM_SHOTS - 1, (float[3]){ 0, 0, 0 }, scene_flash, scene_target, 5000);
+    CHECK(scene_finds(5000) && found_slot == 0 && scene.pending);
+    // the kept shot's start: 8 from the queued shot's origin at the most
+    CHECK(finds_with(0, 8.0f) && !finds_with(0, 8.0005f) && finds_with(0, -8.0f));
+    CHECK(!finds_with(0, INFINITY) && !finds_with(0, 20000000.0f));
+    CHECK(finds_with(0, NAN)); // (one that isn't a number passes, as with the plugin; none such is ever kept)
+    // the flash: a point within 1e7, 128 from the muzzle and from the origin at the most
+    scene_reset();
+    float *flash = scene.shots[0].flash;
+    // 98 from the muzzle, 128 from the origin
+    memcpy(flash, (float[3]){ 1030.0f + 98.0f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    CHECK(scene_finds(5000));
+    scene_reset();
+    memcpy(flash, (float[3]){ 1030.0f + 98.01f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    CHECK(!scene_finds(5000));
+    scene_reset();
+    // 128 from the muzzle, 98 from the origin
+    memcpy(flash, (float[3]){ 1030.0f - 128.0f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    CHECK(scene_finds(5000));
+    scene_reset();
+    memcpy(flash, (float[3]){ 1030.0f - 128.01f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    CHECK(!scene_finds(5000));
+    CHECK(!finds_with(1, NAN) && !finds_with(1, INFINITY));
+    scene_reset();
+    memcpy(flash, (float[3]){ 10000000.0f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    memcpy(scene.shots[0].start, flash, 3 * sizeof(float));
+    memcpy(scene.shots[0].target, (float[3]){ 9999499.0f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    CHECK(!finds((float[3]){ 9999999.0f, 2000, 100 }, (float[3]){ 9999999.0f, 2000, 100 },
+                 (float[3]){ 9999999.0f, 2000, 100 }, 5000));
+    scene_reset();
+    memcpy(flash, (float[3]){ 9999999.0f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    memcpy(scene.shots[0].start, flash, 3 * sizeof(float));
+    memcpy(scene.shots[0].target, (float[3]){ 9999499.0f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    CHECK(finds((float[3]){ 9999999.0f, 2000, 100 }, (float[3]){ 9999999.0f, 2000, 100 },
+                (float[3]){ 9999999.0f, 2000, 100 }, 5000));
+    // the point: within 1e7, at least 1 and at most 131072 from the flash, in doubles
+    scene_reset();
+    float *target = scene.shots[0].target;
+    memcpy(target, (float[3]){ 1011.0f, 2020.0f, 90.0f }, 3 * sizeof(float));
+    CHECK(scene_finds(5000));
+    scene_reset();
+    memcpy(target, (float[3]){ 1010.9999f, 2020.0f, 90.0f }, 3 * sizeof(float));
+    CHECK(!scene_finds(5000));
+    scene_reset();
+    memcpy(target, (float[3]){ 1010.0f + 131072.0f, 2020.0f, 90.0f }, 3 * sizeof(float));
+    CHECK(scene_finds(5000));
+    scene_reset();
+    memcpy(target, (float[3]){ 1010.0f + 131072.0f + 0.015625f, 2020.0f, 90.0f }, 3 * sizeof(float));
+    CHECK(!scene_finds(5000));
+    CHECK(!finds_with(2, NAN) && !finds_with(2, -INFINITY) && !finds_with(2, 10000000.0f));
+    // (in doubles: 131072 along and 1 across is 2^34 + 1, which floats would round to 2^34)
+    scene_reset();
+    memcpy(target, (float[3]){ 1010.0f + 131072.0f, 2021.0f, 90.0f }, 3 * sizeof(float));
+    CHECK(!scene_finds(5000));
+    scene_reset();
+    memcpy(target, (float[3]){ -9999999.0f, 2020.0f, 90.0f }, 3 * sizeof(float));
+    CHECK(!scene_finds(5000)); // within 1e7, but farther than 131072
+    scene_reset();
+    memcpy(flash, (float[3]){ 9999999.0f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    memcpy(scene.shots[0].start, flash, 3 * sizeof(float));
+    memcpy(target, (float[3]){ 10000000.0f, 2000.0f, 100.0f }, 3 * sizeof(float)); // 1 from the flash, past 1e7
+    CHECK(!finds((float[3]){ 9999999.0f, 2000, 100 }, (float[3]){ 9999999.0f, 2000, 100 },
+                 (float[3]){ 9999999.0f, 2000, 100 }, 5000));
+    // the muzzle: 128 from the origin at the most (the flash 128 from both then)
+    scene_reset();
+    memcpy(flash, (float[3]){ 1064.0f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    CHECK(finds(scene_origin, scene_origin, (float[3]){ 1128.0f, 2000.0f, 100.0f }, 5000));
+    scene_reset();
+    memcpy(flash, (float[3]){ 1064.0f, 2000.0f, 100.0f }, 3 * sizeof(float));
+    CHECK(!finds(scene_origin, scene_origin, (float[3]){ 1128.01f, 2000.0f, 100.0f }, 5000));
+    // a queued shot whose origin, start or muzzle isn't a point within 1e7: nothing, and nothing noted anew
+    const float not_points[][3] = { { NAN, 0, 0 }, { 0, INFINITY, 0 }, { 0, 0, 10000000.0f }, { -10000000.0f, 0, 0 } };
+    for (size_t i = 0; i < sizeof(not_points) / sizeof(not_points[0]); i++) {
+        scene_reset();
+        scene.pending = false;
+        CHECK(!finds(not_points[i], scene_origin, scene_muzzle, 5000) && !scene.pending);
+        CHECK(!finds(scene_origin, not_points[i], scene_muzzle, 5000) && !scene.pending);
+        CHECK(!finds(scene_origin, scene_origin, not_points[i], 5000) && !scene.pending);
+        CHECK(finds(scene_origin, scene_origin, scene_muzzle, 5000));
+    }
+    // where the queued shot starts doesn't matter otherwise
+    scene_reset();
+    CHECK(finds(scene_origin, (float[3]){ -5000, 7000, 3 }, scene_muzzle, 5000));
+}
+
+// the same cases the plugin's own functions were given (see freeaim_endpos_cases.h): its hook for the client's copy of
+// a shot (FUN_18001eff0) and its function that finds the kept shot a queued one is (FUN_180023bd0); and what that gave
+#define Plugin_Endpos_Lines 49538
+#define Plugin_Endpos_Checksum 0x3f12bdf9f0ec0693ULL
+#include "freeaim_endpos_cases.h"
+static void endpos_cases_line(const char *line) {
+    cases_line(line);
+}
+#include "freeaim_endpos_side.h"
+static void test_match_like_the_plugin(void) {
+    set_mod(true);
+    cases_out.checksum = 0xcbf29ce484222325ULL, cases_out.lines = 0;
+    endpos_cases_run();
+    CHECK(cases_out.lines == Plugin_Endpos_Lines);
+    CHECK(cases_out.checksum == Plugin_Endpos_Checksum);
+    if (cases_out.checksum != Plugin_Endpos_Checksum)
+        printf("  the cases came out as %#018llx: wip/agents/endpos2/compare/compare.sh shows where they differ from "
+               "the plugin's\n", (unsigned long long)cases_out.checksum);
+}
+
+// the made-up game's models: the shooting player's, and where its tag_flash is
+static uint8_t player_model[0x10];
+static uint32_t game_tag_flash; // the game's own "tag_flash", 0 until the client's game starts
+static struct {
+    int asked, number, local_client;
+    bool there, has_tag; // the entity has a model; the model has the tag
+    float position[3];   // where it is
+    const uint8_t *cent;
+    void *object;
+    uint32_t tag;
+} model;
+static void *game_dobj(int number, int local_client) {
+    model.asked++, model.number = number, model.local_client = local_client;
+    return model.there ? player_model : NULL;
+}
+static int game_tag_position(const uint8_t *cent, void *object, uint32_t tag, float position[3]) {
+    model.cent = cent, model.object = object, model.tag = tag;
+    if (model.has_tag)
+        memcpy(position, model.position, sizeof(model.position));
+    return model.has_tag;
+}
+static void set_model(bool there, bool has_tag, const float position[3]) {
+    model.there = there, model.has_tag = has_tag;
+    memcpy(model.position, position, sizeof(model.position));
+}
+// the made-up game's queued shots
+static uint8_t game_queue[4 * Queue_Entry_Size];
+static uint8_t *queue_entry(int index) {
+    return game_queue + (size_t)index * Queue_Entry_Size;
+}
+// a queued shot of this local client and player, fired from origin, its tracer from muzzle
+static void queue_shot(int index, int32_t local_client, uint32_t number, const float origin[3], const float muzzle[3]) {
+    uint8_t *entry = queue_entry(index);
+    memset(entry, 0x5c, Queue_Entry_Size);
+    memcpy(entry, &local_client, sizeof(local_client));
+    memcpy(entry + Queued_Shot + Shot_Origin, origin, 3 * sizeof(float));
+    memcpy(entry + Queued_Shot + Shot_Start, origin, 3 * sizeof(float));
+    memcpy(entry + Queued_Number, &number, sizeof(number));
+    memcpy(entry + Queued_Muzzle, muzzle, 3 * sizeof(float));
+}
+// The game comes to the head of its loop over the queued shots, at this one: whether its tracer was moved. Nothing
+// but where the shot was fired from, where it starts and where its tracer starts is written, and the registers stay as
+// they were. What those three are afterwards goes into drawn_*.
+static float drawn_origin[3], drawn_start[3], drawn_muzzle[3];
+static bool draws(int index) {
+    uint8_t before[Queue_Entry_Size], *entry = queue_entry(index);
+    memcpy(before, entry, sizeof(before));
+    detour_registers_t registers;
+    memset(&registers, 0x5a, sizeof(registers));
+    registers.r13 = (uint64_t)game_queue;
+    registers.rsi = (uint64_t)index;
+    detour_registers_t as_they_were = registers;
+    handler_Queued_Effects(&registers);
+    CHECK(memcmp(&as_they_were, &registers, sizeof(registers)) == 0);
+    for (int i = 0; i < Queue_Entry_Size; i++) {
+        bool may = (i >= Queued_Shot + Shot_Origin && i < Queued_Shot + Shot_Origin + 12) ||
+                   (i >= Queued_Shot + Shot_Start && i < Queued_Shot + Shot_Start + 12) ||
+                   (i >= Queued_Muzzle && i < Queued_Muzzle + 12);
+        if (!may && entry[i] != before[i]) {
+            CHECK(!"something else of the queued shot was written");
+            break;
+        }
+    }
+    memcpy(drawn_origin, entry + Queued_Shot + Shot_Origin, sizeof(drawn_origin));
+    memcpy(drawn_start, entry + Queued_Shot + Shot_Start, sizeof(drawn_start));
+    memcpy(drawn_muzzle, entry + Queued_Muzzle, sizeof(drawn_muzzle));
+    bool moved = memcmp(before + Queued_Muzzle, drawn_muzzle, sizeof(drawn_muzzle)) != 0;
+    if (!moved)
+        CHECK(memcmp(entry, before, sizeof(before)) == 0);
+    return moved;
+}
+
+static void test_tracers(void) {
+    const float there[3] = { -139.0f, -1108.0f, 140.0f };
+    const float gun[3] = { -229.0f, -1188.0f, 120.0f };      // 30 from the eye
+    const float in_front[3] = { -209.0f, -1208.0f, 140.0f }; // where the game starts the tracer: 30 in front of the eye
+    set_mod(true);
+    memset(clients, 0, sizeof(clients));
+    memset(tracers, 0, sizeof(tracers));
+    set_view(0, true, 0, 0);
+    set_view(1, true, 0, 1);
+    orig_Bullet_Endpos = game_endpos;
+    memcpy(eye_directions, straight, sizeof(straight));
+    set_text("aae_freeaim_target", "-139 -1108 140");
+    set_text("aae_freeaim_target_1", "-239 -1208 500");
+    set_shooting(0, true);
+    game_tag_flash = 0x2a5;
+    set_model(true, true, gun);
+    both_seen();
+    test_now += Third_Person_For_Ms;
+    both_seen();
+    // a shot, turned and kept with where the gun's flash is on the player's model
+    model.asked = 0;
+    CHECK(client_fires(1, fire_frame) && turned_at(there));
+    CHECK(model.asked == 1 && model.number == 0 && model.local_client == 0 && model.cent == shooting_cent &&
+          model.object == player_model && model.tag == 0x2a5);
+    CHECK(tracers[0].count == 1 && tracers[0].pending && tracers[1].count == 0 &&
+          kept_shot(&tracers[0].shots[0], eye, gun, there, test_now, false));
+    // when its effects are drawn, its tracer starts at the gun (and the shot is fired from the gun towards the point,
+    // as the plugin writes it)
+    queue_shot(1, 0, 0, eye, in_front);
+    CHECK(draws(1) && same_point(drawn_muzzle, gun) && same_point(drawn_origin, gun) && same_point(drawn_start, there));
+    CHECK(tracers[0].shots[0].used && !tracers[0].pending);
+    // where the queued shot starts is only looked at for being a point within 1e7
+    CHECK(client_fires(1, fire_frame));
+    queue_shot(1, 0, 0, eye, in_front);
+    memcpy(queue_entry(1) + Queued_Shot + Shot_Start, (float[3]){ 9999999.0f, 0.0f, 0.0f }, 3 * sizeof(float));
+    CHECK(draws(1) && same_point(drawn_start, there));
+    CHECK(client_fires(1, fire_frame));
+    queue_shot(1, 0, 0, eye, in_front);
+    memcpy(queue_entry(1) + Queued_Shot + Shot_Start, (float[3]){ 10000000.0f, 0.0f, 0.0f }, 3 * sizeof(float));
+    CHECK(!draws(1) && tracers[0].pending);
+    queue_shot(1, 0, 0, eye, in_front);
+    CHECK(draws(1));
+    // that kept shot is used: another queued one finds none, nor does one while nothing is pending
+    queue_shot(2, 0, 0, eye, in_front);
+    CHECK(!draws(2));
+    tracers[0].shots[0].used = false;
+    CHECK(!draws(2));
+    tracers[0].pending = true;
+    CHECK(draws(2) && same_point(drawn_muzzle, gun));
+    // from the first call as well (whose shots aren't queued: what is kept for them is found by nothing)
+    uint32_t kept_before = tracers[0].count;
+    CHECK(client_fires(0, fire_frame) && tracers[0].count == kept_before + 1 && tracers[0].pending);
+    // only a queued shot of the client that kept it, and only of its player
+    queue_shot(0, 1, 0, eye, in_front);
+    CHECK(!draws(0));
+    queue_shot(0, 2, 0, eye, in_front);
+    CHECK(!draws(0));
+    queue_shot(0, -1, 0, eye, in_front);
+    CHECK(!draws(0));
+    queue_shot(0, 0, 1, eye, in_front);
+    CHECK(!draws(0));
+    queue_shot(0, 0, Max_Players, eye, in_front);
+    set_view(0, true, 0, Max_Players);
+    CHECK(!draws(0));
+    set_view(0, true, 0, 0);
+    both_seen();
+    test_now += Third_Person_For_Ms;
+    both_seen();
+    queue_shot(0, 0, 0, eye, in_front);
+    CHECK(draws(0));
+    // the queued shot's player has an entry in the table of points other machines sent: not a local client's
+    CHECK(client_fires(1, fire_frame) && tracers[0].pending);
+    set_client_state(0, 5);
+    CHECK(!reaches_the_game(server_client(0), "aae -70 -554 70", 0));
+    queue_shot(0, 0, 0, eye, in_front);
+    CHECK(!draws(0));
+    CHECK(!reaches_the_game(server_client(0), "aae off", 0));
+    CHECK(draws(0));
+    // free aim off for the client, or the mod not there: nothing
+    CHECK(client_fires(1, fire_frame));
+    set_dvar("aae_freeaim_enabled", true, 0);
+    queue_shot(0, 0, 0, eye, in_front);
+    CHECK(!draws(0) && tracers[0].pending);
+    set_dvar("aae_freeaim_enabled", false, 1);
+    set_mod(false);
+    CHECK(!draws(0));
+    set_mod(true);
+    CHECK(draws(0));
+    // the view of the client in first person: the plugin forgets that a queued shot may find a kept one there
+    memset(tracers, 0, sizeof(tracers));
+    CHECK(client_fires(1, fire_frame) && tracers[0].pending);
+    set_view(0, false, 0, 0);
+    CHECK(!crosshair_asks(0, false) && !tracers[0].pending);
+    set_view(0, true, 0, 0);
+    both_seen();
+    test_now += Third_Person_For_Ms;
+    both_seen();
+    queue_shot(0, 0, 0, eye, in_front);
+    CHECK(!draws(0)); // (the shot kept is still there, and fits: nothing looks for it)
+    // with a newer one kept, both are found, the newer one first
+    CHECK(client_fires(1, fire_frame) && tracers[0].pending && draws(0) && tracers[0].shots[1].used &&
+          !tracers[0].shots[0].used && tracers[0].pending);
+    queue_shot(0, 0, 0, eye, in_front);
+    CHECK(draws(0) && tracers[0].shots[0].used && !tracers[0].pending);
+    queue_shot(0, 0, 0, eye, in_front);
+    CHECK(!draws(0));
+    // and for a local client the crosshair code was never at work for, when the plugin asks about it: for a queued
+    // shot of it,
+    tracers[1].pending = true;
+    clients[1].cg = NULL;
+    queue_shot(0, 1, 1, eye, in_front);
+    CHECK(!draws(0) && !tracers[1].pending);
+    // and for a shot of the other client
+    tracers[1].pending = true;
+    set_view(0, false, 0, 0);
+    CHECK(!client_fires(1, fire_frame) && !tracers[1].pending);
+    set_view(0, true, 0, 0);
+    both_seen();
+    test_now += Third_Person_For_Ms;
+    both_seen();
+    // the second local client keeps its own
+    set_shooting(1, true);
+    memset(tracers, 0, sizeof(tracers));
+    CHECK(client_fires(1, fire_frame) && tracers[1].count == 1 && tracers[0].count == 0 && model.local_client == 1 &&
+          model.number == 1 && tracers[1].flash_at == test_now && tracers[0].flash_at == 0);
+    queue_shot(3, 1, 1, eye, in_front);
+    CHECK(draws(3) && same_point(drawn_start, (float[3]){ -239.0f, -1208.0f, 500.0f }));
+    set_shooting(0, true);
+    // Where the gun's flash was found last stands in for 250 ms when it can't be found: the game's name for the tag not
+    // made yet, no model, no such tag on it, or the tag somewhere that isn't a point within 1e7.
+    memset(tracers, 0, sizeof(tracers));
+    const float *ways[] = { NULL, NULL, NULL, (float[3]){ 10000000.0f, 0, 0 }, (float[3]){ NAN, 0, 0 } };
+    for (int way = 0; way < 5; way++) {
+        game_tag_flash = 0x2a5;
+        set_model(true, true, gun);
+        both_seen();
+        CHECK(client_fires(1, fire_frame) && tracers[0].flash_at == test_now);
+        uint64_t found_at = test_now;
+        game_tag_flash = way == 0 ? 0 : 0x2a5;
+        set_model(way != 1, way != 2, ways[way] != NULL ? ways[way] : gun);
+        test_now = found_at + Flash_Kept_Ms;
+        both_seen();
+        uint32_t count = tracers[0].count;
+        CHECK(client_fires(1, fire_frame) && tracers[0].count == count + 1 && tracers[0].flash_at == found_at &&
+              kept_shot(&tracers[0].shots[count % AAE_FREEAIM_SHOTS], eye, gun, there, test_now, false));
+        test_now = found_at + Flash_Kept_Ms + 1;
+        both_seen();
+        CHECK(client_fires(1, fire_frame) && tracers[0].count == count + 1);
+    }
+    set_model(true, true, gun);
+    game_tag_flash = 0x2a5;
+    both_seen();
+    // a flash farther than 128 from the eye, or a point under the crosshair beyond 1e7: turned, nothing kept
+    memset(tracers, 0, sizeof(tracers));
+    set_model(true, true, (float[3]){ -239.0f, -1208.0f + 128.0f, 140.0f });
+    CHECK(client_fires(1, fire_frame) && tracers[0].count == 1);
+    set_model(true, true, (float[3]){ -239.0f, -1208.0f + 128.01f, 140.0f });
+    CHECK(client_fires(1, fire_frame) && tracers[0].count == 1 && tracers[0].flash[1] == -1208.0f + 128.0f);
+    set_model(true, true, gun);
+    set_text("aae_freeaim_target", "9999999 -1108 140");
+    CHECK(client_fires(1, fire_frame) && tracers[0].count == 2);
+    set_text("aae_freeaim_target", "10000000 -1108 140");
+    CHECK(client_fires(1, fire_frame) && tracers[0].count == 2);
+    set_text("aae_freeaim_target", "-139 -1108 140");
+    // a shot that isn't turned keeps nothing, but where the flash was found is noted all the same
+    memset(tracers, 0, sizeof(tracers));
+    eye_directions[0] = 1.2f;
+    CHECK(!client_fires(1, fire_frame) && tracers[0].count == 0 && tracers[0].flash_at == test_now);
+    memcpy(eye_directions, straight, sizeof(straight));
+    // Each question whether free aim is on reads the clock anew: the fourth one, before the gun's flash is looked for,
+    // and then where it was found and when the shot is kept. When free aim runs out right before the fourth, the shot
+    // is turned and nothing is kept.
+    memset(tracers, 0, sizeof(tracers));
+    uint64_t seen = test_now;
+    both_seen();
+    now_ms = ticking_clock;
+    test_now = seen + Seen_For_Ms - 3;
+    CHECK(client_fires(1, fire_frame) && tracers[0].count == 1 &&
+          tracers[0].shots[0].made_at == seen + Seen_For_Ms + 2 && tracers[0].flash_at == seen + Seen_For_Ms + 1 &&
+          test_now == seen + Seen_For_Ms + 3);
+    test_now = seen + Seen_For_Ms - 2;
+    model.asked = 0;
+    CHECK(client_fires(1, fire_frame) && tracers[0].count == 1 && model.asked == 0 &&
+          test_now == seen + Seen_For_Ms + 2);
+    now_ms = test_clock;
+    memset(tracers, 0, sizeof(tracers));
     memset(clients, 0, sizeof(clients));
 }
 
@@ -1344,7 +1899,7 @@ static void test_init(void) {
           net_game.server_clients == (void *)(base + ADDR_svs_clients) && net_game.client_size == 0xe5270 &&
           net_game.active == aae_plugin_loaded_lately && net_game.on == net_on && net_game.map == net_map &&
           net_game.local_target == local_target && net_game.now_ms == net_now);
-    CHECK(hooks == 10 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
+    CHECK(hooks == 11 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
                                    (void **)&orig_CG_DrawCrosshairTest));
     CHECK(was_hooked(ADDR_Bullet_Fire, (void *)fake_Bullet_Fire, (void **)&orig_Bullet_Fire));
     CHECK(was_hooked(ADDR_Grenade_Spawn, (void *)fake_Grenade_Spawn, (void **)&orig_Grenade_Spawn) &&
@@ -1358,6 +1913,15 @@ static void test_init(void) {
           endpos_asked_from[0] == (const void *)(base + ADDR_Bullet_Endpos_Return1) &&
           endpos_asked_from[1] == (const void *)(base + ADDR_Bullet_Endpos_Return2));
     CHECK(Cent_Number == 0x3f8 && Fire_Frame_Cent == -0x58 && Point_Bound == 1e7f);
+    // the tracer from the gun: the head of the loop over the queued shots, and the model's tag
+    CHECK(was_hooked(ADDR_Bullet_QueuedShots_Loop, (void *)handler_Queued_Effects, &orig_Queued_Effects) &&
+          Com_GetClientDObj == (void *)(base + ADDR_Com_GetClientDObj) &&
+          CG_DObjGetWorldTagPos == (void *)(base + ADDR_CG_DObjGetWorldTagPos) &&
+          tag_flash_name == (const uint32_t *)(base + ADDR_scr_tag_flash));
+    CHECK(Queue_Entry_Size == 0x8b0 && Queued_Shot == 4 && Shot_Origin == 0x10 && Shot_Start == 0x1c &&
+          Queued_Number == 0x58 && Queued_Muzzle == 0x64);
+    CHECK(Flash_Kept_Ms == 250 && Shot_Kept_Ms == 500 && Flash_Farthest == 16384.0f && Start_Farthest == 64.0f &&
+          Target_Nearest == 1.0 && Target_Farthest == 17179869184.0);
     // the places in the game's own structures, as they were read from its code
     CHECK(Cg_Size == 0x342a80 && Cg_ThirdPerson == 0x11a8c9 && Cg_PlayerState == 0x11a8d0 && Ps_Kind == 4 &&
           Ps_Sights == 0x2fc && Frame_Sights == -0x50 && Weapon_LeastGap == 0x6f0 && Dvar_Type == 0x1c &&
@@ -1367,6 +1931,13 @@ static void test_init(void) {
     CHECK(Dvar_FindByHash == (void *)(base + ADDR_Dvar_FindByHash) &&
           Dvar_GetString == (void *)(base + ADDR_Dvar_GetString) && cg_clients == (void *)(base + ADDR_cgArray) &&
           crosshair_asks_from == (const void *)(base + ADDR_CG_DrawCrosshair_TestReturn) && now_ms == uptime_ms);
+    // a pre-patched executable without the stub at the queued shots: everything but that
+    stub_missing_for = ADDR_Bullet_QueuedShots_Loop;
+    hooks = 0;
+    aae_freeaim_init(base, 1);
+    CHECK(hooks == 10 && was_hooked(ADDR_Bullet_Endpos, (void *)fake_Bullet_Endpos, (void **)&orig_Bullet_Endpos) &&
+          !was_hooked(ADDR_Bullet_QueuedShots_Loop, (void *)handler_Queued_Effects, &orig_Queued_Effects));
+    stub_missing_for = -1;
 }
 
 int main(void) {
@@ -1393,6 +1964,9 @@ int main(void) {
     set_text("mapname", "zm_theater");
     cg_clients = &game_cgs;
     now_ms = test_clock;
+    Com_GetClientDObj = game_dobj;
+    CG_DObjGetWorldTagPos = game_tag_position;
+    tag_flash_name = &game_tag_flash;
     net_for_tests();
     test_rule();
     test_hook();
@@ -1406,6 +1980,11 @@ int main(void) {
     test_projectiles();
     test_other_machines();
     test_client_shots();
+    test_flash();
+    test_keep();
+    test_match();
+    test_match_like_the_plugin();
+    test_tracers();
 
     free(game_cgs);
     free(game_connections);

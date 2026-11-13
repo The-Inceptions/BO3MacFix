@@ -232,7 +232,7 @@ tests/test_aae_prompt: tests/test_aae_prompt.c tests/prompt_glide_frames.h sourc
 		-o $@ tests/test_aae_prompt.c
 
 # aae_freeaim.c: the plugin's rule for free aim being on, and the crosshair test's hook against a made-up game
-tests/test_aae_freeaim: tests/test_aae_freeaim.c tests/freeaim_cases.h source/aae_freeaim.c source/aae_freeaim.h \
+tests/test_aae_freeaim: tests/test_aae_freeaim.c tests/freeaim_cases.h tests/freeaim_endpos_cases.h tests/freeaim_endpos_side.h source/aae_freeaim.c source/aae_freeaim.h \
 		source/aae_plugin.c source/aae_freeaim_net.c source/aae_freeaim_net.h \
 		source/aae_plugin.h source/detour.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h \
 		source/prepatch.h source/t7overcharged.h

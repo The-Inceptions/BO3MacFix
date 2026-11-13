@@ -77,6 +77,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_ASL_XInputSetState, Push_R14 },
     { ADDR_Bullet_Endpos, Push_R15 },
     { ADDR_Bullet_Fire, Push_R15 },
+    { ADDR_Bullet_QueuedShots_Loop, 7, 0, { 0x48, 0x69, 0xCE, 0xB0, 0x08, 0x00, 0x00 } }, // imul rcx, rsi, 0x8b0 (a detour)
     { ADDR_CG_DrawCrosshair_Gap, 10, 0, { 0xF3, 0x41, 0x0F, 0x10, 0x84, 0x24, 0x0C, 0x0E, 0x00, 0x00 } }, // movss xmm0, [r12+0xe0c] (a detour)
     { ADDR_CG_DrawCrosshair_Tests, 5, 4, { 0x80, 0xFB, 0x00, 0x75, 0x1B } }, // cmp bl, 0; jne +0x1b (a detour)
     { ADDR_CG_DrawCrosshairTest, Push_R15 },

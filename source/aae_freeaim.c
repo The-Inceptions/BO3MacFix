@@ -337,6 +337,104 @@ static bool is_point(const float point[3]) {
     return true;
 }
 
+// The tracer. A shot the client turned is kept with where the gun's tag_flash was, and when the queued shot's
+// effects are drawn, its tracer starts there instead of at the point the game took (in third person one in front of
+// the player's head). Which kept shot a queued one is goes by where both start and by how recent the kept one is.
+#define Flash_Kept_Ms 250      // how long where the flash was last found stands in for one that can't be found
+#define Shot_Kept_Ms 500       // how long a kept shot can be found
+#define Flash_Farthest 16384.0f // 128 squared: how far the flash may be from where the shot starts, and from where
+                                // the queued shot starts and its tracer would have
+#define Start_Farthest 64.0f   // 8 squared: how far a kept shot's start may be from where the queued shot starts
+#define Target_Nearest 1.0     // the point's distance from the flash, squared and in doubles: at least 1,
+#define Target_Farthest 17179869184.0 // and at most 131072 squared
+
+// The squared distance between two points, in the plugin's order (it adds the first square to 0 before the others,
+// which changes nothing).
+static float squared_distance(const float a[3], const float b[3]) {
+    float x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2];
+    return x * x + y * y + z * z;
+}
+
+bool aae_freeaim_flash(aae_freeaim_tracers_t *kept, const float start[3], const float *found, uint64_t now,
+                       float flash[3]) {
+    float point[3];
+    if (found != NULL)
+        memcpy(point, found, sizeof(point));
+    else if (kept->flash_at != 0 && now >= kept->flash_at && now - kept->flash_at <= Flash_Kept_Ms)
+        memcpy(point, kept->flash, sizeof(point));
+    else
+        return false;
+    if (!is_point(point) || !(Flash_Farthest >= squared_distance(point, start)))
+        return false;
+    if (found != NULL) {
+        memcpy(kept->flash, point, sizeof(point));
+        kept->flash_at = now;
+    }
+    memcpy(flash, point, sizeof(point));
+    return true;
+}
+
+bool aae_freeaim_keep(aae_freeaim_tracers_t *kept, const float start[3], const float flash[3], const float target[3],
+                      uint64_t now) {
+    if (!is_point(start) || !is_point(flash) || !is_point(target))
+        return false;
+    aae_freeaim_shot_t *shot = &kept->shots[kept->count % AAE_FREEAIM_SHOTS];
+    memcpy(shot->start, start, sizeof(shot->start));
+    memcpy(shot->flash, flash, sizeof(shot->flash));
+    memcpy(shot->target, target, sizeof(shot->target));
+    shot->made_at = now;
+    shot->used = false;
+    kept->count++;
+    kept->pending = true;
+    return true;
+}
+
+// a kept shot a queued one can still find now
+static bool shot_findable(const aae_freeaim_shot_t *shot, uint64_t now) {
+    return shot->made_at != 0 && !shot->used && now >= shot->made_at && now - shot->made_at <= Shot_Kept_Ms;
+}
+
+// Whether a kept shot fits a queued one (origin, muzzle: where the queued shot starts, and where its tracer would).
+// The plugin tests a few of these twice, and the first test of the flash's distance from the muzzle lets a flash
+// that isn't a number through; the ones here come to the same.
+static bool shot_fits(const aae_freeaim_shot_t *shot, const float origin[3], const float muzzle[3]) {
+    if (squared_distance(origin, shot->start) > Start_Farthest) // (a start that isn't a number passes, as there)
+        return false;
+    if (!is_point(shot->flash) || !(squared_distance(shot->flash, muzzle) <= Flash_Farthest) ||
+        !is_point(shot->target))
+        return false;
+    double x = (double)shot->target[0] - (double)shot->flash[0], y = (double)shot->target[1] - (double)shot->flash[1],
+           z = (double)shot->target[2] - (double)shot->flash[2];
+    double between = x * x + y * y + z * z;
+    if (!(between >= Target_Nearest) || !(Target_Farthest >= between))
+        return false;
+    return Flash_Farthest >= squared_distance(origin, muzzle) &&
+           Flash_Farthest >= squared_distance(origin, shot->flash);
+}
+
+bool aae_freeaim_match(aae_freeaim_tracers_t *kept, const float origin[3], const float start[3],
+                       const float muzzle[3], uint64_t now, float flash[3], float target[3]) {
+    if (!is_point(muzzle) || !is_point(origin) || !is_point(start))
+        return false;
+    aae_freeaim_shot_t *found = NULL;
+    for (uint32_t back = 1; back <= AAE_FREEAIM_SHOTS && found == NULL; back++) {
+        aae_freeaim_shot_t *shot = &kept->shots[(kept->count - back) % AAE_FREEAIM_SHOTS]; // the newest first
+        if (shot_findable(shot, now) && shot_fits(shot, origin, muzzle))
+            found = shot;
+    }
+    if (found != NULL)
+        found->used = true;
+    kept->pending = false;
+    for (int i = 0; i < AAE_FREEAIM_SHOTS; i++)
+        if (shot_findable(&kept->shots[i], now))
+            kept->pending = true;
+    if (found == NULL)
+        return false;
+    memcpy(flash, found->flash, sizeof(found->flash));
+    memcpy(target, found->target, sizeof(found->target));
+    return true;
+}
+
 // ---- the game's side
 #define Cg_Size 0x342a80
 #define Cg_ThirdPerson 0x11a8c9  // a byte: the view is a third person one
@@ -395,6 +493,9 @@ static float switch_dvar(const char *name, float otherwise) {
 // clients is only looked at and changed under this.
 static pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
 
+// what the client's side of a shot (further down) does whenever the rule is asked
+static void tracers_view(int which, const uint8_t *cg);
+
 static bool on_for(int which, const uint8_t *cg) {
     uint32_t number;
     int kind;
@@ -406,6 +507,7 @@ static bool on_for(int which, const uint8_t *cg) {
     pthread_mutex_lock(&clients_lock);
     bool on = aae_freeaim_on(&clients[which], now_ms(), number, cg[Cg_ThirdPerson] != 0, kind, map, enabled, own);
     pthread_mutex_unlock(&clients_lock);
+    tracers_view(which, cg);
     return on;
 }
 
@@ -710,11 +812,49 @@ install_hook_name(SV_ExecuteClientCommand, void, uint8_t *client, const char *te
 
 static const void *endpos_asked_from[2]; // where the client's fire function goes on after each of its two calls
 
+// What is kept of each local client's turned shots for their tracers. The hook here and the drawing of queued shots
+// run on the client's thread; the rule for free aim being on, which forgets about them, runs on the server's too.
+static pthread_mutex_t tracers_lock = PTHREAD_MUTEX_INITIALIZER;
+static aae_freeaim_tracers_t tracers[Local_Clients];
+
+// The plugin forgets that a queued shot of this client may find a kept one whenever it sees that the client's view
+// isn't a third person one: whenever it is asked whether free aim is on (and when the crosshair code is at work,
+// which asks that here).
+static void tracers_view(int which, const uint8_t *cg) {
+    if (cg != NULL && cg[Cg_ThirdPerson] != 0)
+        return;
+    pthread_mutex_lock(&tracers_lock);
+    tracers[which].pending = false;
+    pthread_mutex_unlock(&tracers_lock);
+}
+
+static void *(*Com_GetClientDObj)(int number, int local_client);
+static int (*CG_DObjGetWorldTagPos)(const uint8_t *cent, void *object, uint32_t tag, float position[3]);
+static const uint32_t *tag_flash_name; // the game's own "tag_flash", made when the client's game starts (0 before)
+
+// Where the gun's tag_flash on this entity's model is in the world now (the plugin's FUN_180023290: it makes the
+// name itself, the same one as the game's; it also wants the entity's number below 0x800, which a player's is).
+static bool tag_flash_of(int which, const uint8_t *cent, float flash[3]) {
+    uint32_t number, tag = *tag_flash_name;
+    float position[3] = { 0.0f, 0.0f, 0.0f };
+    memcpy(&number, cent + Cent_Number, sizeof(number));
+    if (tag == 0)
+        return false;
+    void *object = Com_GetClientDObj((int)number, which);
+    if (object == NULL || !CG_DObjGetWorldTagPos(cent, object, tag, position) || !is_point(position))
+        return false;
+    memcpy(flash, position, sizeof(position));
+    return true;
+}
+
 // The plugin's "is free aim on for this local client" (FUN_1800229f0) by the client alone. For a client the
 // crosshair code was never at work for, its rule still runs and notes "not third person" (net_on does that).
 static bool on_for_client(int which) {
     const uint8_t *cg = seen_cg(which);
-    return cg != NULL ? on_for(which, cg) : net_on(which, now_ms());
+    if (cg != NULL)
+        return on_for(which, cg);
+    tracers_view(which, NULL);
+    return net_on(which, now_ms());
 }
 
 // Which local client this player is, if free aim is on for it, or -1 (the plugin's FUN_180022df0). The plugin asks
@@ -778,8 +918,35 @@ static bool turned_client_shot(const void *caller, const uint8_t *frame, const f
     memcpy(directions, forward, 3 * sizeof(float));
     memcpy(directions + 3, right, 3 * sizeof(float));
     memcpy(directions + 6, up, 3 * sizeof(float));
-    if (!is_point(from) || !local_target(which, target) || !aae_freeaim_turn(from, directions, target, turned))
+    if (!is_point(from))
         return false;
+    // Where the gun's flash is, to keep with the shot for its tracer, if free aim is still on for the client: found on
+    // the model now, or where it was found within the last 250 ms.
+    float flash[3];
+    bool keep = false;
+    if (on_for_client(which)) {
+        float found[3];
+        bool fresh = tag_flash_of(which, cent, found);
+        pthread_mutex_lock(&tracers_lock);
+        keep = aae_freeaim_flash(&tracers[which], from, fresh ? found : NULL, now_ms(), flash);
+        pthread_mutex_unlock(&tracers_lock);
+        if (debug) {
+            static unsigned count; // only the client's thread comes here
+            if (few(&count))
+                printf("free aim: the gun's tag_flash for the client's shot %u of player %u: %s, at %.1f %.1f %.1f "
+                       "(%s)\n", count, number, fresh ? "on the model" : "not on the model", keep ? flash[0] : 0.0f,
+                       keep ? flash[1] : 0.0f, keep ? flash[2] : 0.0f,
+                       keep ? (fresh ? "kept with the shot" : "the one found last, kept with the shot")
+                            : "nothing kept with the shot");
+        }
+    }
+    if (!local_target(which, target) || !aae_freeaim_turn(from, directions, target, turned))
+        return false;
+    if (keep) {
+        pthread_mutex_lock(&tracers_lock);
+        aae_freeaim_keep(&tracers[which], from, flash, target, now_ms());
+        pthread_mutex_unlock(&tracers_lock);
+    }
     if (debug) {
         static unsigned count; // only the client's thread comes here
         static float last[3];
@@ -816,6 +983,71 @@ static void client_shot(const void *caller, const uint8_t *frame, uint64_t seed,
                        weapon, pellet, pellets);
 }
 
+// ---- the client's side of a shot: the tracer from the gun
+//
+// Most bullets the client works out are queued, traced by a job of their own, and their effects drawn together
+// later: the impacts, and the tracer from the point the game took for it, in third person one 30 units in front of
+// the player's eyes. The plugin keeps each shot it turned with where the gun's tag_flash was, and right before a
+// queued shot's effects are drawn it finds the kept shot it is and starts the tracer at the gun: the plugin's own
+// stub in front of the game's function for one queued shot calls it, for local client 0 or 1, while a queued shot of
+// that client may find a kept one. On the Mac that function is part of the loop over the queued shots, so this is a
+// detour at the loop's head. The shot has been traced by then, so where it hits stays as it is. The plugin also
+// writes where the shot was fired from and where it starts (the gun, and the point it was turned at) and puts all
+// three back after the drawing; nothing reads the first two in the drawing on the Mac, and nothing reads a queued
+// shot after it, up to the next shot queued there, which writes them all anew. So the first two are written as the
+// plugin does and nothing is put back.
+
+#define Queue_Entry_Size 0x8b0 // a queued shot: the local client's number (an int) first,
+#define Queued_Shot 0x4        // the shot's parameters,
+#define Shot_Origin 0x10       //   in those: where it was fired from,
+#define Shot_Start 0x1c        //   and where it starts,
+#define Queued_Number 0x58     // the shooting entity's number,
+#define Queued_Muzzle 0x64     // where its tracer starts
+
+// A queued shot's effects are about to be drawn (the plugin's FUN_180023bd0).
+static void queued_shot(uint8_t *entry) {
+    int32_t local_client;
+    uint32_t number;
+    memcpy(&local_client, entry, sizeof(local_client));
+    if ((uint32_t)local_client >= Local_Clients)
+        return;
+    pthread_mutex_lock(&tracers_lock);
+    bool pending = tracers[local_client].pending;
+    pthread_mutex_unlock(&tracers_lock);
+    if (!pending || !aae_plugin_loaded_lately() || !on_for_client(local_client))
+        return;
+    memcpy(&number, entry + Queued_Number, sizeof(number));
+    if (number >= Max_Players || local_client_of_player(number) != local_client)
+        return;
+    uint8_t *shot = entry + Queued_Shot;
+    float origin[3], start[3], muzzle[3], flash[3], target[3];
+    memcpy(origin, shot + Shot_Origin, sizeof(origin));
+    memcpy(start, shot + Shot_Start, sizeof(start));
+    memcpy(muzzle, entry + Queued_Muzzle, sizeof(muzzle));
+    pthread_mutex_lock(&tracers_lock);
+    bool found = aae_freeaim_match(&tracers[local_client], origin, start, muzzle, now_ms(), flash, target);
+    pthread_mutex_unlock(&tracers_lock);
+    if (debug) {
+        static unsigned count; // only the client's thread comes here
+        if (few(&count))
+            printf("free aim: queued shot %u of player %u: %s %.1f %.1f %.1f, the gun at %.1f %.1f %.1f\n", count,
+                   number, found ? "its tracer starts at the gun instead of" : "no kept shot fits, the tracer from",
+                   muzzle[0], muzzle[1], muzzle[2], found ? flash[0] : 0.0f, found ? flash[1] : 0.0f,
+                   found ? flash[2] : 0.0f);
+    }
+    if (!found)
+        return;
+    memcpy(shot + Shot_Origin, flash, sizeof(flash));
+    memcpy(shot + Shot_Start, target, sizeof(target));
+    memcpy(entry + Queued_Muzzle, flash, sizeof(flash));
+}
+
+// "imul rcx, rsi, 0x8b0": the head of the loop over the queued shots, after they have been traced. The queue's
+// entries are at r13, this shot's index is in rsi.
+detour_with_registers(Queued_Effects) {
+    queued_shot((uint8_t *)registers->r13 + registers->rsi * Queue_Entry_Size);
+}
+
 void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     if (!enabled)
         return;
@@ -844,6 +1076,9 @@ void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     endpos_asked_from[0] = (const void *)(base_address + ADDR_Bullet_Endpos_Return1);
     endpos_asked_from[1] = (const void *)(base_address + ADDR_Bullet_Endpos_Return2);
     install_hook_Bullet_Endpos((void *)(base_address + ADDR_Bullet_Endpos));
+    Com_GetClientDObj = (void *)(base_address + ADDR_Com_GetClientDObj);
+    CG_DObjGetWorldTagPos = (void *)(base_address + ADDR_CG_DObjGetWorldTagPos);
+    tag_flash_name = (const uint32_t *)(base_address + ADDR_scr_tag_flash);
     if (!prepatch_has_hook(ADDR_CG_DrawCrosshair_Tests) || !prepatch_has_hook(ADDR_CG_DrawCrosshair_Gap)) {
         printf("free aim: not running from the pre-patched executable: the third person crosshair goes away while "
                "aiming down the sights, as the game's own does\n");
@@ -852,4 +1087,7 @@ void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     install_detour_Crosshair_Tests((void *)(base_address + ADDR_CG_DrawCrosshair_Tests),
                                    (void *)(base_address + ADDR_CG_DrawCrosshair_Draws));
     install_detour_Crosshair_Gap((void *)(base_address + ADDR_CG_DrawCrosshair_Gap));
+    // the tracer of a shot the client turned starts at the gun
+    if (prepatch_has_hook(ADDR_Bullet_QueuedShots_Loop))
+        install_detour_Queued_Effects((void *)(base_address + ADDR_Bullet_QueuedShots_Loop));
 }

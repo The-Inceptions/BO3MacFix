@@ -44,3 +44,43 @@ bool aae_freeaim_turn(const float muzzle[3], const float directions[9], const fl
 bool aae_freeaim_projectile(const float origin[3], const float velocity[3], const float target[3],
                             float turned_velocity[3], float angles[3]);
 
+// ---- the client's side of a shot: its tracer from the gun
+
+#define AAE_FREEAIM_SHOTS 32
+
+// A shot the client turned, kept for its tracer (the plugin's record): where the shot starts (the eye), where the gun's
+// tag_flash was then, the point the shot was turned at, and when.
+typedef struct {
+    float start[3];
+    float flash[3];
+    float target[3]; // (the plugin keeps it twice; the second copy is never read)
+    uint64_t made_at; // in ms; 0 for none
+    bool used;        // a queued shot's tracer has been moved to this one's flash
+} aae_freeaim_shot_t;
+
+// What is kept for a local client: its last 32 turned shots, whether a queued shot may still find one of them, and
+// where the gun's tag_flash was last found.
+typedef struct {
+    aae_freeaim_shot_t shots[AAE_FREEAIM_SHOTS];
+    uint32_t count;    // how many were kept so far: the next one goes to count % 32
+    bool pending;      // a queued shot may still find one
+    float flash[3];    // where the gun's tag_flash was last found
+    uint64_t flash_at; // and when, in ms; 0 for never
+} aae_freeaim_tracers_t;
+
+// Where the gun's flash was for a shot that is being turned: where it was just found (found; NULL when it couldn't
+// be), else where it was last found if that was at most 250 ms ago. It has to be a point within 1e7 and at most 128
+// from where the shot starts. One just found that passes becomes the one last found, at now. False for none.
+bool aae_freeaim_flash(aae_freeaim_tracers_t *kept, const float start[3], const float *found, uint64_t now,
+                       float flash[3]);
+// Keeps a turned shot (where it starts, the flash, the point; each a point within 1e7), and notes that a queued shot
+// may find it.
+bool aae_freeaim_keep(aae_freeaim_tracers_t *kept, const float start[3], const float flash[3], const float target[3],
+                      uint64_t now);
+// The kept shot a queued one is: the newest one of the last 500 ms not used yet that fits it (its start at most 8
+// from the queued shot's origin; its flash within 1e7 and at most 128 from the queued shot's muzzle and origin; its
+// point within 1e7 and 1 to 131072 from its flash; the queued shot's muzzle at most 128 from its origin). It is marked
+// used, its flash and point are given, and whether a queued shot may still find one is noted anew. False, with nothing
+// changed, when the queued shot's origin, start or muzzle isn't a point within 1e7; false when no kept shot fits.
+bool aae_freeaim_match(aae_freeaim_tracers_t *kept, const float origin[3], const float start[3],
+                       const float muzzle[3], uint64_t now, float flash[3], float target[3]);
