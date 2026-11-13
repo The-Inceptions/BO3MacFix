@@ -34,6 +34,8 @@ TEST_TARGETS += tests/test_weapon_anim
 TEST_TARGETS += tests/test_detour
 # All-around Enhancement's prompts in the world (aae_prompt.c) and the test for its plugin (aae_plugin.c)
 TEST_TARGETS += tests/test_aae_prompt
+# T7Overcharged's changes to sprinting: its rules, and the handlers against a made-up game (aae_move_sprint.c)
+TEST_TARGETS += tests/test_aae_move_sprint
 # when the mod's free aim is on, and the crosshair test's hook (aae_freeaim.c)
 TEST_TARGETS += tests/test_aae_freeaim
 # the left-hand gestures' entities at the camera, against a made-up game (aae_linkcam.c)
@@ -119,6 +121,8 @@ SOURCES += source/aae_mantle.c
 SOURCES += source/aae_hostmig.c
 # AAEMovement: T7Overcharged's movement changes that the mod switches on; the switches (aae_movement.c)
 SOURCES += source/aae_movement.c
+# its changes to sprinting (aae_move_sprint.c)
+SOURCES += source/aae_move_sprint.c
 # whether the mod with that plugin is the one loaded (aae_plugin.c)
 SOURCES += source/aae_plugin.c
 # AAEPrompts: the mod's prompts in the world, kept by distance as the plugin makes the game keep them (aae_prompt.c)
@@ -289,6 +293,13 @@ tests/test_aae_freeaim: tests/test_aae_freeaim.c tests/freeaim_cases.h tests/fre
 		source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_freeaim.c source/gsc_obj.c source/aae_freeaim_net.c
+
+# aae_move_sprint.c: T7Overcharged's rules for sprinting against its own (the numbers in tests/move_sprint_cases.h),
+# and the handlers against a made-up game, through every value a compared register can hold
+tests/test_aae_move_sprint: tests/test_aae_move_sprint.c tests/move_sprint_cases.h source/aae_move_sprint.c \
+		source/aae_move_sprint.h source/aae_movement.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_move_sprint.c
 
 # aae_clientfx.c: T7Overcharged's rules for its table of client effects, and the six hooks against a made-up cache
 tests/test_aae_clientfx: tests/test_aae_clientfx.c source/aae_clientfx.c source/aae_clientfx.h source/gsc_obj.c \

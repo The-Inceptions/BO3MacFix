@@ -132,6 +132,12 @@ static const hook_def_t hook_defs[] = {
     { ADDR_HostMigration_PickNewHost, Push_R15 },
     { ADDR_HostMigration_SendToNewHost, Push_R15 },
     { ADDR_HostMigrationStart_Decision, 9, 3, { 0x84, 0xC0, 0x74, 0x0E, 0xBF, 0x04, 0x00, 0x00, 0x00 } }, // test al, al; je +0x0e; mov edi, 4 (a detour)
+    { ADDR_Jump_Start_SprintLeapCmp1, 6, 0, { 0x81, 0xF9, 0xDC, 0x05, 0x00, 0x00 } }, // cmp ecx, 1500 (a detour, aae_move_sprint.c)
+    { ADDR_Jump_Start_SprintLeapCmp2, 5, 0, { 0x3D, 0xDC, 0x05, 0x00, 0x00 } },       // cmp eax, 1500
+    { ADDR_PM_CmdScale_SprintLerpCmp, 5, 0, { 0x3D, 0x5D, 0x01, 0x00, 0x00 } },       // cmp eax, 349
+    { ADDR_PM_UpdateSprint, Push_R15 },
+    { ADDR_PM_UpdateSprint_SlideStateCmp, 7, 0, { 0x83, 0xBB, 0x8C, 0x00, 0x00, 0x00, 0x03 } }, // cmp dword [rbx+0x8c], 3
+    { ADDR_PM_WalkMove_StrafeScaled, 5, 0, { 0xF3, 0x0F, 0x59, 0x45, 0xD4 } },        // mulss xmm0, [rbp-0x2c]
     { ADDR_LUI_Startup, Push_R15 },
     { ADDR_Live_SystemInfo, Push_R15 },
     { ADDR_load_workshop_texture, Push_R15 },

@@ -30,6 +30,7 @@
 #include "aae_linkcam.h"
 #include "aae_hostmig.h"
 #include "aae_movement.h"
+#include "aae_move_sprint.h"
 #include "aae_prompt.h"
 #include "aae_coop_pause.h"
 #include "clientfield_guard.h"
@@ -1228,6 +1229,7 @@ __attribute__((constructor)) static void dylib_main() {
     // T7Overcharged's movement changes, which All-around Enhancement switches on for every player (AAEMovement, on by
     // default), see aae_movement.c; each piece of them installs its own hooks after the switches
     aae_movement_init(game_base_address, read_int_setting_or_env("AAEMovement", 1));
+    aae_move_sprint_init(game_base_address);
 
     // the pause for everybody in a co-op game and for players sharing a Mac, as All-around Enhancement 4's Windows
     // plugin gives it (AAECoopPause, on by default), see aae_coop_pause.c

@@ -46,6 +46,7 @@ tests/test_launch_args
 tests/test_weapon_anim
 tests/test_detour
 tests/test_aae_prompt
+tests/test_aae_move_sprint
 tests/test_aae_freeaim
 tests/test_aae_clientfx
 tests/test_aae_linkcam

@@ -204,6 +204,15 @@
 #define ADDR_PM_PlayerTrace 0x113b850 // func - void (pmove_t *, trace_t *, start, mins, maxs, end, passEntityNum, contentMask)
 #define ADDR_GameTypeSettings_GetFloat 0xd973da // func - float (const char *name, bool)
 
+// T7Overcharged's changes to sprinting (aae_move_sprint.c); the names are T7Overcharged's (its OFF_... records)
+#define ADDR_Jump_Start_SprintLeapCmp1 0x14dd0c1 // "cmp ecx, 1500 ; jg" in Jump_Start (it starts at 0x14dd05e, (pmove_t *, pml_t *, float height)): ecx the ms of sprint, full sprint-leap height past 1500; pmove_t in r14, playerState in r15 (Windows 0x1425fd726, "cmp eax, 1500", OFF_Jump_SprintLeapMs1)
+#define ADDR_Jump_Start_SprintLeapCmp2 0x14dd200 // "cmp eax, 1500 ; jg" there: eax the ms of sprint, full sprint-leap speed past 1500; the same registers (Windows 0x1425fd849, OFF_Jump_SprintLeapMs2)
+#define ADDR_PM_CmdScale_SprintLerpCmp 0x1148644 // "cmp eax, 349 ; movss ; jg" in PM_CmdScaleImpl (it starts at 0x1148438, (pmove_t *, usercmd *)), where the move speed's scale is inlined: eax the ms of sprint, the speed no longer ramped up past 349; pmove_t in r15 (Windows 0x1426114d8 "cmp ecx, 350 ; jge" in 0x1426113d0, OFF_Jump_SprintLerpInMs)
+#define ADDR_PM_UpdateSprint 0x1143aa2 // func - void (pmove_t *, pml_t *): the sprint decision, with what Windows has in functions of its own (0x142613b20, 0x142615c70, 0x142615e60, 0x142617df0) inlined (Windows 0x142617cb0, OFF_PM_UpdateSprint_hook)
+#define ADDR_PM_UpdateSprint_SlideStateCmp 0x1143e1b // "cmp dword [rbx + 0x8c], 3 ; je <no sprint>" there, in the inlined test whether a sprint may start: playerState in rbx, state 3 the slide state (Windows 0x142615f77, its je at 0x142615f7e is OFF_CanSlideThenSprint_Patch)
+#define ADDR_PM_UpdateSprint_SlideStateCmp_Past 0x1143e28 // behind that je: the test's next question
+#define ADDR_PM_WalkMove_StrafeScaled 0x1146d54 // "mulss xmm0, [rbp - 0x2c]" in PM_WalkMove (it starts at 0x1146cf7, (pmove_t *, pml_t *)) right behind its call of BG_GetSprintStrafeSpeedScale (0x1073e5d, returns 0.667): xmm0 its result, [rbp - 0x2c] the side stick as a float, pmove_t in rbx (Windows: the call at 0x14261a391 of 0x1426043e0, OFF_BG_GetSprintStrafeSpeedScale_hook)
+
 // the player's storage files: stats, loadouts and settings, on disk and online (display_testhooks.m) - names are guesses
 #define ADDR_Storage_Request 0x1102f5f // func - bool (controller, op: 0 read, 1 write, file, slot): asks for one of them to be read or written
 #define ADDR_Storage_Files 0x47fa680 // per controller (0x8558 bytes apart) 64 entries of 0x210 bytes, { descriptor *, int slot, buffer, ... }; a descriptor has the file's id at +0, its name at +8, its size at +0x18 and where it's kept at +0x20: 0 hdd, 1 dwuser (online), 2 memory, 3 fastfile
