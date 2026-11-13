@@ -48,6 +48,8 @@ TEST_TARGETS += tests/test_aae_coop_pause
 TEST_TARGETS += tests/test_clientfield_guard
 # the grenade's prediction line: T7Overcharged's test, the plugin's sums and the hooks (aae_arc.c)
 TEST_TARGETS += tests/test_aae_arc
+# the mod's widgets on the first person weapon: the plugin's tables, sums and methods (aae_vmwidget.c)
+TEST_TARGETS += tests/test_aae_vmwidget
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -124,6 +126,9 @@ SOURCES += source/aae_linkcam.c
 SOURCES += source/aae_coop_pause.c
 # AAEGrenadeArc: the line that shows where a held grenade will fly (aae_arc.c)
 SOURCES += source/aae_arc.c
+# AAEViewmodelWidgets: the two UI element methods the plugin adds for widgets on the first person weapon
+# (aae_vmwidget.c)
+SOURCES += source/aae_vmwidget.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # T7OCrashGuards: two of T7Overcharged's guards against crashes of the game itself (t7o_guards.c)
@@ -310,6 +315,13 @@ tests/test_aae_arc: tests/test_aae_arc.c tests/arc_bend_cases.h source/aae_arc.c
 		source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_arc.c source/gsc_obj.c
+
+# aae_vmwidget.c: the plugin's tables and sums, its two methods and the updates they give an element, against a
+# made-up game and Lua stack
+tests/test_aae_vmwidget: tests/test_aae_vmwidget.c source/aae_vmwidget.c source/aae_vmwidget.h source/aae_plugin.c \
+		source/aae_plugin.h source/havok.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_vmwidget.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

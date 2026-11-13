@@ -33,6 +33,7 @@
 #include "aae_coop_pause.h"
 #include "clientfield_guard.h"
 #include "aae_arc.h"
+#include "aae_vmwidget.h"
 #include "gsc_detours.h"
 #include "script_vars.h"
 #include "font_resolution.h"
@@ -1226,6 +1227,10 @@ __attribute__((constructor)) static void dylib_main() {
     // the pause for everybody in a co-op game and for players sharing a Mac, as All-around Enhancement 4's Windows
     // plugin gives it (AAECoopPause, on by default), see aae_coop_pause.c
     aae_coop_pause_init(game_base_address, read_int_setting_or_env("AAECoopPause", 1));
+
+    // the two UI element methods All-around Enhancement 4's Windows plugin adds for HUD widgets on the first person
+    // weapon, which the mod doesn't use yet (AAEViewmodelWidgets, on by default), see aae_vmwidget.c
+    aae_vmwidget_init(game_base_address, read_int_setting_or_env("AAEViewmodelWidgets", 1));
 
     // a script asking for a client field nobody registered gets a script error instead of crashing the game, at the
     // places T7Overcharged names for that, while the mod's T7Overcharged is loaded (ClientFieldGuard, on by default),

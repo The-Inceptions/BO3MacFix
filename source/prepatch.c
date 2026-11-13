@@ -130,6 +130,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_HostMigration_PickNewHost, Push_R15 },
     { ADDR_HostMigration_SendToNewHost, Push_R15 },
     { ADDR_HostMigrationStart_Decision, 9, 3, { 0x84, 0xC0, 0x74, 0x0E, 0xBF, 0x04, 0x00, 0x00, 0x00 } }, // test al, al; je +0x0e; mov edi, 4 (a detour)
+    { ADDR_LUI_Startup, Push_R15 },
     { ADDR_Live_SystemInfo, Push_R15 },
     { ADDR_load_workshop_texture, Push_R15 },
     { ADDR_LobbyMsgRW_PrepReadMsg, Push_R14 },

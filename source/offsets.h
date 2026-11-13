@@ -480,6 +480,22 @@
 // connection data at *ADDR_CLIENT_GLOBALS (0x25780 bytes each): the server's netadr at +0x2455c, its 8-byte id at
 // +0x24b68
 // -- end coop pause
+// All-around Enhancement's widgets on the first person weapon, the plugin's viewmodel_ui_anchor (aae_vmwidget.c)
+#define ADDR_LUI_Startup 0xebeea9 // func - void (callback, callback), "LUI: Starting up...": makes the UI's Lua VM and registers the UI element methods of the list at ADDR_LUI_ElementMethods in it (Windows 0x14268c3d0, inlined here) - name is a guess
+#define ADDR_LUI_ElementMethods 0x119c6b80 // {name, lua_CFunction, next} *: the list of the UI element methods, built by static initializers (Windows 0x159bf7e00) - name is a guess
+#define ADDR_LUI_Generic3DMethod 0xb2c9278 // its entry of "setupGeneric3DWidget" (Windows 0x1435de138)
+#define ADDR_Lua_SetupGeneric3DWidget 0x1300188 // func - int (lua_State *), element:setupGeneric3DWidget(x, y, z): the point to +0x78, ADDR_LUI_Generic3DUpdate to +0x110 (Windows 0x14279df10)
+#define ADDR_LUI_Generic3DUpdate 0x131040f // func - void (int localClientNum, element *, root element *, int, int, lua_State *): an element's update (+0x110) that projects its point (+0x78), places it and runs its usual update (Windows 0x142771a00) - name is a guess
+#define ADDR_LUI_ToElement 0xeb9f00 // func - element * (lua_State *, int index), NULL when that argument isn't a UI element (Windows 0x142694d40) - name is a guess
+#define ADDR_CG_WorldToScreen 0x12fc923 // func - (int localClientNum, const float world[3], float screen[2]), the 3D widget's projection (Windows 0x1427a01b0) - name is a guess
+#define ADDR_hks_obj_tolstring 0x146d28b // func - const char * (lua_State *, HksObject *, size_t *length): a number becomes its text in place, NULL for anything else but a string (Windows 0x141d3ec30)
+#define ADDR_SL_GetStringOfSize 0x11b6d8d // func - uint32_t (const char *, uint32_t user, uint32_t length with the closing 0, int type), a script string (Windows 0x1412d8830)
+#define ADDR_hksi_lua_createtable 0x14467c8 // func - void (lua_State *, int narr, int nrec), pushes a new table (Windows 0x141d46bf0)
+#define ADDR_hksi_luaL_ref 0x1445261 // func - int (lua_State *, int table): pops the value, its reference or -1 for nil; 0x101474880 jumps to it (Windows 0x141d40710)
+#define ADDR_DObjCalcSkel 0xe398de // func - (DObj *, const int *parts, const float *origin): computes the model's skeleton (Windows 0x1422c0480)
+#define ADDR_DObjCalcSkel_ViewReturn 0x10b55ea // where DObjCalcSkel returns to in the first function the plugin redirects it in (the call at 0x10b55e5, Windows 0x1401abb5c)
+#define ADDR_DObjCalcSkel_PoseReturn 0x14bb2c5 // and in the second (the call at 0x14bb2c0, Windows 0x14099da09)
+#define ADDR_DObjGetBoneIndex 0xf74d4f // func - int (DObj *, uint32_t name, int16_t *index, uint32_t parts): the bone with that script string, index -1 when there is none (Windows 0x1422c4240)
 // -- client fields (clientfield_guard.c). The lookup, and the places that read through what it returns without
 // checking it, each given as the instruction right after its call (where the lookup returns to). Windows places are
 // those of the build T7Overcharged's names fit (BlackOps3.exe CheckSum 0x6531394); see wip/night/impl-clientfield.md
