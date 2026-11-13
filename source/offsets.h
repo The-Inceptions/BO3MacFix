@@ -128,6 +128,10 @@
 #define ADDR_CG_DrawCrosshair_Tests 0xd555d7 // "cmp bl, 0 ; jne" in the crosshair function: behind the crosshair's colour and the test of its alpha, where the tests for the sights being up (the function's copy of the player state's +0x2fc is at rbp - 0x50) and for what the weapon is doing begin; cg_t in r13 (Windows: 0x1406d5911 and the call at 0x1406d595c, where that row of tests is a function of its own, 0x1406c5aa0)
 #define ADDR_CG_DrawCrosshair_Draws 0xd55755 // where that goes on when all those tests pass
 #define ADDR_CG_DrawCrosshair_Gap 0xd561de // "movss xmm0, [r12 + 0xe0c]": the gap between the crosshair's lines is in xmm1, the larger one of the spread's and the weapon's least (an int at the weapon definition's +0x6f0, r12); cg_t in r13 (Windows 0x1406db615, gap in xmm12)
+// the client's own copy of a shot (aae_freeaim.c) - names are guesses
+#define ADDR_Bullet_Endpos 0xd39481 // func - void (int *seed, float spread, float spread2, const float *start, float *end, float *direction, float fraction, float fraction2, const float *forward, const float *right, float range, const float *up, weapon, int pellet, int pellets): the client works out where its own copy of a shot ends and its direction, from start along forward, spread with right and up (Windows 0x14123db70)
+#define ADDR_Bullet_Endpos_Return1 0xd3b7a0 // where the client's fire function (0xd3b59a (int localClientNum, centity_s *shooter, ...), which keeps the shooter at rbp - 0x58 all along) goes on after its first call of that: weapons whose shots aren't queued (Windows 0x14123a4f2)
+#define ADDR_Bullet_Endpos_Return2 0xd3bad3 // and after its second: every other bullet, which is then queued for its tracer and impacts (Windows 0x14123a7b3)
 
 // the campaign's prompts in the world, which All-around Enhancement 4 uses in zombies (aae_prompt.c) - names are guesses
 #define ADDR_Prompt_NearTest 0x1304343 // "mov edi, 2 ; call Com_SessionMode_IsMode ; test al, al ; je" in the code that places a prompt on the screen: only the campaign keeps a prompt's "nearTo" model (Windows: the call at 0x14275a7ae)

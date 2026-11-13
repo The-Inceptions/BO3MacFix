@@ -325,6 +325,18 @@ bool aae_freeaim_projectile(const float origin[3], const float velocity[3], cons
     return true;
 }
 
+// ---- the client's side of a shot: what the plugin works out
+
+#define Point_Bound 10000000.0f // the plugin takes a point from the game only with each coordinate below 1e7 either way
+
+// a point the plugin takes as one (its FUN_18001d0c0; it also tests for numbers first, which this refuses as well)
+static bool is_point(const float point[3]) {
+    for (int i = 0; i < 3; i++)
+        if (!(fabsf(point[i]) < Point_Bound))
+            return false;
+    return true;
+}
+
 // ---- the game's side
 #define Cg_Size 0x342a80
 #define Cg_ThirdPerson 0x11a8c9  // a byte: the view is a third person one
@@ -679,6 +691,131 @@ install_hook_name(SV_ExecuteClientCommand, void, uint8_t *client, const char *te
     orig_SV_ExecuteClientCommand(client, text, client_ok, from_old_server);
 }
 
+// ---- the client's side of a shot
+//
+// The shooting player's own client works out a copy of each of its bullets, to draw what the player sees of it: the
+// sparks, marks and blood where it hits, and its tracer. The server's copy is the one that does damage, and that one
+// is turned at the point under the crosshair (above). The client's copy went straight ahead from the eye, so in
+// third person, where the camera looks from beside the player, the impacts the player saw were beside the crosshair,
+// about as far beside it as the camera is (and a zombie under the crosshair could be hit without any blood shown).
+// The plugin hooks the function that works out where the client's copy ends (from where the shot starts, along its
+// forward, spread with its right and up) and turns those three directions as the server's are turned, at the same
+// point, for the shooting player of a local client whose free aim is on. It does that only when the function is
+// called from one of the two calls in the client's fire function, whose frame holds the shooting player's entity: the
+// plugin's wrapper hands its hook that frame for those two calls and for no others.
+
+#define Cent_Number 0x3f8       // centity_s: the entity's number (a player's is the client number)
+#define Fire_Frame_Cent (-0x58) // the client's fire function keeps the shooting entity's centity_s here, from its
+                                // frame pointer
+
+static const void *endpos_asked_from[2]; // where the client's fire function goes on after each of its two calls
+
+// The plugin's "is free aim on for this local client" (FUN_1800229f0) by the client alone. For a client the
+// crosshair code was never at work for, its rule still runs and notes "not third person" (net_on does that).
+static bool on_for_client(int which) {
+    const uint8_t *cg = seen_cg(which);
+    return cg != NULL ? on_for(which, cg) : net_on(which, now_ms());
+}
+
+// Which local client this player is, if free aim is on for it, or -1 (the plugin's FUN_180022df0). The plugin asks
+// its table of points other machines sent first: a player who has an entry there isn't a local client's, whatever
+// else the entry says, and nothing of theirs is turned on this side. Otherwise the first local client whose cg_t has
+// this client number decides.
+static uint32_t client_number(const uint8_t *cg) {
+    uint32_t number;
+    memcpy(&number, cg, sizeof(number));
+    return number;
+}
+static int local_client_of_player(uint32_t number) {
+    if (aae_freeaim_net_remote_entry(number))
+        return -1;
+    for (int which = 0; which < Local_Clients; which++) {
+        const uint8_t *cg = seen_cg(which);
+        if (cg != NULL && client_number(cg) == number)
+            return on_for(which, cg) ? which : -1;
+    }
+    return -1;
+}
+
+// whether free aim is on for any local client: the plugin's first question, before it looks at the shot at all
+static bool on_for_any(void) {
+    for (int which = 0; which < Local_Clients; which++)
+        if (on_for_client(which))
+            return true;
+    return false;
+}
+
+// The directions the client's copy of a shot is to be worked out with instead of its own, if any (the plugin's
+// FUN_18001eff0). caller: where the call returns to in the game; frame: the frame pointer the caller had.
+static bool turned_client_shot(const void *caller, const uint8_t *frame, const float *start, const float *forward,
+                               const float *right, const float *up, float turned[9]) {
+    const uint8_t *cent;
+    uint32_t number;
+    if (caller != endpos_asked_from[0] && caller != endpos_asked_from[1])
+        return false;
+    if (!aae_plugin_loaded_lately() || !on_for_any() || frame == NULL)
+        return false;
+    memcpy(&cent, frame + Fire_Frame_Cent, sizeof(cent));
+    if (cent == NULL)
+        return false;
+    memcpy(&number, cent + Cent_Number, sizeof(number));
+    if (debug) {
+        static _Atomic bool said;
+        if (!atomic_exchange(&said, true))
+            printf("free aim: the client's fire function's frame is at %p, its shooting entity %p is number %u (the "
+                   "first time)\n", (const void *)frame, (const void *)cent, number);
+    }
+    if (number >= Max_Players)
+        return false;
+    // (the plugin asks whether free aim is on for that client once more: each time with the clock as it is then)
+    int which = local_client_of_player(number);
+    if (which < 0 || !on_for_client(which))
+        return false;
+    if (start == NULL || forward == NULL || right == NULL || up == NULL)
+        return false;
+    float from[3], directions[9], target[3];
+    memcpy(from, start, sizeof(from));
+    memcpy(directions, forward, 3 * sizeof(float));
+    memcpy(directions + 3, right, 3 * sizeof(float));
+    memcpy(directions + 6, up, 3 * sizeof(float));
+    if (!is_point(from) || !local_target(which, target) || !aae_freeaim_turn(from, directions, target, turned))
+        return false;
+    if (debug) {
+        static unsigned count; // only the client's thread comes here
+        static float last[3];
+        if (worth_a_line(&count, last, target))
+            printf("free aim: the client's shot %u of player %u goes to %.1f %.1f %.1f: from %.1f %.1f %.1f, forward "
+                   "%.3f %.3f %.3f instead of %.3f %.3f %.3f (%s call)\n", count, number, target[0], target[1],
+                   target[2], from[0], from[1], from[2], turned[0], turned[1], turned[2], directions[0], directions[1],
+                   directions[2], caller == endpos_asked_from[0] ? "first" : "second");
+    }
+    return true;
+}
+
+// The client works out where its own copy of a shot ends and its direction: (seed, two spreads, start, end out,
+// direction out, two fractions, forward, right, range, up, weapon, the pellet and how many there are), the floats
+// in registers of their own. Everything is handed on as it came, with the turned directions when there are.
+static void client_shot(const void *caller, const uint8_t *frame, uint64_t seed, float spread, float spread2,
+                        float *start, uint64_t end, uint64_t direction, float fraction, float fraction2, float *forward,
+                        float *right, float range, float *up, uint64_t weapon, uint64_t pellet, uint64_t pellets);
+install_hook_name(Bullet_Endpos, void, uint64_t seed, float spread, float spread2, float *start, uint64_t end,
+                  uint64_t direction, float fraction, float fraction2, float *forward, float *right, float range,
+                  float *up, uint64_t weapon, uint64_t pellet, uint64_t pellets) {
+    // The caller's frame pointer is what this function saved first: the jump from the game to here pushed nothing.
+    const uint8_t *frame = *(uint8_t *const *)__builtin_frame_address(0);
+    client_shot(__builtin_return_address(0), frame, seed, spread, spread2, start, end, direction, fraction, fraction2,
+                forward, right, range, up, weapon, pellet, pellets);
+}
+static void client_shot(const void *caller, const uint8_t *frame, uint64_t seed, float spread, float spread2,
+                        float *start, uint64_t end, uint64_t direction, float fraction, float fraction2, float *forward,
+                        float *right, float range, float *up, uint64_t weapon, uint64_t pellet, uint64_t pellets) {
+    float turned[9];
+    if (turned_client_shot(caller, frame, start, forward, right, up, turned))
+        forward = turned, right = turned + 3, up = turned + 6;
+    orig_Bullet_Endpos(seed, spread, spread2, start, end, direction, fraction, fraction2, forward, right, range, up,
+                       weapon, pellet, pellets);
+}
+
 void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     if (!enabled)
         return;
@@ -703,6 +840,10 @@ void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     aae_freeaim_net_init(&net_game);
     install_hook_CL_FinishMove((void *)(base_address + ADDR_CL_FinishMove));
     install_hook_SV_ExecuteClientCommand((void *)(base_address + ADDR_SV_ExecuteClientCommand));
+    // the client's own copy of a shot
+    endpos_asked_from[0] = (const void *)(base_address + ADDR_Bullet_Endpos_Return1);
+    endpos_asked_from[1] = (const void *)(base_address + ADDR_Bullet_Endpos_Return2);
+    install_hook_Bullet_Endpos((void *)(base_address + ADDR_Bullet_Endpos));
     if (!prepatch_has_hook(ADDR_CG_DrawCrosshair_Tests) || !prepatch_has_hook(ADDR_CG_DrawCrosshair_Gap)) {
         printf("free aim: not running from the pre-patched executable: the third person crosshair goes away while "
                "aiming down the sights, as the game's own does\n");

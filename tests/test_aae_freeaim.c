@@ -1050,6 +1050,268 @@ static void test_other_machines(void) {
     net_for_tests();
 }
 
+// ---- the client's side of a shot
+
+// the client's fire function: its frame, which holds the shooting entity's centity_s, and that entity
+static uint8_t fire_frame_room[0x100], shooting_cent[0x400];
+static uint8_t *const fire_frame = fire_frame_room + 0x80;
+static void set_shooting(uint32_t number, bool there) {
+    const uint8_t *cent = there ? shooting_cent : NULL;
+    memcpy(fire_frame + Fire_Frame_Cent, &cent, sizeof(cent));
+    memcpy(shooting_cent + Cent_Number, &number, sizeof(number));
+}
+// the game's function that works out where the client's copy of a shot ends: what it was given
+static struct {
+    int calls;
+    uint64_t seed, end, direction, weapon, pellet, pellets;
+    float spread, spread2, fraction, fraction2, range, directions[9];
+    float *start, *forward, *right, *up;
+} endpos;
+static void game_endpos(uint64_t seed, float spread, float spread2, float *start, uint64_t end, uint64_t direction,
+                        float fraction, float fraction2, float *forward, float *right, float range, float *up,
+                        uint64_t weapon, uint64_t pellet, uint64_t pellets) {
+    endpos.calls++;
+    endpos.seed = seed, endpos.end = end, endpos.direction = direction, endpos.weapon = weapon;
+    endpos.pellet = pellet, endpos.pellets = pellets;
+    endpos.spread = spread, endpos.spread2 = spread2, endpos.fraction = fraction, endpos.fraction2 = fraction2;
+    endpos.range = range;
+    endpos.start = start, endpos.forward = forward, endpos.right = right, endpos.up = up;
+    memset(endpos.directions, 0, sizeof(endpos.directions));
+    if (forward != NULL && right != NULL && up != NULL) {
+        memcpy(endpos.directions, forward, 3 * sizeof(float));
+        memcpy(endpos.directions + 3, right, 3 * sizeof(float));
+        memcpy(endpos.directions + 6, up, 3 * sizeof(float));
+    }
+}
+// where the shot starts (the eye) and its directions as the game has them
+static float eye[3] = { -239.0f, -1208.0f, 140.0f }, eye_directions[9];
+// The client's fire function asks for its copy of a shot from its first call (0), its second (1) or somewhere else
+// (2): whether it was worked out with other directions than its own. Either way the game's function is called once
+// with everything else as it came, and the shot's own start and directions are as they were.
+static bool client_fires(int call, const uint8_t *frame) {
+    static const uint8_t elsewhere;
+    const void *caller = call == 0 ? endpos_asked_from[0] : call == 1 ? endpos_asked_from[1] : &elsewhere;
+    float start[3], directions[9];
+    memcpy(start, eye, sizeof(start));
+    memcpy(directions, eye_directions, sizeof(directions));
+    endpos.calls = 0;
+    client_shot(caller, frame, 0x11, 0.5f, 1.5f, start, 0x22, 0x33, 0.25f, 0.75f, directions, directions + 3, 8192.0f,
+                directions + 6, 0x44, 0x55, 0x66);
+    CHECK(endpos.calls == 1 && endpos.seed == 0x11 && endpos.spread == 0.5f && endpos.spread2 == 1.5f &&
+          endpos.start == start && endpos.end == 0x22 && endpos.direction == 0x33 && endpos.fraction == 0.25f &&
+          endpos.fraction2 == 0.75f && endpos.range == 8192.0f && endpos.weapon == 0x44 && endpos.pellet == 0x55 &&
+          endpos.pellets == 0x66);
+    CHECK(memcmp(start, eye, sizeof(start)) == 0 && memcmp(directions, eye_directions, sizeof(directions)) == 0);
+    bool turned = memcmp(endpos.directions, eye_directions, sizeof(eye_directions)) != 0;
+    if (!turned)
+        CHECK(endpos.forward == directions && endpos.right == directions + 3 && endpos.up == directions + 6);
+    return turned;
+}
+// it was turned at this point from the eye: forward points there, and the three are still of length 1 and at right
+// angles
+static bool turned_at(const float target[3]) {
+    float to[3] = { target[0] - eye[0], target[1] - eye[1], target[2] - eye[2] };
+    float length = sqrtf(dot(to, to));
+    const float *d = endpos.directions;
+    return near(d[0], to[0] / length) && near(d[1], to[1] / length) && near(d[2], to[2] / length) &&
+           near(dot(d, d), 1) && near(dot(d + 3, d + 3), 1) && near(dot(d + 6, d + 6), 1) && near(dot(d, d + 3), 0) &&
+           near(dot(d, d + 6), 0) && near(dot(d + 3, d + 6), 0);
+}
+
+// a clock that goes on by a millisecond each time it is read
+static uint64_t ticking_clock(void) {
+    return test_now++;
+}
+// the crosshair code is at work for both local clients now
+static void both_seen(void) {
+    crosshair_asks(0, false);
+    crosshair_asks(1, false);
+}
+
+static void test_client_shots(void) {
+    const float there[3] = { -139.0f, -1108.0f, 140.0f }, above[3] = { -239.0f, -1208.0f, 500.0f };
+    set_mod(true);
+    memset(clients, 0, sizeof(clients));
+    set_view(0, true, 0, 0);
+    set_view(1, true, 0, 1);
+    orig_Bullet_Endpos = game_endpos;
+    memcpy(eye_directions, straight, sizeof(straight));
+    set_text("aae_freeaim_target", "-139 -1108 140");
+    set_dvar_kind("aae_freeaim_target_1", false, "", Dvar_Type_String);
+    set_shooting(0, true);
+    // free aim not on yet for the player's client: straight ahead
+    CHECK(!client_fires(1, fire_frame));
+    both_seen();
+    test_now += Third_Person_For_Ms;
+    both_seen();
+    // on: from both of the fire function's calls, turned at the point the mod's script left; from anywhere else not
+    CHECK(client_fires(1, fire_frame) && turned_at(there));
+    CHECK(client_fires(0, fire_frame) && turned_at(there));
+    CHECK(!client_fires(2, fire_frame));
+    // and the hook itself goes by where it returns to, which isn't the fire function here
+    endpos.calls = 0;
+    fake_Bullet_Endpos(1, 2.0f, 3.0f, eye, 4, 5, 6.0f, 7.0f, eye_directions, eye_directions + 3, 8.0f,
+                       eye_directions + 6, 9, 10, 11);
+    CHECK(endpos.calls == 1 && endpos.seed == 1 && endpos.spread == 2.0f && endpos.spread2 == 3.0f &&
+          endpos.start == eye && endpos.end == 4 && endpos.direction == 5 && endpos.fraction == 6.0f &&
+          endpos.fraction2 == 7.0f && endpos.forward == eye_directions && endpos.right == eye_directions + 3 &&
+          endpos.range == 8.0f && endpos.up == eye_directions + 6 && endpos.weapon == 9 && endpos.pellet == 10 &&
+          endpos.pellets == 11);
+    // each local client has a point of its own
+    set_shooting(1, true);
+    CHECK(!client_fires(1, fire_frame));
+    set_text("aae_freeaim_target_1", "-239 -1208 500");
+    CHECK(client_fires(1, fire_frame) && turned_at(above));
+    set_shooting(0, true);
+    CHECK(client_fires(1, fire_frame) && turned_at(there));
+    // two local clients with the same player's number: the first one decides, with its point and its switch
+    set_view(1, true, 0, 0);
+    CHECK(client_fires(1, fire_frame) && turned_at(there));
+    set_text("aae_freeaim_target", "nowhere");
+    CHECK(!client_fires(1, fire_frame));
+    set_text("aae_freeaim_target", "-139 -1108 140");
+    set_view(0, false, 0, 0);
+    CHECK(!client_fires(1, fire_frame));
+    // a client the crosshair code was never at work for is passed over
+    clients[0].cg = NULL;
+    CHECK(client_fires(1, fire_frame) && turned_at(above));
+    clients[0].cg = cg_of(0);
+    set_view(0, true, 0, 0);
+    set_view(1, true, 0, 1);
+    both_seen();
+    test_now += Third_Person_For_Ms;
+    both_seen();
+    CHECK(client_fires(1, fire_frame) && turned_at(there));
+    // somebody who isn't a local client's player, or no player at all (63 is the last one that can be)
+    set_shooting(2, true);
+    CHECK(!client_fires(1, fire_frame));
+    set_shooting(Max_Players, true);
+    set_view(0, true, 0, Max_Players);
+    CHECK(!client_fires(1, fire_frame));
+    // (a client number no player can have counted as not third person, so its quarter of a second begins anew)
+    set_shooting(Max_Players - 1, true);
+    set_view(0, true, 0, Max_Players - 1);
+    CHECK(!client_fires(1, fire_frame));
+    both_seen();
+    test_now += Third_Person_For_Ms;
+    both_seen();
+    CHECK(client_fires(1, fire_frame) && turned_at(there));
+    set_view(0, true, 0, 0);
+    set_shooting(0, true);
+    CHECK(client_fires(1, fire_frame));
+    // a player whose machine sent the server a point (this machine runs the server) isn't a local client's: nothing
+    // of theirs is turned here, until the entry is gone
+    set_client_state(0, 5);
+    CHECK(!reaches_the_game(server_client(0), "aae -70 -554 70", 0));
+    CHECK(!client_fires(1, fire_frame));
+    CHECK(!reaches_the_game(server_client(0), "aae off", 0));
+    CHECK(client_fires(1, fire_frame) && turned_at(there));
+    // no frame, or no entity in it
+    CHECK(!client_fires(1, NULL));
+    set_shooting(0, false);
+    CHECK(!client_fires(1, fire_frame));
+    set_shooting(0, true);
+    // free aim off for the client: the switch, first person, not seen lately; or the mod not there
+    set_dvar("aae_freeaim_enabled", true, 0);
+    CHECK(!client_fires(1, fire_frame));
+    set_dvar("aae_freeaim_enabled", false, 1);
+    CHECK(client_fires(1, fire_frame));
+    set_view(0, false, 0, 0);
+    CHECK(!client_fires(1, fire_frame));
+    set_view(0, true, 0, 0);
+    CHECK(!client_fires(1, fire_frame)); // not for a quarter of a second
+    both_seen();
+    test_now += Third_Person_For_Ms;
+    both_seen();
+    CHECK(client_fires(1, fire_frame));
+    test_now += Seen_For_Ms + 1;
+    CHECK(!client_fires(1, fire_frame));
+    both_seen();
+    test_now += Third_Person_For_Ms;
+    both_seen();
+    CHECK(client_fires(1, fire_frame));
+    set_mod(false);
+    CHECK(!client_fires(1, fire_frame));
+    set_mod(true);
+    CHECK(client_fires(1, fire_frame));
+    // free aim on for the other client only: nothing for this one's shots, and the other one's are its own
+    set_view(0, false, 0, 0);
+    CHECK(!client_fires(1, fire_frame));
+    set_shooting(1, true);
+    CHECK(client_fires(1, fire_frame) && turned_at(above));
+    // The plugin first asks whether free aim is on for any local client, whoever shoots. That asks the first client
+    // even when the shot is the second one's, and so the first one's quarter of a second in third person can begin
+    // there.
+    both_seen();
+    set_view(0, true, 0, 0);
+    CHECK(client_fires(1, fire_frame) && turned_at(above));
+    test_now += Third_Person_For_Ms;
+    CHECK(crosshair_asks(0, false));
+    crosshair_asks(1, false);
+    set_shooting(0, true);
+    // a shot that doesn't start at a point the plugin takes (each coordinate below 1e7 either way)
+    eye[0] = 9999999.0f;
+    CHECK(client_fires(1, fire_frame));
+    eye[0] = 10000000.0f;
+    CHECK(!client_fires(1, fire_frame));
+    eye[0] = -10000000.0f;
+    CHECK(!client_fires(1, fire_frame));
+    eye[0] = NAN;
+    CHECK(!client_fires(1, fire_frame));
+    eye[0] = -239.0f, eye[1] = -INFINITY;
+    CHECK(!client_fires(1, fire_frame));
+    eye[1] = -1208.0f, eye[2] = 10000000.0f;
+    CHECK(!client_fires(1, fire_frame));
+    eye[2] = 140.0f;
+    CHECK(client_fires(1, fire_frame) && turned_at(there));
+    // the point can't be read, or is where the shot starts: straight ahead
+    set_text("aae_freeaim_target", "-139 -1108");
+    CHECK(!client_fires(1, fire_frame));
+    set_text("aae_freeaim_target", "-239 -1208 140");
+    CHECK(!client_fires(1, fire_frame));
+    set_text("aae_freeaim_target", "-139 -1108 140");
+    CHECK(client_fires(1, fire_frame) && turned_at(there));
+    // directions that aren't what they should be
+    eye_directions[0] = 1.2f;
+    CHECK(!client_fires(1, fire_frame));
+    memcpy(eye_directions, straight, sizeof(straight));
+    // a direction or the start missing: everything handed on as it came
+    float start[3], directions[9];
+    memcpy(start, eye, sizeof(start));
+    memcpy(directions, straight, sizeof(directions));
+    for (int missing = 0; missing < 4; missing++) {
+        endpos.calls = 0;
+        client_shot(endpos_asked_from[1], fire_frame, 0, 0, 0, missing == 0 ? NULL : start, 0, 0, 0, 0,
+                    missing == 1 ? NULL : directions, missing == 2 ? NULL : directions + 3, 0,
+                    missing == 3 ? NULL : directions + 6, 0, 0, 0);
+        CHECK(endpos.calls == 1 && endpos.start == (missing == 0 ? NULL : start) &&
+              endpos.forward == (missing == 1 ? NULL : directions) &&
+              endpos.right == (missing == 2 ? NULL : directions + 3) &&
+              endpos.up == (missing == 3 ? NULL : directions + 6));
+    }
+    CHECK(client_fires(1, fire_frame));
+    // Each of the plugin's questions whether free aim is on reads the clock anew: the first (any local client), the
+    // second (the first local client with the shooter's number) and the third (that client again). When the client's
+    // quarter of a second since the crosshair code was last at work for it runs out between the second and the third,
+    // nothing is turned.
+    uint64_t seen = test_now;
+    both_seen();
+    now_ms = ticking_clock;
+    test_now = seen + Seen_For_Ms - 2;
+    CHECK(client_fires(1, fire_frame) && test_now == seen + Seen_For_Ms + 1);
+    test_now = seen + Seen_For_Ms - 1;
+    CHECK(!client_fires(1, fire_frame) && test_now == seen + Seen_For_Ms + 2);
+    now_ms = test_clock;
+    // a local client the crosshair code was never at work for is asked as well when the first isn't on, and is noted
+    // as not in third person, as the plugin's rule does with it
+    memset(clients, 0, sizeof(clients));
+    set_view(0, false, 0, 0);
+    crosshair_asks(0, false);
+    CHECK(!client_fires(1, fire_frame) && clients[1].third_person == (test_now * 4 | 1));
+    set_view(0, true, 0, 0);
+    memset(clients, 0, sizeof(clients));
+}
+
 static void test_init(void) {
     const uint64_t base = 0x100000000;
     aae_freeaim_init(base, 0);
@@ -1060,7 +1322,7 @@ static void test_init(void) {
         have_stubs = i < 2, stub_missing_for = i < 2 ? places[i] : -1;
         hooks = 0;
         aae_freeaim_init(base, 1);
-        CHECK(hooks == 7 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
+        CHECK(hooks == 8 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
                                        (void **)&orig_CG_DrawCrosshairTest) &&
               was_hooked(ADDR_Bullet_Fire, (void *)fake_Bullet_Fire, (void **)&orig_Bullet_Fire) &&
               was_hooked(ADDR_Grenade_Spawn, (void *)fake_Grenade_Spawn, (void **)&orig_Grenade_Spawn));
@@ -1082,7 +1344,7 @@ static void test_init(void) {
           net_game.server_clients == (void *)(base + ADDR_svs_clients) && net_game.client_size == 0xe5270 &&
           net_game.active == aae_plugin_loaded_lately && net_game.on == net_on && net_game.map == net_map &&
           net_game.local_target == local_target && net_game.now_ms == net_now);
-    CHECK(hooks == 9 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
+    CHECK(hooks == 10 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
                                    (void **)&orig_CG_DrawCrosshairTest));
     CHECK(was_hooked(ADDR_Bullet_Fire, (void *)fake_Bullet_Fire, (void **)&orig_Bullet_Fire));
     CHECK(was_hooked(ADDR_Grenade_Spawn, (void *)fake_Grenade_Spawn, (void **)&orig_Grenade_Spawn) &&
@@ -1091,6 +1353,11 @@ static void test_init(void) {
     CHECK(was_hooked(ADDR_CG_DrawCrosshair_Tests, (void *)handler_Crosshair_Tests, &orig_Crosshair_Tests) &&
           other_Crosshair_Tests == (void *)(base + ADDR_CG_DrawCrosshair_Draws));
     CHECK(was_hooked(ADDR_CG_DrawCrosshair_Gap, (void *)handler_Crosshair_Gap, &orig_Crosshair_Gap));
+    // the client's own copy of a shot, and where the two calls of it that count return to
+    CHECK(was_hooked(ADDR_Bullet_Endpos, (void *)fake_Bullet_Endpos, (void **)&orig_Bullet_Endpos) &&
+          endpos_asked_from[0] == (const void *)(base + ADDR_Bullet_Endpos_Return1) &&
+          endpos_asked_from[1] == (const void *)(base + ADDR_Bullet_Endpos_Return2));
+    CHECK(Cent_Number == 0x3f8 && Fire_Frame_Cent == -0x58 && Point_Bound == 1e7f);
     // the places in the game's own structures, as they were read from its code
     CHECK(Cg_Size == 0x342a80 && Cg_ThirdPerson == 0x11a8c9 && Cg_PlayerState == 0x11a8d0 && Ps_Kind == 4 &&
           Ps_Sights == 0x2fc && Frame_Sights == -0x50 && Weapon_LeastGap == 0x6f0 && Dvar_Type == 0x1c &&
@@ -1138,6 +1405,7 @@ int main(void) {
     test_projectile();
     test_projectiles();
     test_other_machines();
+    test_client_shots();
 
     free(game_cgs);
     free(game_connections);
