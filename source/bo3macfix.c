@@ -1276,8 +1276,8 @@ __attribute__((constructor)) static void dylib_main() {
     aae_vmwidget_init(game_base_address, read_int_setting_or_env("AAEViewmodelWidgets", 1));
 
     // a script asking for a client field nobody registered gets a script error instead of crashing the game, at the
-    // places T7Overcharged names for that, while the mod's T7Overcharged is loaded (ClientFieldGuard, on by default),
-    // see clientfield_guard.c
+    // places T7Overcharged names for that, with or without a mod (ClientFieldGuard, on by default), see
+    // clientfield_guard.c
     clientfield_guard_init(game_base_address, read_int_setting_or_env("ClientFieldGuard", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c

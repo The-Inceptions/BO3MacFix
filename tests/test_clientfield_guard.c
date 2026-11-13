@@ -26,12 +26,15 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     return 0;
 }
 
-// the folder the T7Overcharged stand-in was set up from, and the game's char[0x20] with the loaded mod's name
+// the made-up mod: the folder the T7Overcharged stand-in was set up from, and the game's char[0x20] with the loaded
+// mod's name. The guard asks neither, it acts with or without a mod; the tests set both ways to show that (and a
+// mutant that asks again links against these)
 static const char *t7o_folder = "";
+const char *t7o_mod_folder(void);
 const char *t7o_mod_folder(void) {
     return t7o_folder;
 }
-static char game_loaded_mod[Mod_Name_Size];
+static char game_loaded_mod[0x20];
 
 static const char *const game_set_names[Set_Count] = { "world", "actor", "vehicle", "allplayers", "allplayers",
     "toplayer", "playercorpse", "clientuimodel", "scriptmover", "helicopter", "plane", "missile", "zbarrier", "item" };
@@ -114,7 +117,6 @@ static void set_game(void) {
     }
     BG_ThreadBgs = game_thread_bgs;
     base_address = Base;
-    loaded_mod = game_loaded_mod;
     set_names = game_set_names;
     SL_ConvertToString = game_string;
     Scr_Error = game_script_error;
@@ -236,34 +238,6 @@ static void test_action(void) {
     CHECK(clientfield_guard_action(NULL, false, true) == Clientfield_Pass);
     CHECK(clientfield_guard_action(zero_site, true, true) == Clientfield_Pass);
     CHECK(clientfield_guard_action(zero_site, false, false) == Clientfield_Pass);
-}
-
-static void test_t7o_loaded(void) {
-    char name[Mod_Name_Size];
-    memset(name, 0, sizeof(name));
-    memcpy(name, "2631943123", 10);
-    CHECK(clientfield_guard_t7o_loaded("/a/b/2631943123", name, sizeof(name)));
-    CHECK(clientfield_guard_t7o_loaded("2631943123", name, sizeof(name)));
-    // T7O from another mod's folder, a longer or shorter name, no mod loaded, never set up
-    CHECK(!clientfield_guard_t7o_loaded("/a/b/1234", name, sizeof(name)));
-    CHECK(!clientfield_guard_t7o_loaded("/a/b/26319431234", name, sizeof(name)));
-    CHECK(!clientfield_guard_t7o_loaded("/a/b/263194312", name, sizeof(name)));
-    CHECK(!clientfield_guard_t7o_loaded("/a/b/", name, sizeof(name)));
-    CHECK(!clientfield_guard_t7o_loaded("", name, sizeof(name)));
-    CHECK(!clientfield_guard_t7o_loaded(NULL, name, sizeof(name)));
-    CHECK(!clientfield_guard_t7o_loaded("/a/b/2631943123", NULL, sizeof(name)));
-    memset(name, 0, sizeof(name));
-    CHECK(!clientfield_guard_t7o_loaded("/a/b/", name, sizeof(name)));
-    CHECK(!clientfield_guard_t7o_loaded("/a/b/x", name, sizeof(name)));
-    // a name that fills the game's array has no 0 behind it
-    char full[Mod_Name_Size + 4];
-    memset(full, 'm', sizeof(full));
-    char folder[Mod_Name_Size + 8] = "/a/";
-    memset(folder + 3, 'm', Mod_Name_Size);
-    folder[3 + Mod_Name_Size] = '\0';
-    CHECK(clientfield_guard_t7o_loaded(folder, full, Mod_Name_Size));
-    folder[3 + Mod_Name_Size] = 'm', folder[4 + Mod_Name_Size] = '\0';
-    CHECK(!clientfield_guard_t7o_loaded(folder, full, Mod_Name_Size));
 }
 
 static void test_set_name(void) {
@@ -478,26 +452,24 @@ static void test_guarded_find(void) {
           strcmp(error_message, "No ClientField named hudItems.perks.additional_primary_weapon found in set "
                                 "clientuimodel") == 0);
 
-    // a mod whose name fills the game's array, which then has no 0 behind it
-    char long_folder[64] = "/workshop/";
-    memset(long_folder + 10, 'n', Mod_Name_Size);
-    long_folder[10 + Mod_Name_Size] = '\0';
-    t7o_folder = long_folder;
-    memset(game_loaded_mod, 'n', sizeof(game_loaded_mod));
-    errors = 0;
-    CHECK(find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x10, 1) == Thrown && errors == 1);
-    mod_loaded(true);
-
-    // without the mod's T7Overcharged: the game's NULL everywhere
+    // without the mod (no T7Overcharged, no mod loaded): the same, a script error and a field that reads as 0
     mod_loaded(false);
     errors = 0;
-    CHECK(find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x10, 1) == NULL);
-    CHECK(find_from(ADDR_ClientField_GetInt_Read, 7, 0x10, 1) == NULL && errors == 0);
-    // T7O set up from the mod's folder, but another mod (or none) loaded now
-    mod_loaded(true);
+    CHECK(find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x10, 1) == Thrown && errors == 1 &&
+          strcmp(error_message, "No ClientField named hudItems.perks.additional_primary_weapon found in set "
+                                "clientuimodel") == 0);
+    CHECK(find_from(ADDR_ClientField_GetInt_Read, 7, 0x10, 1) == standin_field && errors == 1);
+    CHECK(find_from(ADDR_CScr_CodeGetWorldClientField_Read, 0, 0x12, 1) == Thrown && errors == 2 &&
+          error_instance == 1);
+    // and still nothing for a field that is there, or for a caller that may do without one
+    CHECK(find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x11, 1) == registered_field);
+    CHECK(find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x10, 0) == NULL && errors == 2);
+    // another mod loaded, whose folder isn't T7Overcharged's: the same
+    t7o_folder = "/a/b/2631943123";
     memcpy(game_loaded_mod, "1111111111", 10);
-    CHECK(find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x10, 1) == NULL && errors == 0);
+    CHECK(find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x10, 1) == Thrown && errors == 3);
     mod_loaded(true);
+    errors = 0;
 
     // with developer_script on Scr_Error comes back: the caller gets the game's NULL
     comes_back = true;
@@ -583,7 +555,7 @@ static void test_init(void) {
     unsetenv("BO3MACFIX_CLIENTFIELDDEBUG");
     CHECK(hooks == 1 && hooked_at == (void *)(Base + ADDR_ClientField_Find) &&
           hooked_with == (void *)fake_ClientField_Find);
-    CHECK(base_address == Base && debug && loaded_mod == (const char *)(Base + ADDR_Mods_LoadedName) &&
+    CHECK(base_address == Base && debug &&
           set_names == (const char *const *)(Base + ADDR_ClientField_SetNames) &&
           (uint64_t)SL_ConvertToString == Base + ADDR_SL_ConvertToString &&
           (uint64_t)Scr_Error == Base + ADDR_Scr_Error && (uint64_t)BG_ThreadBgs == Base + ADDR_BG_ThreadBgs);
@@ -601,7 +573,6 @@ static void test_init(void) {
 int main(void) {
     test_sites();
     test_action();
-    test_t7o_loaded();
     test_set_name();
     test_key();
     test_first_time();

@@ -23,8 +23,10 @@
 // - a value getter, which game code calls too, gets a stand-in field that reads as 0, what T7O's _MissingRecover (the
 //   int getter's end, with the NULL still in eax) would give. For the float getter T7O's _NullRecover would give
 //   whatever xmm0 held; 0 is given here as well.
-// It applies while the mod's T7Overcharged is loaded, as T7O itself only is with the mod, and only to a field asked
-// for with "error if missing": a caller that may do without one checks for NULL itself.
+// It applies with or without a mod (the user's choice, 2026-11-13): the crash doesn't depend on one, any map's or
+// mod's script that asks for a field nobody registered meets it, and the guard only acts where the game would read
+// through NULL next. Only to a field asked for with "error if missing": a caller that may do without one checks for
+// NULL itself.
 #include <os/lock.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,10 +34,8 @@
 #include "clientfield_guard.h"
 #include "dobby.h"
 #include "offsets.h"
-#include "t7overcharged.h"
 
 #define Set_Count 14         // the game's set names (ADDR_ClientField_SetNames): "world" .. "item"
-#define Mod_Name_Size 0x20   // the game's array for the loaded mod's name (ADDR_Mods_LoadedName)
 #define Field_Size 0x140     // a client field, as ClientField_Register clears it
 #define Field_Bits 0x130     // int: how many bits it has (the float getter divides by (1 << bits) - 1)
 #define Seen_Size 64         // the (place, set, field) keys that got a line in the log
@@ -88,7 +88,6 @@ static const clientfield_site_t sites[] = {
 
 static uint64_t base_address;
 static bool debug;
-static const char *loaded_mod; // the game's char[Mod_Name_Size]
 static const char *const *set_names;
 static const char *(*SL_ConvertToString)(uint32_t name);
 static void (*Scr_Error)(uint32_t inst, const char *message, bool terminal);
@@ -114,15 +113,6 @@ clientfield_action_t clientfield_guard_action(const clientfield_site_t *site, bo
     if (found || !error_if_missing || site == NULL)
         return Clientfield_Pass;
     return (clientfield_action_t)site->kind;
-}
-
-bool clientfield_guard_t7o_loaded(const char *t7o_folder, const char *loaded_mod_name, size_t loaded_size) {
-    if (t7o_folder == NULL || loaded_mod_name == NULL)
-        return false;
-    const char *name = strrchr(t7o_folder, '/');
-    name = name != NULL ? name + 1 : t7o_folder;
-    size_t length = strnlen(loaded_mod_name, loaded_size);
-    return length > 0 && strlen(name) == length && memcmp(name, loaded_mod_name, length) == 0;
 }
 
 const char *clientfield_guard_set_name(const char *const *names, int count, int set) {
@@ -223,18 +213,13 @@ static void log_guarded(const clientfield_site_t *site, int set, const char *fie
     free(line);
 }
 
-static bool guard_on(void) {
-    return clientfield_guard_t7o_loaded(t7o_mod_folder(), loaded_mod, Mod_Name_Size);
-}
-
 // the lookup after the game's, with where it was called from; NULL or a field, or no return at all (a script error)
 static void *guarded_find(uint64_t set, uint64_t name, uint64_t error_if_missing, uint64_t return_address,
                           void *found) {
     const clientfield_site_t *site = clientfield_guard_site(return_address - base_address);
     // what the game's lookup tests: the set as an int, the name as a script string, "error if missing" as a byte
     clientfield_action_t action = clientfield_guard_action(site, found != NULL, (uint8_t)error_if_missing != 0);
-    // whether the mod's T7Overcharged is loaded is only looked at when the guard would change something
-    if (action == Clientfield_Pass || !guard_on())
+    if (action == Clientfield_Pass)
         return found;
     const char *field = SL_ConvertToString((uint32_t)name);
     field = field != NULL ? field : "?";
@@ -265,7 +250,6 @@ void clientfield_guard_init(uint64_t game_base_address, int enabled) {
     base_address = game_base_address;
     const char *env = getenv("BO3MACFIX_CLIENTFIELDDEBUG");
     debug = env != NULL && atoi(env) != 0;
-    loaded_mod = (const char *)(base_address + ADDR_Mods_LoadedName);
     set_names = (const char *const *)(base_address + ADDR_ClientField_SetNames);
     SL_ConvertToString = (void *)(base_address + ADDR_SL_ConvertToString);
     Scr_Error = (void *)(base_address + ADDR_Scr_Error);

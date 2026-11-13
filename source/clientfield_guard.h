@@ -28,9 +28,6 @@ typedef struct {
 const clientfield_site_t *clientfield_guard_site(uint64_t return_offset);
 // the guard's rule: only for a missing field asked for with "error if missing", at a known place
 clientfield_action_t clientfield_guard_action(const clientfield_site_t *site, bool found, bool error_if_missing);
-// whether T7Overcharged (the stand-in) was set up from the folder of the mod that is loaded now: its folder's last
-// part is the loaded mod's name, which the game keeps in a char[loaded_size] without a 0 when it fills it
-bool clientfield_guard_t7o_loaded(const char *t7o_folder, const char *loaded_mod, size_t loaded_size);
 // the name of client field set number set from the game's table of count names, "unknown" for any other number as
 // the game's own message has it
 const char *clientfield_guard_set_name(const char *const *names, int count, int set);

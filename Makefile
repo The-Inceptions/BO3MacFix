@@ -419,7 +419,7 @@ tests/test_aae_viewmodel: tests/test_aae_viewmodel.c source/aae_viewmodel.c sour
 
 # clientfield_guard.c: its rules, and its hook against a made-up lookup, script engine and mod
 tests/test_clientfield_guard: tests/test_clientfield_guard.c source/clientfield_guard.c source/clientfield_guard.h \
-		source/offsets.h source/dobby.h source/t7overcharged.h
+		source/offsets.h source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_clientfield_guard.c
 
