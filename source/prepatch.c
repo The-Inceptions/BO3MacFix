@@ -68,8 +68,8 @@ typedef struct {
 
 // every function BO3MacFix hooks
 static const hook_def_t hook_defs[] = {
-    { ADDR_ADS_FastAdsClassTests, 5, 0, { 0x45, 0x8B, 0x7C, 0x24, 0x68 } }, // mov r15d, [r12+0x68] (a detour)
     { ADDR_ADS_FastAdsDouble, 8, 0, { 0xF3, 0x0F, 0x58, 0xC0, 0x0F, 0x29, 0x45, 0xC0 } }, // addss; movaps (a detour)
+    { ADDR_ADS_FastAdsPerkTest, 5, 4, { 0x45, 0x84, 0xFF, 0x74, 0x34 } }, // test r15b, r15b; je +0x34 (a detour)
     { ADDR_ASL_BuildModeTable, Push_R15 },
     { ADDR_ASL_SleepEx, Push_R15 },
     { ADDR_ASL_ToNativePath, Push_R15 },
