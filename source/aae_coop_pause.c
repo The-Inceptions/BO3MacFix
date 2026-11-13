@@ -56,6 +56,7 @@
 #include "gsc_obj.h"
 #include "offsets.h"
 #include "prepatch.h"
+#include "thread_stats.h"
 
 #define Magic "\xe1\0AAECP1"
 #define Magic_Size 8
@@ -1110,7 +1111,14 @@ static void tokenize(const char *text, bool from_the_client);
 // SV_Frame(msec): the game's frame calls it at two places (clang's split of the plugin's one), a third caller passes 0
 install_hook_name(SV_Frame, int, int msec) {
     void *from = __builtin_return_address(0);
-    return server_frame(msec, from == com_frame_runs_server || from == com_frame_runs_server_late);
+    bool from_com_frame = from == com_frame_runs_server || from == com_frame_runs_server_late;
+    // FrameStats' detail times the frame's server frames (thread_stats.h); without it nothing else happens here
+    if (!thread_stats_phases_on || !from_com_frame)
+        return server_frame(msec, from_com_frame);
+    phase_start_t start = thread_stats_phase_begin();
+    int given = server_frame(msec, true);
+    thread_stats_phase_end(Phase_Server, start);
+    return given;
 }
 static int server_frame(int msec, bool from_com_frame) {
     if (!from_com_frame || !frame_active())
@@ -1134,7 +1142,14 @@ static bool check_paused(void) {
 
 // the client's frame (local client, msec, a fraction in xmm0)
 install_hook_name(CL_Frame, void, int local_client, int msec, float frac) {
+    // FrameStats' detail times the client's frame (thread_stats.h); without it nothing else happens here
+    if (!thread_stats_phases_on) {
+        client_frame(local_client, msec, frac);
+        return;
+    }
+    phase_start_t start = thread_stats_phase_begin();
     client_frame(local_client, msec, frac);
+    thread_stats_phase_end(Phase_Client, start);
 }
 static void client_frame(int local_client, int msec, float frac) {
     if (!frame_active()) {

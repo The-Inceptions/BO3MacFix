@@ -49,6 +49,7 @@
 #include "pmem_spill.h"
 #include "script_vars.h"
 #include "gpu_diag.h"
+#include "thread_stats.h"
 
 extern uint64_t game_base_address;
 
@@ -149,6 +150,8 @@ static void frame_stats_tick(void) {
            frames / seconds, 1000.0f / low_1, frame_ms[stored - 1], frames, seconds, display, detail);
     if (frame_pace_stats)
         frame_pace_log(display_fps);
+    if (frame_stats_detail)
+        thread_stats_window(seconds, frames);
     frames = stored = 0;
     window_start = now;
 }
@@ -849,6 +852,9 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch) 
     frame_stats_seconds = seconds;
     const char *detail = getenv("BO3MACFIX_FRAMESTATSDETAIL");
     frame_stats_detail = detail != NULL && atoi(detail) != 0;
+    // the threads' CPU time by name and the time in the server's and the client's frame, two more lines a window
+    if (frame_stats_detail)
+        thread_stats_init();
     printf("logging frame stats every %i s%s\n", seconds, frame_pace_stats ? ", and when the frames are shown" : "");
 }
 

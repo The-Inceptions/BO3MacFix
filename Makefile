@@ -64,6 +64,8 @@ TEST_TARGETS += tests/test_aae_clientfx
 TEST_TARGETS += tests/test_t7o_guards
 # the pause for everybody in a co-op game: the plugin's packets and rules, machines playing together (aae_coop_pause.c)
 TEST_TARGETS += tests/test_aae_coop_pause
+# FrameStats' detail: the threads' line and the phases' line, and the process's own threads read by name
+TEST_TARGETS += tests/test_thread_stats
 # T7Overcharged's aim status where the game draws its hold breath hint (aae_breath.c)
 TEST_TARGETS += tests/test_aae_breath
 # T7Overcharged's moves of the first person gun's bones: the texts, the rules and the hook (aae_viewmodel.c)
@@ -119,6 +121,8 @@ FRAMEWORKS += -framework Foundation -weak_framework GameController -weak_framewo
 
 # MetalFX upscaling (metalfx.m), MetalFX is weak-linked because it needs macOS 13
 SOURCES += source/metalfx.m source/gpu_diag.m
+# FrameStats' detail: the threads' CPU time by name and the frame's phases (thread_stats.c, thread_stats_game.c)
+SOURCES += source/thread_stats.c source/thread_stats_game.c
 
 # the pre-patched executable (prepatch.c), the launcher builds it with BO3MacFix_BuildPrepatched
 SOURCES += source/prepatch.c
@@ -410,9 +414,10 @@ tests/test_aae_linkcam: tests/test_aae_linkcam.c tests/linkcam_cases.h tests/lin
 # network that loses and reorders packets, and the hooks
 tests/test_aae_coop_pause: tests/test_aae_coop_pause.c source/aae_coop_pause.c source/aae_coop_pause.h \
 		source/aae_plugin.c source/aae_plugin.h source/detour.h source/gsc_obj.c source/gsc_obj.h source/offsets.h \
-		source/dobby.h source/prepatch.h source/t7overcharged.h
+		source/dobby.h source/prepatch.h source/t7overcharged.h source/thread_stats.h source/thread_stats.c \
+		source/thread_stats_game.c
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-		-o $@ tests/test_aae_coop_pause.c source/gsc_obj.c
+		-o $@ tests/test_aae_coop_pause.c source/gsc_obj.c source/thread_stats.c source/thread_stats_game.c
 # aae_viewmodel.c: T7Overcharged's reading of the dvars and the file, its rules, and the hook against a made-up game
 tests/test_aae_viewmodel: tests/test_aae_viewmodel.c source/aae_viewmodel.c source/aae_viewmodel.h \
 		source/aae_plugin.c source/aae_plugin.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h \
@@ -625,3 +630,9 @@ clean:
 	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
 
 .PHONY: all clean test
+
+# FrameStats' detail: the threads' and the phases' lines (thread_stats.c), and this process's own threads read by name
+# with their CPU time (thread_stats_game.c)
+tests/test_thread_stats: tests/test_thread_stats.c source/thread_stats.c source/thread_stats_game.c source/thread_stats.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_thread_stats.c source/thread_stats.c

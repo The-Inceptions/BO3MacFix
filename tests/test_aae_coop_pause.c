@@ -2557,6 +2557,22 @@ static void test_hooks(void) {
     debug = 0;
 }
 
+// FrameStats' detail times the server's and the client's frame in these hooks (thread_stats.h): the game gets the same
+// with it on, the frame's fraction (a float, in xmm0, past the clock reads) included
+static void test_frame_phases(void) {
+    set_mod(false);
+    thread_stats_phases_on = false;
+    CHECK(fake_SV_Frame(16) == 1016 && game_server_msec == 16);
+    fake_CL_Frame(0, 17, 0.25f);
+    CHECK(game_client_msec == 17 && game_client_frac == 0.25f && game_client_local == 0);
+    thread_stats_init();
+    CHECK(thread_stats_phases_on);
+    CHECK(fake_SV_Frame(18) == 1018 && game_server_msec == 18);
+    fake_CL_Frame(1, 19, 0.75f);
+    CHECK(game_client_msec == 19 && game_client_frac == 0.75f && game_client_local == 1);
+    thread_stats_phases_on = false;
+}
+
 int main(void) {
     char template[] = "/tmp/bo3macfix-cooppause-test-XXXXXX";
     if (mkdtemp(template) == NULL)
@@ -2596,6 +2612,7 @@ int main(void) {
     game_setup();
     test_game_side();
     test_hooks();
+    test_frame_phases();
 
     free(table);
     free(connection_data);

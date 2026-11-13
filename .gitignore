@@ -79,3 +79,4 @@ tests/test_aae_move_fastjump
 tests/test_aae_move_fastjump_tsan
 tests/test_aae_move_jump
 tests/test_offline_mode
+tests/test_thread_stats
