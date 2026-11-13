@@ -25,13 +25,27 @@
 #define Dynres_Hold_Down 2      // windows after a change before it lowers again (the GPU time settles)
 #define Dynres_Hold_Up 32       // windows in a row with headroom before it raises (8 s at 120 fps)
 #define Dynres_Far_Behind 0.85  // below 85% of the target frame rate it takes two steps down at once
+// Under a frame limit (the target below the display's rate) the GPU slows its clock to the pace it has, so its busy
+// share says nothing about room: on Kino at 40 fps it read 70-77% at 60% resolution, 17-19 ms a frame, and the same
+// within a few points from 95% down, so the way up above (under 80% after the step, 68% at 60%) never opened and a
+// heavy moment left the resolution at the floor for good. There the way up is a trial instead: after the frame rate has
+// held the limit for Dynres_Hold_Up_Seconds in a row, one step up; if a window behind with the GPU busy comes within
+// Dynres_Trial_Windows after it (the holds after the change first, as for any step down), straight back to the size
+// before, and the next trial waits twice as long (up to 16 times). A trial that held clears that, and its windows count
+// toward the next one's hold. Shorter than the 8 s without a limit because a wrong trial is taken back: it costs a few
+// windows a little under the limit, and the doubling makes it rare. 60% -> 100% at 40 fps: 8 steps, about a minute.
+#define Dynres_Hold_Up_Seconds 6 // the trial's hold (8 windows at 40 fps)
+#define Dynres_Trial_Windows 8   // windows after a trial in which falling behind takes it back (6 s at 40 fps)
+#define Dynres_Max_Backoff 4     // the hold at most doubles 4 times (96 s at 40 fps)
 
 typedef struct {
     int base;     // the user's ResolutionPercent, the most it goes up to
     int lowest;   // the least it goes down to
     int percent;  // the resolution now
     int windows_since_change;
-    int headroom_windows; // windows in a row in which a step up would have fit
+    int headroom_windows; // windows in a row in which a step up would have fit (under a limit: held the limit)
+    int trial_from;       // under a limit: the size before a step up still on trial, 0 for none
+    int failed_trials;    // under a limit: trials taken back in a row (each doubles the next one's hold)
 } dynres_t;
 
 // starts (again) at base, with lowest as the floor (both ResolutionPercent values, 50 to 200)
@@ -44,6 +58,14 @@ int dynres_lowest_for(int base, int setting);
 // one window: its frame rate, the share of its time the GPU was busy (0 to 1), and the frame rate to reach. Returns the
 // ResolutionPercent to render the next frames at.
 int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps);
+
+// the same, saying whether the target is a frame limit below the display's rate (ours or the game's com_maxfps): then
+// the way up is the trial described at Dynres_Hold_Up_Seconds. With limited false it is dynres_window.
+int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double target_fps, bool limited);
+
+// BO3MACFIX_DYNRESSTARTLOW (a test switch, off by default): puts the resolution at the floor now, as a change, so that a
+// game check can watch the way back up at a limit without a heavy moment to bring it down. Returns the new value.
+int dynres_start_at_floor(dynres_t *d);
 
 // The frame rate to reach (dynres_window's target): the display's refresh rate, our frame limit for the frame as the
 // display can show it (frame_limit_shown: BatteryFPS 45 on the 120 Hz panel is 40 fps, never 45), and the game's own

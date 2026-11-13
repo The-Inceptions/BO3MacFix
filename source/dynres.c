@@ -9,6 +9,8 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
     d->percent = base;
     d->windows_since_change = 0;
     d->headroom_windows = 0;
+    d->trial_from = 0;
+    d->failed_trials = 0;
 }
 
 int dynres_lowest_for(int base, int setting) {
@@ -26,14 +28,46 @@ static int change(dynres_t *d, int percent) {
     return percent;
 }
 
+int dynres_start_at_floor(dynres_t *d) {
+    d->trial_from = 0;
+    return change(d, d->lowest);
+}
+
+// under a frame limit: the windows in a row at the limit's rate before a trial step up, doubled for each trial taken
+// back in a row
+static int trial_hold(const dynres_t *d, double target_fps) {
+    int windows = (int)(Dynres_Hold_Up_Seconds * target_fps / Dynres_Window_Frames + 0.5);
+    if (windows < Dynres_Hold_Down + 1)
+        windows = Dynres_Hold_Down + 1;
+    return windows << d->failed_trials;
+}
+
 int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps) {
+    return dynres_window_limited(d, fps, gpu_busy, target_fps, false);
+}
+
+int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double target_fps, bool limited) {
     d->windows_since_change++;
     if (target_fps <= 0 || fps <= 0)
         return d->percent;
     bool settled = d->windows_since_change > Dynres_Hold_Down;
+    bool behind = fps < target_fps * Dynres_Missed;
+
+    // a trial step up under a limit: taken back at once if the GPU falls behind within its windows, kept after them
+    if (d->trial_from != 0 && d->windows_since_change > Dynres_Trial_Windows) {
+        d->trial_from = 0;
+        d->failed_trials = 0;
+    }
+    if (d->trial_from != 0 && settled && behind && gpu_busy >= Dynres_GPU_Bound) {
+        int back = d->trial_from;
+        d->trial_from = 0;
+        if (d->failed_trials < Dynres_Max_Backoff)
+            d->failed_trials++;
+        return change(d, back);
+    }
 
     // behind and the GPU is why: a step down, two when far behind
-    if (fps < target_fps * Dynres_Missed && gpu_busy >= Dynres_GPU_Bound) {
+    if (behind && gpu_busy >= Dynres_GPU_Bound) {
         d->headroom_windows = 0;
         if (!settled || d->percent <= d->lowest)
             return d->percent;
@@ -42,10 +76,25 @@ int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps) {
         return change(d, percent > d->lowest ? percent : d->lowest);
     }
 
-    // a step up, once it would have fit for a while: the GPU's work grows with the pixels, the square of the scale
     if (d->percent >= d->base)
         return d->percent;
     int up = d->percent + Dynres_Step < d->base ? d->percent + Dynres_Step : d->base;
+    // under a limit: room is the limit held, for the trial's hold in a row (the busy share is the slowed clock's)
+    if (limited) {
+        if (behind) {
+            d->headroom_windows = 0;
+            return d->percent;
+        }
+        // (the hold is longer than the holds after a change, so this is always settled)
+        if (++d->headroom_windows < trial_hold(d, target_fps) || d->trial_from != 0)
+            return d->percent;
+        int from = d->percent;
+        change(d, up);
+        d->trial_from = from;
+        return up;
+    }
+
+    // a step up, once it would have fit for a while: the GPU's work grows with the pixels, the square of the scale
     double scale = (double)up / d->percent;
     // at a frame rate under the target the GPU time per frame counts, not its share of the slower frames
     double busy = fps < target_fps ? gpu_busy * target_fps / fps : gpu_busy;

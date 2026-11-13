@@ -193,6 +193,10 @@ static int redirect_present(code_patch_fn checked_code_patch);
 // DynamicResolution: 0 off, else the lowest share of ResolutionPercent it goes down to, in percent
 static atomic_int dynres_setting = 0;
 static dynres_t dynres; // the render thread's
+// BO3MACFIX_DYNRESSTARTLOW=1, a test switch (off by default): the controller's first decision after each start (a match's
+// warm-up, a new base) puts the resolution at the floor, so a game check can watch it climb back at a frame limit
+static int dynres_start_low = -1;
+static bool dynres_start_low_pending = false;
 // what DynamicResolution last put into r_sceneResolutionMultiplier, 0 while the dvar holds the user's own value;
 // and the user's own value then, for config.ini (gpu_tweaks_dynres_held_base)
 static atomic_int dynres_written = 0, dynres_base = 0;
@@ -446,6 +450,7 @@ static bool dynres_prewarm_tick(char *dvar, uint64_t now, bool view_3d, int appe
     }
     atomic_store(&dynres_written, 0);
     dynres_reset(&dynres, dynres.base, dynres.lowest);
+    dynres_start_low_pending = true;
     char times[24 * 8] = "";
     for (int i = 0, n = 0; i < frames && n < (int)sizeof(times); i++)
         n += snprintf(times + n, sizeof(times) - n, i == 0 ? "%.1f" : ", %.1f", frame_ms[i]);
@@ -519,6 +524,7 @@ static void dynres_tick(int frame_limit_fps) {
     static uint64_t window_start = 0, last_present = 0, test_start = 0;
     static int frames = 0, logging = 0, from = 0, to = 0, test_index = 0;
     static double busy_start = 0, window_fps = 0, window_busy = 0;
+    static const char *why = "", *logged_why = ""; // what the change was, for its log line
     static float after[4];
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     dynres_trace_present(now);
@@ -526,9 +532,9 @@ static void dynres_tick(int frame_limit_fps) {
     if (logging > 0 && last_present != 0) {
         after[4 - logging] = (float)((now - last_present) / 1e6);
         if (--logging == 0)
-            printf("dynamic resolution: %i%% -> %i%% (%.1f fps of %i, GPU busy %.0f%%), the next frames took %.1f, %.1f, "
+            printf("dynamic resolution: %i%% -> %i%% (%.1f fps of %i, GPU busy %.0f%%%s), the next frames took %.1f, %.1f, "
                    "%.1f, %.1f ms\n", from, to, window_fps, dynres_target_fps(frame_limit_fps), window_busy * 100,
-                   after[0], after[1], after[2], after[3]);
+                   logged_why, after[0], after[1], after[2], after[3]);
     }
     last_present = now;
     char *dvar = scene_multiplier_dvar();
@@ -562,6 +568,7 @@ static void dynres_tick(int frame_limit_fps) {
         dynres_reset(&dynres, current, dynres_lowest_for(current, setting));
         atomic_store(&dynres_base, current);
         window_start = 0;
+        dynres_start_low_pending = true;
         printf("dynamic resolution: between %i%% and %i%%\n", dynres.lowest, dynres.base);
     }
     if (dynres_prewarm_tick(dvar, now, view_3d, appeared)) {
@@ -592,7 +599,20 @@ static void dynres_tick(int frame_limit_fps) {
         }
         percent = dynres_test[test_index];
     } else {
-        percent = dynres_window(&dynres, window_fps, window_busy, dynres_target_fps(frame_limit_fps));
+        if (dynres_start_low < 0)
+            dynres_start_low = getenv("BO3MACFIX_DYNRESSTARTLOW") != NULL && atoi(getenv("BO3MACFIX_DYNRESSTARTLOW")) != 0;
+        // under a frame limit below the display's rate the way up is a trial (dynres.h, Dynres_Hold_Up_Seconds)
+        int display_fps = present_display_max_fps(), target = dynres_target_fps(frame_limit_fps);
+        bool limited = display_fps > 0 && target > 0 && target < display_fps, was_trial = dynres.trial_from != 0;
+        if (dynres_start_low > 0 && dynres_start_low_pending) {
+            percent = dynres_start_at_floor(&dynres);
+            printf("dynamic resolution: BO3MACFIX_DYNRESSTARTLOW, starting at the floor, %i%%\n", percent);
+        } else {
+            percent = dynres_window_limited(&dynres, window_fps, window_busy, target, limited);
+        }
+        dynres_start_low_pending = false;
+        why = dynres.trial_from != 0 ? ", a trial under the frame limit" : was_trial && dynres.trial_from == 0 &&
+              percent < (written != 0 ? written : current) ? ", the trial taken back" : "";
     }
     int value = written != 0 ? written : current;
     if (percent == value || logging > 0)
@@ -600,6 +620,7 @@ static void dynres_tick(int frame_limit_fps) {
     from = value;
     to = percent;
     logging = 4;
+    logged_why = why;
     dynres_keep_step();
     dynres_trace_step(now);
     scene_multiplier_set(dvar, percent);

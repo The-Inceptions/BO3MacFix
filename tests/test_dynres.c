@@ -2,6 +2,7 @@
 // without going back and forth, against a model of a GPU-bound game at 120 Hz.
 #include <dispatch/dispatch.h>
 #include <stdio.h>
+#include <string.h>
 #include "../source/dynres.h"
 
 static int failures = 0;
@@ -365,7 +366,199 @@ static void test_uneven_limit(void) {
     CHECK(d.percent == 95);
 }
 
+// The rule without a limit before the way up under a limit was added (main 68a7ef4), for comparing
+static int rule_68a7ef4(dynres_t *d, double fps, double gpu_busy, double target_fps) {
+    d->windows_since_change++;
+    if (target_fps <= 0 || fps <= 0)
+        return d->percent;
+    bool settled = d->windows_since_change > Dynres_Hold_Down;
+    if (fps < target_fps * Dynres_Missed && gpu_busy >= Dynres_GPU_Bound) {
+        d->headroom_windows = 0;
+        if (!settled || d->percent <= d->lowest)
+            return d->percent;
+        int steps = fps < target_fps * Dynres_Far_Behind ? 2 : 1;
+        int percent = d->percent - steps * Dynres_Step;
+        d->percent = percent > d->lowest ? percent : d->lowest;
+        d->windows_since_change = d->headroom_windows = 0;
+        return d->percent;
+    }
+    if (d->percent >= d->base)
+        return d->percent;
+    int up = d->percent + Dynres_Step < d->base ? d->percent + Dynres_Step : d->base;
+    double scale = (double)up / d->percent;
+    double busy = fps < target_fps ? gpu_busy * target_fps / fps : gpu_busy;
+    if (busy * scale * scale >= Dynres_Headroom) {
+        d->headroom_windows = 0;
+        return d->percent;
+    }
+    if (++d->headroom_windows < Dynres_Hold_Up || !settled)
+        return d->percent;
+    d->percent = up;
+    d->windows_since_change = d->headroom_windows = 0;
+    return d->percent;
+}
+
+// The GPU's busy share at a 40 fps limit as the game read it on Kino (gc11_pwrgpu_stepskinoboom, BatteryFPS 45 on the
+// 120 Hz panel: 40.0 fps throughout): the windows that stepped (90-94%) and the 5 s frame stats from 95% down to 60%
+// (70-93%). The GPU slows its clock to the pace, so the share doesn't fall with the resolution.
+static const double busy_at_40[] = { 0.92, 0.71, 0.94, 0.94, 0.93, 0.92, 0.93, 0.93, 0.93, 0.91, 0.84, 0.73,
+                                     0.77, 0.76, 0.92, 0.76, 0.71, 0.70, 0.75, 0.76, 0.75, 0.72 };
+#define Busy_At_40 (int)(sizeof(busy_at_40) / sizeof(busy_at_40[0]))
+
+// Under the 40 fps limit (BatteryFPS 40 on the 120 Hz panel, the floor at 60), a heavy moment takes the resolution
+// down; then every window is at 40.0 fps again with the recorded busy readings. Without a limit's rule (the way up by the
+// busy share) it never comes back up: at 90% the next size needs under 72%, at 60% under 68%. With it, back to 100%.
+static void test_climb_at_limit(void) {
+    dynres_t d, old;
+    dynres_reset(&d, 100, 60);
+    dynres_reset(&old, 100, 60);
+    for (int i = 0; i < 20; i++) { // calm at 100%: 40.0 fps, the GPU 32-35% busy (before the first explosion)
+        dynres_window_limited(&d, 40.0, 0.34, 40, true);
+        rule_68a7ef4(&old, 40.0, 0.34, 40);
+    }
+    CHECK(d.percent == 100 && old.percent == 100);
+    for (int i = 0; i < 3; i++) { // the explosion: 30 fps, the GPU flat out
+        dynres_window_limited(&d, 30.0, 1.0, 40, true);
+        rule_68a7ef4(&old, 30.0, 1.0, 40);
+    }
+    CHECK(d.percent == 90 && old.percent == 90);
+    int back_at = -1;
+    for (int i = 0; i < 800; i++) { // 10 minutes at 40.0 fps with the clocked-down readings
+        double busy = busy_at_40[i % Busy_At_40];
+        dynres_window_limited(&d, 40.0, busy, 40, true);
+        rule_68a7ef4(&old, 40.0, busy, 40);
+        if (d.percent == 100 && back_at < 0)
+            back_at = i;
+    }
+    CHECK(old.percent == 90);                  // the old way up: stuck
+    CHECK(d.percent == 100);                   // this one: back
+    CHECK(back_at >= 0 && back_at <= 2 * 12);  // two trials, about 9 windows each (15 s at 40 fps)
+    // from the floor (BO3MACFIX_DYNRESSTARTLOW): 8 steps back to 100%, about a minute at 40 fps
+    dynres_reset(&d, 100, 60);
+    CHECK(dynres_start_at_floor(&d) == 60);
+    int windows = 0;
+    while (d.percent < 100 && windows < 400)
+        dynres_window_limited(&d, 40.0, busy_at_40[windows++ % Busy_At_40], 40, true);
+    CHECK(d.percent == 100 && windows <= 8 * 10); // 60 s at 40 fps
+    // and stays there
+    for (int i = 0; i < 400; i++)
+        CHECK(dynres_window_limited(&d, 40.0, busy_at_40[i % Busy_At_40], 40, true) == 100);
+}
+
+// Under a limit, a trial the GPU can't hold is taken back to the size before, at once after the holds, and the next
+// trial waits twice as long each time (up to 16 times): the GPU holds 40 fps up to 95% but only 36 at 100%.
+static void test_trial_taken_back(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 60);
+    dynres_start_at_floor(&d);
+    int trials = 0, missed = 0, lowest_after = 100, reached_95 = -1;
+    for (int i = 0; i < 800; i++) {
+        bool can = d.percent <= 95;
+        double fps = can ? 40.0 : 36.0, busy = can ? busy_at_40[i % Busy_At_40] : 1.0;
+        int before = d.percent;
+        dynres_window_limited(&d, fps, busy, 40, true);
+        trials += before == 95 && d.percent == 100;
+        missed += !can;
+        if (d.percent == 95 && reached_95 < 0)
+            reached_95 = i;
+        if (reached_95 >= 0 && d.percent < lowest_after)
+            lowest_after = d.percent;
+    }
+    CHECK(reached_95 >= 0 && reached_95 <= 7 * 10);
+    CHECK(lowest_after == 95);          // taken back to 95, never lower
+    CHECK(d.percent == 95 || d.percent == 100);
+    CHECK(trials >= 2 && trials <= 9);  // 8, 16, 32, 64, 128, 128 ... windows apart
+    CHECK(missed <= trials * 3);        // each costs the holds and the window that showed it
+    CHECK(d.failed_trials == Dynres_Max_Backoff || d.percent == 100);
+    // a trial that held clears the doubling: at a 40 limit, 90 -> 95 holds, then 95 -> 100 is tried after the plain hold
+    dynres_reset(&d, 100, 60);
+    d.percent = 90;
+    d.failed_trials = 3;
+    for (int i = 0; i < 400 && d.percent < 95; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, true);
+    CHECK(d.percent == 95);
+    for (int i = 0; i < Dynres_Trial_Windows + 1; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, true);
+    CHECK(d.failed_trials == 0);
+}
+
+// The trial's rules window by window, under a 40 fps limit
+static void test_trial_rules(void) {
+    dynres_t d;
+    // one trial at a time: the next step only after the trial's windows have passed
+    dynres_reset(&d, 100, 60);
+    dynres_start_at_floor(&d);
+    int k = 0;
+    while (d.percent == 60 && k < 100) {
+        dynres_window_limited(&d, 40.0, 0.8, 40, true);
+        k++;
+    }
+    CHECK(d.percent == 65 && d.trial_from == 60);
+    for (int i = 0; i < Dynres_Trial_Windows; i++)
+        CHECK(dynres_window_limited(&d, 40.0, 0.8, 40, true) == 65);
+    CHECK(dynres_window_limited(&d, 40.0, 0.8, 40, true) == 70); // confirmed, and its windows counted for the next
+    // the windows right after a trial step don't judge it (its render targets are being made): no take-back there
+    dynres_reset(&d, 100, 60);
+    dynres_start_at_floor(&d);
+    for (int i = 0; i < 100 && d.percent == 60; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, true);
+    CHECK(dynres_window_limited(&d, 37.0, 0.95, 40, true) == 65);
+    CHECK(dynres_window_limited(&d, 37.0, 0.95, 40, true) == 65);
+    // behind but not the GPU's doing (busy 50%): not taken back
+    CHECK(dynres_window_limited(&d, 35.0, 0.5, 40, true) == 65);
+    CHECK(d.trial_from == 60);
+    // behind with the GPU busy: back to 60
+    CHECK(dynres_window_limited(&d, 35.0, 0.95, 40, true) == 60 && d.failed_trials == 1);
+    // the limit not held (misses that aren't the GPU's): no trial however long
+    dynres_reset(&d, 100, 60);
+    dynres_start_at_floor(&d);
+    for (int i = 0; i < 400; i++)
+        CHECK(dynres_window_limited(&d, i % 2 ? 40.0 : 35.0, 0.5, 40, true) == 60);
+    // at a 10 fps limit (BackgroundFPS): the hold is at least the holds after a change, 3 windows
+    dynres_reset(&d, 100, 60);
+    dynres_start_at_floor(&d);
+    CHECK(dynres_window_limited(&d, 10.0, 0.9, 10, true) == 60);
+    CHECK(dynres_window_limited(&d, 10.0, 0.9, 10, true) == 60);
+    CHECK(dynres_window_limited(&d, 10.0, 0.9, 10, true) == 65);
+    // a restart forgets a trial and the doubling
+    dynres_reset(&d, 100, 60);
+    dynres_start_at_floor(&d);
+    for (int i = 0; i < 100 && d.percent == 60; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, true);
+    d.failed_trials = 3;
+    dynres_reset(&d, 100, 60);
+    CHECK(d.trial_from == 0 && d.failed_trials == 0);
+    memset(&d, 0x7f, sizeof(d));
+    dynres_reset(&d, 100, 60);
+    CHECK(d.trial_from == 0 && d.failed_trials == 0);
+}
+
+// Without a limit nothing changes: the same windows give the same resolutions as the rule before (random windows), and
+// a window behind with the GPU busy under a limit still steps down as before
+static void test_no_limit_unchanged(void) {
+    dynres_t d, old;
+    dynres_reset(&d, 100, 60);
+    dynres_reset(&old, 100, 60);
+    unsigned seed = 7;
+    for (int i = 0; i < 20000; i++) {
+        seed = seed * 1103515245u + 12345u;
+        double fps = 60 + (seed >> 16) % 61, busy = ((seed >> 8) % 103) / 100.0;
+        int a = dynres_window_limited(&d, fps, busy, 120, false), b = rule_68a7ef4(&old, fps, busy, 120);
+        CHECK(a == b);
+        if (a != b)
+            break;
+    }
+    dynres_reset(&d, 100, 60);
+    for (int i = 0; i < Dynres_Hold_Down; i++)
+        dynres_window_limited(&d, 35.0, 0.99, 40, true);
+    CHECK(dynres_window_limited(&d, 35.0, 0.99, 40, true) == 95);
+}
+
 int main(void) {
+    test_climb_at_limit();
+    test_trial_taken_back();
+    test_no_limit_unchanged();
+    test_trial_rules();
     test_target();
     test_uneven_limit();
     test_lowest_for();
