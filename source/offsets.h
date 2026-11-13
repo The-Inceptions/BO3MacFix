@@ -204,6 +204,10 @@
 #define ADDR_UIModel_SetString 0x103698e // func - bool (uint16_t model, const char *value) (SetModelValue for text; Windows 0x14200d630)
 #define ADDR_UIModel_ForceNotify 0x1036af8 // func - bool (uint16_t model) (Lua's ForceNotifyModelSubscriptions; Windows 0x14200c9c0)
 #define ADDR_Dvar_RegisterInt 0xfa149e // func - dvar_t *(uint32_t hash, const char *name, int value, int min, int max, uint32_t flags, const char *description) (Windows 0x142273fc0)
+// read by aae_breath.c's debug lines only (what the game looks at before it holds the breath or draws its hint)
+#define ADDR_KeyButtons 0x2521f30 // the local clients' key buttons, 0x498 bytes each: 0x18 bytes a button, its "active" byte at +0x10; +breath_sprint presses +0x1b0 and +0x300 (sprint), +holdbreath +0x1b0 alone (the input actions' dispatcher 0x100d24b85), and the command's button bit 18, which pmove holds the breath by, comes from +0x1b0 (0x100d21fcb) - name is a guess
+#define ADDR_UIVisibilityBits 0x1283e888 // uint64_t per local client: the UI visibility bits (Enum.UIVisibilityBit); the hint isn't drawn with bit 23, 25, 27, 33 or 35 (Windows 0x15795cec8) - name is a guess
+#define ADDR_LocalClientUI 0x115324a0 // 0x1078 bytes per local client; the hint isn't drawn while its int at +0x10 isn't 0 (Windows 0x145359bd0 for that int) - name is a guess
 
 // T7Overcharged's slide changes (aae_move_slide.c): the player state (ps) and the move (pml_t) are at the same places as
 // in the Windows game; T7O's names for the places (wip/night/agent-t7o-movement.md, sections 3, 4, 6)

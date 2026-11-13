@@ -238,13 +238,21 @@ static void debug_line(int local_client, int status, const aae_breath_player_t *
     printf("\n");
 }
 
+// a local client's cg_t, NULL for anything that isn't one of the game's local clients
+static const uint8_t *client_cg(int local_client) {
+    uint8_t *clients = *cg_array;
+    if (clients == NULL || local_client < 0 || local_client >= *local_client_count)
+        return NULL;
+    return clients + (size_t)local_client * Cg_Size;
+}
+
 // T7Overcharged's status for this local client, handed over when it changed. T7Overcharged takes any client number
 // it is called with; the game only draws the hint for its local clients, which are what is let through here.
 static void breath_status(int local_client) {
-    uint8_t *clients = *cg_array;
-    if (clients == NULL || local_client < 0 || local_client >= *local_client_count)
+    const uint8_t *cg = client_cg(local_client);
+    if (cg == NULL)
         return;
-    const uint8_t *cg = clients + (size_t)local_client * Cg_Size, *player_state = cg + Cg_PlayerState;
+    const uint8_t *player_state = cg + Cg_PlayerState;
     aae_breath_player_t player = {
         .holding = (player_state[Ps_WeaponFlags] & Weapon_Flag_Holding_Breath) != 0,
         .eflag_0x4000 = (read_int(player_state + Ps_EFlags) & EFlag_0x4000) != 0,
@@ -264,6 +272,165 @@ static void breath_status(int local_client) {
         debug_line(local_client, status, &player, &held);
 }
 
+// ---- the debug lines' view of the game itself: what it looks at before it holds the breath and before it draws its
+// hint. Neither is changed by T7Overcharged or by this file; the lines say why a hold or a hint doesn't come.
+
+#define Ps_QuickScopeTimer 0x790      // an int: ms left of the weapon's quick scope (counted down while aimed all the way)
+#define Ps_Perks 0xb04                // perk n is bit n % 32 of the int n / 32 (BG_HasPerk, 0x1010a181d)
+#define Perk_Deadshot 11              // specialty_deadshot (the game's perk names, 0x101b80610)
+#define Perk_HoldBreath 38            // specialty_holdbreath: a breath lasts 9500 ms instead of 4500
+#define Quick_Scope_Dvar_Hash 0xd86c86c // a bool dvar (default 1, registered at 0x101073ac4; its name isn't in the game)
+#define Draw_Hint_Dvar_Hash 0xd900e011 // cg_drawBreathHint (default 1)
+#define Key_Buttons_Size 0x498        // one local client's key buttons
+#define Key_Button_Breath 0x1b0       // pressed by +holdbreath and by +breath_sprint (the left stick's by default)
+#define Key_Button_Sprint 0x300       // pressed by +sprint and by +breath_sprint
+#define Key_Button_Active 0x10        // a byte: the button is down
+#define Hint_Visibility_Bits 0xa0a800000ULL // a killcam, flashbanged, spectating, a demo playing, a Javelin aimed
+#define Local_Client_UI_Size 0x1078
+#define Local_Client_UI_Hint 0x10     // the int the hint function wants 0
+#define Cg_AlternateAim 0x333ef0      // a byte (Windows +0x333b90), set by UseAlternateAimParams
+#define Element_Alpha 0x74            // the alpha of the element's own colour, which the game draws its hint with
+#define Debug_Clients 2
+
+static const uint8_t *key_buttons, *local_client_ui;
+static const uint64_t *visibility_bits;
+// where these lines go (the tests read them)
+static int (*say)(const char *format, ...) = printf;
+
+// What the game's pmove looks at before it holds the breath (Mac 0x100ed8d05.., Windows 0x14265e9e5..). The command's
+// button bit 18 it asks for comes from the breath key button.
+typedef struct {
+    float sights;
+    int32_t weapon_class, quick_scope_ms, breath_timer_ms;
+    bool steadies, breath_button, quick_scope_dvar, deadshot, holding;
+} hold_gates_t;
+
+// Why the game's pmove doesn't hold the breath in this frame, in the order it asks, or "" when it does: from now on
+// (its timer is 0) or still (it was held and the timer counts).
+static const char *hold_refused(const hold_gates_t *gates) {
+    if (gates->sights != 1.0f)
+        return "the sights aren't all the way up";
+    if (gates->weapon_class == Weapon_Class_Item)
+        return "an item";
+    if (!gates->steadies)
+        return "the weapon isn't steadied by it";
+    if (!gates->breath_button)
+        return "the breath button isn't down";
+    if (gates->quick_scope_ms > 0 && gates->quick_scope_dvar)
+        return "the quick scope timer runs";
+    if (gates->deadshot)
+        return "Deadshot";
+    if (!gates->holding && gates->breath_timer_ms != 0)
+        return "the breath is still coming back";
+    return "";
+}
+
+// What the game's hint function looks at before it draws "Hold [key] to steady" (Mac 0x101130494.., Windows
+// 0x142074e3d..).
+typedef struct {
+    bool draw_dvar, alternate_aim, holding, eflag_0x4000, steadies, airburst;
+    uint64_t visibility_bits;
+    int32_t client_state, weapon_class;
+    float sights;
+} hint_tests_t;
+
+// Why the game's hint function draws nothing, in the order it asks, or "" when it draws its hint.
+static const char *hint_refused(const hint_tests_t *tests) {
+    if (!tests->draw_dvar)
+        return "cg_drawBreathHint is 0";
+    if ((tests->visibility_bits & Hint_Visibility_Bits) != 0)
+        return "a visibility bit";
+    if (tests->client_state != 0)
+        return "the client state";
+    if (tests->alternate_aim)
+        return "alternate aim params";
+    if (tests->holding)
+        return "the breath is held";
+    if (tests->eflag_0x4000)
+        return "eFlags 0x4000";
+    if (tests->weapon_class == Weapon_Class_Item)
+        return "an item";
+    if (!tests->steadies)
+        return "the weapon isn't steadied by holding the breath";
+    if (tests->airburst)
+        return "an airburst weapon";
+    if (tests->sights != 1.0f)
+        return "the sights aren't all the way up";
+    return "";
+}
+
+static bool has_perk(const uint8_t *player_state, int perk) {
+    return ((uint32_t)read_int(player_state + Ps_Perks + 4 * (perk / 32)) >> (perk % 32) & 1u) != 0;
+}
+static bool dvar_on(uint32_t hash) {
+    const uint8_t *dvar = Dvar_FindByHash(hash);
+    return dvar != NULL && Dvar_GetInt(dvar) != 0;
+}
+
+// what was last said for each local client, to say it again only when it changed (before the first line both reasons
+// are NULL, which no answer is)
+static struct {
+    bool breath_button, sprint_button, holding, deadshot, hold_perk, alpha, renderer_alpha;
+    const char *hold_refused, *hint_refused;
+} said[Debug_Clients];
+
+// A line for the game's hold and one for its hint, each when it changes (BO3MACFIX_BREATHDEBUG=1).
+static void debug_gates(int local_client, const uint8_t *element, float renderer_alpha) {
+    const uint8_t *cg = client_cg(local_client);
+    if (cg == NULL || local_client >= Debug_Clients)
+        return;
+    const uint8_t *player_state = cg + Cg_PlayerState;
+    const uint8_t *definition = BG_GetWeaponDef(BG_GetViewmodelWeapon(player_state));
+    const uint8_t *buttons = key_buttons + (size_t)local_client * Key_Buttons_Size;
+    hold_gates_t hold = {
+        .sights = read_float(player_state + Ps_Sights),
+        .weapon_class = read_int(definition + WeaponDef_Class),
+        .quick_scope_ms = read_int(player_state + Ps_QuickScopeTimer),
+        .breath_timer_ms = read_int(player_state + Ps_HoldBreathTimer),
+        .steadies = definition[WeaponDef_Steadies] != 0,
+        .breath_button = buttons[Key_Button_Breath + Key_Button_Active] != 0,
+        .quick_scope_dvar = dvar_on(Quick_Scope_Dvar_Hash),
+        .deadshot = has_perk(player_state, Perk_Deadshot),
+        .holding = (player_state[Ps_WeaponFlags] & Weapon_Flag_Holding_Breath) != 0,
+    };
+    hint_tests_t hint = {
+        .draw_dvar = dvar_on(Draw_Hint_Dvar_Hash),
+        .alternate_aim = cg[Cg_AlternateAim] != 0,
+        .holding = hold.holding,
+        .eflag_0x4000 = (read_int(player_state + Ps_EFlags) & EFlag_0x4000) != 0,
+        .steadies = hold.steadies,
+        .airburst = definition[WeaponDef_Airburst] != 0,
+        .visibility_bits = visibility_bits[local_client],
+        .client_state = read_int(local_client_ui + (size_t)local_client * Local_Client_UI_Size + Local_Client_UI_Hint),
+        .weapon_class = hold.weapon_class,
+        .sights = hold.sights,
+    };
+    bool sprint_button = buttons[Key_Button_Sprint + Key_Button_Active] != 0;
+    bool hold_perk = has_perk(player_state, Perk_HoldBreath);
+    float alpha = read_float(element + Element_Alpha);
+    const char *why_not_hold = hold_refused(&hold), *why_not_hint = hint_refused(&hint);
+    typeof(said[0]) *last = &said[local_client];
+    if (why_not_hold != last->hold_refused || hold.breath_button != last->breath_button ||
+        sprint_button != last->sprint_button || hold.holding != last->holding || hold.deadshot != last->deadshot ||
+        hold_perk != last->hold_perk)
+        say("hold breath: local client %d, the game's pmove holds the breath: %s%s (breath button %d, sprint button "
+               "%d, sights %.2f, weapon class %d steadied %d, quick scope timer %d ms with its dvar %d, Deadshot %d, Hold "
+               "Breath perk %d (a breath lasts %d ms), breath timer %d ms, holding %d)\n", local_client,
+               *why_not_hold != '\0' ? "no, " : "yes", why_not_hold, hold.breath_button, sprint_button,
+               (double)hold.sights, hold.weapon_class, hold.steadies, hold.quick_scope_ms, hold.quick_scope_dvar,
+               hold.deadshot, hold_perk, hold_perk ? 9500 : Gasp_After_Ms, hold.breath_timer_ms, hold.holding);
+    if (why_not_hint != last->hint_refused || (alpha > 0.0f) != last->alpha ||
+        (renderer_alpha > 0.0f) != last->renderer_alpha)
+        say("hold breath: local client %d, the game's hint function draws its hint: %s%s (cg_drawBreathHint %d, "
+               "visibility bits %#llx of %#llx, client state %d, alternate aim params %d; the element's alpha %.2f, "
+               "the renderer's %.2f)\n", local_client, *why_not_hint != '\0' ? "no, " : "yes", why_not_hint,
+               hint.draw_dvar, (unsigned long long)(hint.visibility_bits & Hint_Visibility_Bits),
+               (unsigned long long)Hint_Visibility_Bits, hint.client_state, hint.alternate_aim, (double)alpha,
+               (double)renderer_alpha);
+    *last = (typeof(*last)){ hold.breath_button, sprint_button, hold.holding, hold.deadshot, hold_perk, alpha > 0.0f,
+                             renderer_alpha > 0.0f, why_not_hold, why_not_hint };
+}
+
 // The render function setupHoldBreathHint gives an element: (the local client, the element, what the renderer hands
 // every element, four floats, the UI's Lua state). The game draws its hint, then the status is T7Overcharged's.
 install_hook_name(UIElement_RenderHoldBreathHint, void, int local_client, void *element, void *context, float first,
@@ -273,12 +440,13 @@ install_hook_name(UIElement_RenderHoldBreathHint, void, int local_client, void *
     if (working)
         breath_status(local_client);
     if (debug) {
-        static _Atomic bool said[2];
-        if (!atomic_exchange_explicit(&said[working], true, memory_order_relaxed))
-            printf(working ? "hold breath: the game drew its hold breath hint for local client %d, T7Overcharged's "
-                             "aim status is worked out there from now on\n"
-                           : "hold breath: the game drew its hold breath hint for local client %d, nothing handed over: "
-                             "the loaded mod hasn't started T7Overcharged\n", local_client);
+        static _Atomic bool ran[2];
+        if (!atomic_exchange_explicit(&ran[working], true, memory_order_relaxed))
+            printf(working ? "hold breath: the game's hold breath hint function ran for local client %d, "
+                             "T7Overcharged's aim status is worked out there from now on\n"
+                           : "hold breath: the game's hold breath hint function ran for local client %d, nothing "
+                             "handed over: the loaded mod hasn't started T7Overcharged\n", local_client);
+        debug_gates(local_client, element, fourth);
     }
 }
 
@@ -343,6 +511,9 @@ void aae_breath_init(uint64_t game_base_address, int enabled_setting) {
     Dvar_SetFromStringByName = (void *)(game_base_address + ADDR_Dvar_SetFromStringByName);
     Dvar_FindByHash = (void *)(game_base_address + ADDR_Dvar_FindByHash);
     Dvar_GetInt = (void *)(game_base_address + ADDR_Dvar_GetInt);
+    key_buttons = (const uint8_t *)(game_base_address + ADDR_KeyButtons);
+    visibility_bits = (const uint64_t *)(game_base_address + ADDR_UIVisibilityBits);
+    local_client_ui = (const uint8_t *)(game_base_address + ADDR_LocalClientUI);
     install_hook_UIElement_RenderHoldBreathHint((void *)(game_base_address + ADDR_UIElement_RenderHoldBreathHint));
     if (debug)
         printf("hold breath: the game's hold breath hint is hooked (AAEHoldBreath)\n");

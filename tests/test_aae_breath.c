@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -410,6 +411,13 @@ static void game_set_by_name(const char *name, const char *value, bool create) {
         dvar->value = number;
     snprintf(dvar->text, sizeof(dvar->text), "%s", value);
 }
+// and two of the game's own, which the debug lines read: the quick scope one, and cg_drawBreathHint
+static struct {
+    uint8_t game_side[0x40];
+    uint32_t hash;
+    bool there;
+    int value;
+} own_dvars[2] = { { .hash = Quick_Scope_Dvar_Hash }, { .hash = Draw_Hint_Dvar_Hash } };
 static const uint8_t *game_find_dvar(uint32_t hash) {
     for (int i = 0; i < 4; i++) {
         uint32_t own;
@@ -417,12 +425,18 @@ static const uint8_t *game_find_dvar(uint32_t hash) {
         if (game_dvars[i].there && own == hash)
             return game_dvars[i].game_side;
     }
+    for (int i = 0; i < 2; i++)
+        if (own_dvars[i].there && own_dvars[i].hash == hash)
+            return own_dvars[i].game_side;
     return NULL;
 }
 static int game_dvar_int(const uint8_t *dvar) {
     for (int i = 0; i < 4; i++)
         if (game_dvars[i].game_side == dvar)
             return game_dvars[i].value;
+    for (int i = 0; i < 2; i++)
+        if (own_dvars[i].game_side == dvar)
+            return own_dvars[i].value;
     CHECK(!"no such dvar");
     return 0;
 }
@@ -440,12 +454,27 @@ static void set_mod(bool loaded) {
     plugin_time += Plugin_Look_Ms;
 }
 
+// the hint's element (its colour's alpha at +0x74), and what the debug lines of the game's gates say
+static uint8_t game_element[0x100];
+static char say_lines[8][600];
+static int say_count;
+static int test_say(const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    if (say_count < 8)
+        vsnprintf(say_lines[say_count], sizeof(say_lines[0]), format, arguments);
+    va_end(arguments);
+    say_count++;
+    return 0;
+}
+
 // the renderer calls the hint's function for a local client: what the game's own was given, and that it came first
 static void render(int local_client) {
-    static int element, context, lua;
+    static int context, lua;
+    uint8_t *element = game_element;
     int calls = game_hint.calls, before = order;
-    fake_UIElement_RenderHoldBreathHint(local_client, &element, &context, 0.25f, -3.5f, 1e9f, 0.75f, &lua);
-    CHECK(game_hint.calls == calls + 1 && game_hint.local_client == local_client && game_hint.element == &element &&
+    fake_UIElement_RenderHoldBreathHint(local_client, element, &context, 0.25f, -3.5f, 1e9f, 0.75f, &lua);
+    CHECK(game_hint.calls == calls + 1 && game_hint.local_client == local_client && game_hint.element == element &&
           game_hint.context == &context && game_hint.lua == &lua && game_hint.floats[0] == 0.25f &&
           game_hint.floats[1] == -3.5f && game_hint.floats[2] == 1e9f && game_hint.floats[3] == 0.75f);
     // nothing was handed over before the game's function ran (the game draws, then the status is worked out)
@@ -650,6 +679,310 @@ static void test_hook(void) {
     CHECK(mod_sees(0, 0, "ADS_OFF"));
 }
 
+
+// ---- the game's own rules, which the debug lines report
+
+static void test_game_rules(void) {
+    // the pmove's gates before it holds the breath, in its order
+    const hold_gates_t ready = { .sights = 1.0f, .weapon_class = 0, .quick_scope_ms = 0, .breath_timer_ms = 0,
+                                 .steadies = true, .breath_button = true, .quick_scope_dvar = true };
+    hold_gates_t g = ready;
+    CHECK(strcmp(hold_refused(&g), "") == 0);
+    g.sights = 0.99999994f;
+    CHECK(strcmp(hold_refused(&g), "the sights aren't all the way up") == 0);
+    g.sights = NAN;
+    CHECK(strcmp(hold_refused(&g), "the sights aren't all the way up") == 0);
+    g = ready, g.weapon_class = Weapon_Class_Item;
+    CHECK(strcmp(hold_refused(&g), "an item") == 0);
+    g.weapon_class = Weapon_Class_Item + 1;
+    CHECK(strcmp(hold_refused(&g), "") == 0);
+    g = ready, g.steadies = false;
+    CHECK(strcmp(hold_refused(&g), "the weapon isn't steadied by it") == 0);
+    g = ready, g.breath_button = false;
+    CHECK(strcmp(hold_refused(&g), "the breath button isn't down") == 0);
+    g = ready, g.quick_scope_ms = 1;
+    CHECK(strcmp(hold_refused(&g), "the quick scope timer runs") == 0);
+    g.quick_scope_dvar = false;
+    CHECK(strcmp(hold_refused(&g), "") == 0);
+    g = ready, g.quick_scope_ms = -5;
+    CHECK(strcmp(hold_refused(&g), "") == 0);
+    g = ready, g.deadshot = true;
+    CHECK(strcmp(hold_refused(&g), "Deadshot") == 0);
+    // the breath timer only stops a new hold; while held it counts
+    g = ready, g.breath_timer_ms = 1;
+    CHECK(strcmp(hold_refused(&g), "the breath is still coming back") == 0);
+    g.holding = true;
+    CHECK(strcmp(hold_refused(&g), "") == 0);
+    g.deadshot = true;
+    CHECK(strcmp(hold_refused(&g), "Deadshot") == 0);
+    // the first gate that says no is the one named
+    g = ready, g.sights = 0.5f, g.weapon_class = Weapon_Class_Item, g.steadies = false, g.breath_button = false,
+    g.quick_scope_ms = 9, g.deadshot = true, g.breath_timer_ms = 9;
+    CHECK(strcmp(hold_refused(&g), "the sights aren't all the way up") == 0);
+    g.sights = 1.0f;
+    CHECK(strcmp(hold_refused(&g), "an item") == 0);
+    g.weapon_class = 0;
+    CHECK(strcmp(hold_refused(&g), "the weapon isn't steadied by it") == 0);
+    g.steadies = true;
+    CHECK(strcmp(hold_refused(&g), "the breath button isn't down") == 0);
+    g.breath_button = true;
+    CHECK(strcmp(hold_refused(&g), "the quick scope timer runs") == 0);
+    g.quick_scope_ms = 0;
+    CHECK(strcmp(hold_refused(&g), "Deadshot") == 0);
+    g.deadshot = false;
+    CHECK(strcmp(hold_refused(&g), "the breath is still coming back") == 0);
+
+    // the hint function's tests, in its order
+    const hint_tests_t drawn = { .draw_dvar = true, .steadies = true, .sights = 1.0f };
+    hint_tests_t t = drawn;
+    CHECK(strcmp(hint_refused(&t), "") == 0);
+    t.draw_dvar = false;
+    CHECK(strcmp(hint_refused(&t), "cg_drawBreathHint is 0") == 0);
+    const int bits[] = { 23, 25, 27, 33, 35 };
+    for (int i = 0; i < 5; i++) {
+        t = drawn, t.visibility_bits = 1ULL << bits[i];
+        CHECK(strcmp(hint_refused(&t), "a visibility bit") == 0);
+    }
+    t = drawn, t.visibility_bits = ~Hint_Visibility_Bits;
+    CHECK(strcmp(hint_refused(&t), "") == 0);
+    t = drawn, t.client_state = -1;
+    CHECK(strcmp(hint_refused(&t), "the client state") == 0);
+    t = drawn, t.alternate_aim = true;
+    CHECK(strcmp(hint_refused(&t), "alternate aim params") == 0);
+    t = drawn, t.holding = true;
+    CHECK(strcmp(hint_refused(&t), "the breath is held") == 0);
+    t = drawn, t.eflag_0x4000 = true;
+    CHECK(strcmp(hint_refused(&t), "eFlags 0x4000") == 0);
+    t = drawn, t.weapon_class = Weapon_Class_Item;
+    CHECK(strcmp(hint_refused(&t), "an item") == 0);
+    t = drawn, t.steadies = false;
+    CHECK(strcmp(hint_refused(&t), "the weapon isn't steadied by holding the breath") == 0);
+    t = drawn, t.airburst = true;
+    CHECK(strcmp(hint_refused(&t), "an airburst weapon") == 0);
+    t = drawn, t.sights = 0.9f;
+    CHECK(strcmp(hint_refused(&t), "the sights aren't all the way up") == 0);
+    // the first that says no
+    t = (hint_tests_t){ .visibility_bits = 1ULL << 23, .client_state = 1, .alternate_aim = true, .holding = true,
+                        .eflag_0x4000 = true, .weapon_class = Weapon_Class_Item, .airburst = true, .sights = 0.0f };
+    const char *const order_of_tests[] = { "cg_drawBreathHint is 0", "a visibility bit", "the client state",
+                                           "alternate aim params", "the breath is held", "eFlags 0x4000", "an item",
+                                           "the weapon isn't steadied by holding the breath", "an airburst weapon",
+                                           "the sights aren't all the way up", "" };
+    for (int i = 0; i < 11; i++) {
+        CHECK(strcmp(hint_refused(&t), order_of_tests[i]) == 0);
+        switch (i) {
+        case 0: t.draw_dvar = true; break;
+        case 1: t.visibility_bits = 0; break;
+        case 2: t.client_state = 0; break;
+        case 3: t.alternate_aim = false; break;
+        case 4: t.holding = false; break;
+        case 5: t.eflag_0x4000 = false; break;
+        case 6: t.weapon_class = 0; break;
+        case 7: t.steadies = true; break;
+        case 8: t.airburst = false; break;
+        case 9: t.sights = 1.0f; break;
+        }
+    }
+}
+
+// the made-up game's key buttons, visibility bits and per-client UI records, two local clients of each
+static uint8_t game_key_buttons[2 * Key_Buttons_Size];
+static uint64_t game_visibility[2];
+static uint8_t game_client_ui[2 * Local_Client_UI_Size];
+static void set_button(int which, int button, bool down) {
+    game_key_buttons[which * Key_Buttons_Size + button + Key_Button_Active] = down;
+}
+static void set_perk(int which, int perk, bool has) {
+    uint8_t *word = cg_of(which) + Cg_PlayerState + Ps_Perks + 4 * (perk / 32);
+    uint32_t bits;
+    memcpy(&bits, word, sizeof(bits));
+    bits = has ? bits | 1u << (perk % 32) : bits & ~(1u << (perk % 32));
+    memcpy(word, &bits, sizeof(bits));
+}
+// the game's gates for one local client: how many lines came, and whether one says this
+static int gates(int which, float renderer_alpha) {
+    say_count = 0;
+    debug_gates(which, game_element, renderer_alpha);
+    return say_count;
+}
+static bool said_that(const char *text) {
+    for (int i = 0; i < say_count && i < 8; i++)
+        if (strstr(say_lines[i], text) != NULL)
+            return true;
+    return false;
+}
+
+static void test_game_gates(void) {
+    reset_game();
+    say = test_say;
+    memset(said, 0, sizeof(said));
+    set_definition(0, 0, true, false);
+    set_definition(1, 0, false, false);
+    set_player(0, false, 1.0f, -1, 0, 0);
+    set_player(1, false, 1.0f, -1, 0, 0);
+    set_float(game_element + Element_Alpha, 1.0f);
+    own_dvars[0].there = own_dvars[1].there = true, own_dvars[0].value = own_dvars[1].value = 1;
+    // the first time: both lines
+    CHECK(gates(0, 1.0f) == 2 && said_that("local client 0, the game's pmove holds the breath: no, the breath button "
+                                           "isn't down (breath button 0, sprint button 0, sights 1.00, weapon class 0 "
+                                           "steadied 1, quick scope timer 0 ms with its dvar 1, Deadshot 0, Hold Breath "
+                                           "perk 0 (a breath lasts 4500 ms), breath timer 0 ms, holding 0)"));
+    CHECK(said_that("local client 0, the game's hint function draws its hint: yes (cg_drawBreathHint 1, visibility "
+                    "bits 0 of 0xa0a800000, client state 0, alternate aim params 0; the element's alpha 1.00, the "
+                    "renderer's 1.00)"));
+    // nothing changed: nothing said
+    CHECK(gates(0, 1.0f) == 0);
+    // the breath button (the first client's own): the hold line again
+    set_button(0, Key_Button_Breath, true);
+    CHECK(gates(0, 1.0f) == 1 && said_that("holds the breath: yes (breath button 1, sprint button 0,"));
+    set_button(0, Key_Button_Sprint, true);
+    CHECK(gates(0, 1.0f) == 1 && said_that("holds the breath: yes (breath button 1, sprint button 1,"));
+    // the second client's buttons are its own
+    set_button(1, Key_Button_Breath, true);
+    CHECK(gates(0, 1.0f) == 0);
+    // Deadshot, and the perk that lets a breath last longer
+    set_perk(0, Perk_Deadshot, true);
+    CHECK(gates(0, 1.0f) == 1 && said_that("holds the breath: no, Deadshot (") && said_that("Deadshot 1, Hold Breath perk 0"));
+    set_perk(0, Perk_Deadshot, false);
+    CHECK(gates(0, 1.0f) == 1 && said_that("holds the breath: yes"));
+    set_perk(0, Perk_Deadshot + 1, true);
+    set_perk(0, Perk_Deadshot - 1, true);
+    CHECK(gates(0, 1.0f) == 0);
+    set_perk(0, Perk_HoldBreath, true);
+    CHECK(gates(0, 1.0f) == 1 && said_that("Hold Breath perk 1 (a breath lasts 9500 ms)"));
+    set_perk(0, Perk_HoldBreath, false);
+    CHECK(gates(0, 1.0f) == 1 && said_that("Hold Breath perk 0 (a breath lasts 4500 ms)"));
+    // the quick scope timer, which only stops it with its dvar on
+    set_int(cg_of(0) + Cg_PlayerState + Ps_QuickScopeTimer, 300);
+    CHECK(gates(0, 1.0f) == 1 && said_that("no, the quick scope timer runs (") &&
+          said_that("quick scope timer 300 ms with its dvar 1"));
+    own_dvars[0].value = 0;
+    CHECK(gates(0, 1.0f) == 1 && said_that("holds the breath: yes") && said_that("quick scope timer 300 ms with its dvar 0"));
+    own_dvars[0].value = 1;
+    own_dvars[0].there = false;
+    CHECK(gates(0, 1.0f) == 0);
+    own_dvars[0].there = true;
+    set_int(cg_of(0) + Cg_PlayerState + Ps_QuickScopeTimer, 0);
+    CHECK(gates(0, 1.0f) == 0);
+    // the breath coming back after a hold, then held
+    set_int(cg_of(0) + Cg_PlayerState + Ps_HoldBreathTimer, 4500);
+    CHECK(gates(0, 1.0f) == 1 && said_that("no, the breath is still coming back (") && said_that("breath timer 4500 ms, holding 0)"));
+    set_player(0, true, 1.0f, 100, 1000, 0);
+    CHECK(gates(0, 1.0f) == 2 && said_that("holds the breath: yes") && said_that("holding 1)") &&
+          said_that("draws its hint: no, the breath is held"));
+    set_player(0, false, 1.0f, -1, 0, 0);
+    set_int(cg_of(0) + Cg_PlayerState + Ps_HoldBreathTimer, 0);
+    CHECK(gates(0, 1.0f) == 2 && said_that("draws its hint: yes"));
+    // the sights and the weapon
+    set_player(0, false, 0.75f, -1, 0, 0);
+    CHECK(gates(0, 1.0f) == 2 && said_that("no, the sights aren't all the way up (") &&
+          said_that("draws its hint: no, the sights aren't all the way up"));
+    // behind a gate that says no, the buttons and perks still get their line when they change
+    set_button(0, Key_Button_Breath, false);
+    CHECK(gates(0, 1.0f) == 1 && said_that("no, the sights aren't all the way up (breath button 0, sprint button 1,"));
+    set_button(0, Key_Button_Breath, true);
+    CHECK(gates(0, 1.0f) == 1 && said_that("(breath button 1, sprint button 1,"));
+    set_button(0, Key_Button_Sprint, false);
+    CHECK(gates(0, 1.0f) == 1 && said_that("(breath button 1, sprint button 0,"));
+    set_button(0, Key_Button_Sprint, true);
+    CHECK(gates(0, 1.0f) == 1);
+    set_perk(0, Perk_Deadshot, true);
+    CHECK(gates(0, 1.0f) == 1 && said_that("no, the sights aren't all the way up (") && said_that("Deadshot 1,"));
+    set_perk(0, Perk_Deadshot, false);
+    CHECK(gates(0, 1.0f) == 1 && said_that("Deadshot 0,"));
+    set_perk(0, Perk_HoldBreath, true);
+    CHECK(gates(0, 1.0f) == 1 && said_that("Hold Breath perk 1"));
+    set_perk(0, Perk_HoldBreath, false);
+    CHECK(gates(0, 1.0f) == 1);
+    set_int(cg_of(0) + Cg_PlayerState + Ps_WeaponFlags, Weapon_Flag_Holding_Breath);
+    CHECK(gates(0, 1.0f) == 2 && said_that("no, the sights aren't all the way up (") && said_that("holding 1)"));
+    set_int(cg_of(0) + Cg_PlayerState + Ps_WeaponFlags, 0);
+    CHECK(gates(0, 1.0f) == 2);
+    set_player(0, false, 1.0f, -1, 0, 0);
+    set_definition(0, 0, false, false);
+    CHECK(gates(0, 1.0f) == 2 && said_that("no, the weapon isn't steadied by it") && said_that("weapon class 0 steadied 0"));
+    set_definition(0, Weapon_Class_Item, true, false);
+    CHECK(gates(0, 1.0f) == 2 && said_that("holds the breath: no, an item") && said_that("weapon class 10"));
+    set_definition(0, 0, true, true);
+    CHECK(gates(0, 1.0f) == 2 && said_that("holds the breath: yes") && said_that("draws its hint: no, an airburst weapon"));
+    set_definition(0, 0, true, false);
+    CHECK(gates(0, 1.0f) == 1 && said_that("draws its hint: yes")); // the pmove doesn't look at airburst
+    // the hint's own tests: the dvar, the client's visibility bits (only the five), its UI record, alternate aim
+    own_dvars[1].value = 0;
+    CHECK(gates(0, 1.0f) == 1 && said_that("draws its hint: no, cg_drawBreathHint is 0 (cg_drawBreathHint 0,"));
+    own_dvars[1].value = 1;
+    CHECK(gates(0, 1.0f) == 1);
+    game_visibility[0] = ~Hint_Visibility_Bits;
+    game_visibility[1] = Hint_Visibility_Bits;
+    CHECK(gates(0, 1.0f) == 0);
+    game_visibility[0] = 1ULL << 25 | 1;
+    CHECK(gates(0, 1.0f) == 1 && said_that("draws its hint: no, a visibility bit (cg_drawBreathHint 1, visibility "
+                                           "bits 0x2000000 of 0xa0a800000,"));
+    game_visibility[0] = 0;
+    CHECK(gates(0, 1.0f) == 1);
+    set_int(game_client_ui + Local_Client_UI_Size + Local_Client_UI_Hint, 3);
+    set_int(game_client_ui + Local_Client_UI_Hint - 4, 3);
+    set_int(game_client_ui + Local_Client_UI_Hint + 4, 3);
+    CHECK(gates(0, 1.0f) == 0);
+    set_int(game_client_ui + Local_Client_UI_Hint, 7);
+    CHECK(gates(0, 1.0f) == 1 && said_that("draws its hint: no, the client state (") && said_that("client state 7,"));
+    set_int(game_client_ui + Local_Client_UI_Hint, 0);
+    CHECK(gates(0, 1.0f) == 1);
+    cg_of(0)[Cg_AlternateAim] = 1;
+    CHECK(gates(0, 1.0f) == 1 && said_that("draws its hint: no, alternate aim params (") && said_that("alternate aim params 1;"));
+    cg_of(0)[Cg_AlternateAim] = 0;
+    CHECK(gates(0, 1.0f) == 1);
+    set_int(cg_of(0) + Cg_PlayerState + Ps_EFlags, EFlag_0x4000);
+    CHECK(gates(0, 1.0f) == 1 && said_that("draws its hint: no, eFlags 0x4000"));
+    set_int(cg_of(0) + Cg_PlayerState + Ps_EFlags, 0);
+    CHECK(gates(0, 1.0f) == 1);
+    // the alphas it is drawn with: a line when one comes to 0 or from it
+    set_float(game_element + Element_Alpha, 0.5f);
+    CHECK(gates(0, 0.25f) == 0);
+    set_float(game_element + Element_Alpha, 0.0f);
+    CHECK(gates(0, 0.25f) == 1 && said_that("the element's alpha 0.00, the renderer's 0.25)"));
+    set_float(game_element + Element_Alpha, 1.0f);
+    CHECK(gates(0, 0.25f) == 1 && gates(0, 0.0f) == 1 && said_that("the element's alpha 1.00, the renderer's 0.00)"));
+    // the second local client: its own cg_t, buttons, bits and record, and its own lines
+    CHECK(gates(1, 1.0f) == 2 && said_that("local client 1, the game's pmove holds the breath: no, the weapon isn't "
+                                           "steadied by it (breath button 1, sprint button 0,") &&
+          said_that("local client 1, the game's hint function draws its hint: no, a visibility bit") &&
+          said_that("client state 3,"));
+    CHECK(game_weapon.player_state == cg_of(1) + Cg_PlayerState);
+    CHECK(gates(1, 1.0f) == 0 && gates(0, 0.0f) == 0);
+    // not a local client of the game's, or no cg_t: nothing read, nothing said; and only two clients have lines
+    int looked = game_weapon.viewmodel_calls;
+    game_client_count = 1;
+    CHECK(gates(1, 1.0f) == 0);
+    game_client_count = 2;
+    CHECK(gates(2, 1.0f) == 0 && gates(-1, 1.0f) == 0);
+    uint8_t *all = game_cgs;
+    game_cgs = NULL;
+    CHECK(gates(0, 1.0f) == 0 && gates(1, 1.0f) == 0);
+    render(1);
+    game_cgs = all;
+    CHECK(game_weapon.viewmodel_calls == looked);
+    game_client_count = 3;
+    CHECK(gates(2, 1.0f) == 0);
+    game_client_count = 2;
+    // through the hint function's hook: the lines come with debug on, with the render call's fourth float as the
+    // renderer's alpha
+    memset(said, 0, sizeof(said));
+    debug = 1;
+    say_count = 0;
+    render(0);
+    debug = 0;
+    CHECK(say_count == 2 && said_that("local client 0, the game's pmove holds the breath:") &&
+          said_that("the element's alpha 1.00, the renderer's 0.75)"));
+    say_count = 0;
+    render(0);
+    CHECK(say_count == 0);
+    say = printf;
+    game_visibility[1] = 0;
+    set_int(game_client_ui + Local_Client_UI_Size + Local_Client_UI_Hint, 0);
+    memset(game_key_buttons, 0, sizeof(game_key_buttons));
+}
+
 static bool was_hooked(uint32_t place, void *replacement, void **original) {
     for (int i = 0; i < hooks && i < 4; i++)
         if (hooked[i].address == (void *)(0x100000000 + (uint64_t)place))
@@ -681,6 +1014,8 @@ static void test_init(void) {
           Dvar_RegisterInt == (void *)(base + ADDR_Dvar_RegisterInt) &&
           Dvar_SetFromStringByName == (void *)(base + ADDR_Dvar_SetFromStringByName) &&
           Dvar_FindByHash == (void *)(base + ADDR_Dvar_FindByHash) && Dvar_GetInt == (void *)(base + ADDR_Dvar_GetInt) &&
+          key_buttons == (void *)(base + ADDR_KeyButtons) && visibility_bits == (void *)(base + ADDR_UIVisibilityBits) &&
+          local_client_ui == (void *)(base + ADDR_LocalClientUI) && say == printf &&
           loaded_mod == (const char *)(base + ADDR_Mods_LoadedName));
     // the places, as they were read from the game's code
     CHECK(ADDR_UIElement_RenderHoldBreathHint == 0x1130467 && ADDR_BG_GetViewmodelWeapon == 0xed3bf3 &&
@@ -696,6 +1031,14 @@ static void test_init(void) {
           Weapon_Flag_Holding_Breath == 4 && EFlag_0x4000 == 0x4000 && WeaponDef_Class == 0x70 &&
           WeaponDef_Steadies == 0xdc8 && WeaponDef_Airburst == 0xe67 && Dvar_Name == 8 && Controller_Models == 2 &&
           Weapon_Class_Item == 10 && Gasp_After_Ms == 4500);
+    // and what the debug lines read
+    CHECK(ADDR_KeyButtons == 0x2521f30 && ADDR_UIVisibilityBits == 0x1283e888 && ADDR_LocalClientUI == 0x115324a0 &&
+          Ps_QuickScopeTimer == 0x790 && Ps_Perks == 0xb04 && Perk_Deadshot == 11 && Perk_HoldBreath == 38 &&
+          Quick_Scope_Dvar_Hash == 0xd86c86c && Draw_Hint_Dvar_Hash == 0xd900e011 &&
+          gsc_hash("cg_drawBreathHint") == Draw_Hint_Dvar_Hash && Key_Buttons_Size == 0x498 &&
+          Key_Button_Breath == 0x1b0 && Key_Button_Sprint == 0x300 && Key_Button_Active == 0x10 &&
+          Hint_Visibility_Bits == 0xa0a800000ULL && Local_Client_UI_Size == 0x1078 && Local_Client_UI_Hint == 0x10 &&
+          Cg_AlternateAim == 0x333ef0 && Element_Alpha == 0x74 && Debug_Clients == 2);
 }
 
 int main(void) {
@@ -730,12 +1073,19 @@ int main(void) {
     Dvar_SetFromStringByName = game_set_by_name;
     Dvar_FindByHash = game_find_dvar;
     Dvar_GetInt = game_dvar_int;
+    key_buttons = game_key_buttons;
+    visibility_bits = game_visibility;
+    local_client_ui = game_client_ui;
+    own_dvars[0].there = own_dvars[1].there = true, own_dvars[0].value = own_dvars[1].value = 1;
+    set_float(game_element + Element_Alpha, 1.0f);
+    test_game_rules();
     test_weapon_rule();
     test_timer_rule();
     test_names();
     test_publish();
     test_dvars();
     test_hook();
+    test_game_gates();
 
     free(game_cgs);
     snprintf(command, sizeof(command), "rm -rf '%s'", template);
