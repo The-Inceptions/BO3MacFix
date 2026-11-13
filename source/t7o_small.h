@@ -146,7 +146,8 @@ t7o_number t7o_free_unused_args(int argc, const char *const *argv, bool *first, 
 // at start-up: the console commands (customkeymap, cursoroverride, updateVidConfig, DB_FreeUnusedResources) and the
 // hook on the game's input events
 void t7o_small_install(uint64_t base_address);
-// T7OTakeCustomKey(), for the UI's Lua (t7overcharged.lua): the name of the mapping that fired, or nil
+// T7OTakeCustomKey(), for the UI's Lua (t7overcharged.lua): the name of the mapping that fired, or nil; also applies
+// the dvar flags once they're due
 int t7o_small_lua_take_custom_key(lua_State *s);
 // SendMenuResponse (t7overcharged.c): whether this call goes on, by T7Overcharged's debounce
 bool t7o_small_menuresponse_passes(int argc, const char *const *argv);

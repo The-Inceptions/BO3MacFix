@@ -631,15 +631,6 @@ static void wire_dvars(void) {
     session_mode_state = &game_session_mode;
 }
 
-// the scheduler: what was asked for
-static int scheduled, scheduled_seconds;
-static void (*scheduled_work)(void *);
-static void game_schedule(int seconds, void (*work)(void *)) {
-    scheduled++;
-    scheduled_seconds = seconds;
-    scheduled_work = work;
-}
-
 static void test_session_mode(void) {
     CHECK(t7o_session_mode(0) == 0 && t7o_session_mode(1) == 1 && t7o_session_mode(2) == 2);
     CHECK(t7o_session_mode(3) == 3);
@@ -681,7 +672,6 @@ static void test_network_defaults(void) {
 
     // against the made-up game: the Mac's flags, values and a fourth dvar the table doesn't have
     wire_dvars();
-    schedule_after = game_schedule;
     game_dvar_t *rate = add_dvar("sv_maxRate", 5, 0x0), *fps = add_dvar("sv_network_fps", 5, 0x1000);
     game_dvar_t *vote = add_dvar("g_allowvote", 0, 0x5);
     add_dvar("sv_mapswitch", 0, 0x100);
@@ -696,12 +686,13 @@ static void test_network_defaults(void) {
     CHECK(strcmp(rate->value, "50000") == 0 && strcmp(fps->value, "125") == 0 && strcmp(vote->value, "0") == 0);
     CHECK(strcmp(game_dvars[3].value, "0") == 0 && flags_of(game_dvars[3].dvar) == 0x100);
     CHECK(unknown_sets == 1); // maxvoicepacketsperframe, created as with create_if_missing
-    // and the dvar flags are asked for 10 s later
-    CHECK(scheduled == 1 && scheduled_seconds == 10 && scheduled_work == apply_dvar_patches);
+    // and the dvar flags are due 10 s later, not yet done
+    int64_t due = atomic_load(&dvar_patches_due_ns), now = now_ns();
+    CHECK(due > now + 9900 * 1000000LL && due <= now + 10000 * 1000000LL && !dvar_patches_done);
     // once, as T7Overcharged's components start once
     memcpy(fps->dvar + 0x18, &(uint32_t){ 0x1000 }, sizeof(uint32_t));
     t7o_small_mod_loaded();
-    CHECK(flags_of(fps->dvar) == 0x1000 && rate->sets == 1 && scheduled == 1);
+    CHECK(flags_of(fps->dvar) == 0x1000 && rate->sets == 1 && atomic_load(&dvar_patches_due_ns) == due);
     // with the debug lines, and a per-mode one in a mode it has
     wire_dvars();
     game_dvar_t *per_mode = add_dvar("sv_maxRate", 15, 0x100);
@@ -761,13 +752,34 @@ static void test_dvar_patches(void) {
     game_dvar_t *ship = add_dvar("ui_error_callstack_ship", 0, 0x100);
     game_dvar_t *popups = add_dvar("com_disable_popups", 0, 0x1);
     game_session_mode = 0x40; // zombies, played over a LAN
-    apply_dvar_patches(NULL);
+    // due 10 s after T7Overcharged's start: not before, once at or after, from the UI's timers on the main thread
+    atomic_store(&dvar_patches_due_ns, 0);
+    dvar_patches_done = false;
+    dvar_patches_if_due(1000000);
+    CHECK(flags_of(fov->dvar) == 0x100 && !dvar_patches_done); // T7Overcharged hasn't started
+    atomic_store(&dvar_patches_due_ns, now_ns() + 10000 * 1000000LL);
+    CHECK(take() == NULL && flags_of(fov->dvar) == 0x100 && !dvar_patches_done);
+    dvar_patches_if_due(atomic_load(&dvar_patches_due_ns) - 1);
+    CHECK(flags_of(fov->dvar) == 0x100 && !dvar_patches_done);
+    atomic_store(&dvar_patches_due_ns, now_ns() - 1);
+    CHECK(take() == NULL && dvar_patches_done); // the timers' look applies them
     CHECK(flags_of(fov->dvar) == 0x1 && flags_of(fog->dvar) == 0x0);
     CHECK(flags_of(trm->modes[0]) == 0x40 && flags_of(trm->modes[1]) == 0x104 && flags_of(trm->dvar) == 0);
     CHECK(flags_of(ship->dvar) == 0 && strcmp(ship->value, "1") == 0 && ship->sets == 1);
     CHECK(flags_of(popups->dvar) == 0 && strcmp(popups->value, "0") == 0);
     CHECK(fov->sets == 0 && fog->sets == 0 && trm->sets == 0); // the others only get their flags
     CHECK(unknown_sets == 1); // ui_error_report_delay, created as with create_if_missing
+    // once
+    memcpy(fov->dvar + 0x18, &(uint32_t){ 0x100 }, sizeof(uint32_t));
+    dvar_patches_if_due(now_ns());
+    take();
+    mod_loaded_once = true;
+    t7o_small_mod_loaded();
+    CHECK(flags_of(fov->dvar) == 0x100 && ship->sets == 1);
+    // a later init of the stand-in applies them when the timers didn't get to it
+    dvar_patches_done = false;
+    t7o_small_mod_loaded();
+    CHECK(flags_of(fov->dvar) == 0x1 && ship->sets == 2 && dvar_patches_done);
 }
 
 // cursoroverride: there, says its usage without a file, logs the first file once and changes nothing else

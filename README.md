@@ -131,7 +131,10 @@ then: a game this Mac hosts sends up to 125 snapshots a second (`sv_network_fps`
 Ten seconds after it starts, T7Overcharged also gives 35 of the game's dvars fixed flags, and so does BO3MacFix: the
 field of view scale `cg_fovscale`, `r_fog`, `r_zfar`, depth of field, the shadow and volumetric settings, the
 movement ones (`doublejump_enabled`, `mantle_enabled`, `traverse_mode`...) and others can then be set from the
-console without cheats, and `cg_fovscale`, `ui_enabled` and the controller's stick deadzones are saved in the config.
+console without cheats. `cg_fovscale`, `ui_enabled` and the controller's stick deadzones also get the flag that older
+Call of Duty games save in the config (0x1), as with T7Overcharged, but the Mac's game saves nothing for it: only
+`dvarlist` and `dvardump` show it, and its settings file, `players/config.ini`, is a fixed list of settings without
+these. So a value set from the console lasts until the game quits, and a later start without the mod doesn't see it.
 `BO3MACFIX_T7ODEBUG=1` logs each dvar's flags before and after.
 
 AAE's UI colour option also picks a mouse cursor, one of the Windows animated cursors in its `T7Overcharged/cursors`

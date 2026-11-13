@@ -16,7 +16,6 @@
 // notes the key and the keys held, lock-free; the UI's own Lua takes it on the game's main thread, in a timer of its
 // roots (t7overcharged.lua), where this file finds the mapping, applies T7Overcharged's debounce and gives the name,
 // and the Lua calls the mod's function as T7Overcharged's line does.
-#include <dispatch/dispatch.h>
 #include <errno.h>
 #include <limits.h>
 #include <os/lock.h>
@@ -374,9 +373,14 @@ install_hook_name(Sys_QueEvent, void, uint64_t time, int type, int value, int va
 }
 
 // T7OTakeCustomKey() -> the name of the mapping a key that came up fires, or nil: the UI's timers ask it on the
-// game's main thread (t7overcharged.lua), where the game runs the UI's Lua itself and closes and builds it
+// game's main thread (t7overcharged.lua), where the game runs the UI's Lua itself and closes and builds it. It also
+// applies T7Overcharged's dvar flags once they're due
+static void dvar_patches_if_due(int64_t now);
+
 int t7o_small_lua_take_custom_key(lua_State *s) {
     int64_t now = now_ns();
+    // the dvar flags, once they're due (T7Overcharged's 10 s), here on the game's main thread
+    dvar_patches_if_due(now);
     char name[T7o_Keymap_Name_Max] = "";
     bool fire = false;
     t7o_key_event event;
@@ -589,25 +593,33 @@ static void apply_dvar_changes(const char *what, const t7o_dvar_change *changes,
     printf("T7Overcharged: %s: %d dvars' flags set, in session mode %d\n", what, flags_set, mode);
 }
 
-static void apply_dvar_patches(void *unused) {
-    (void)unused;
+// T7Overcharged schedules the dvar flags on its scheduler's main pipeline, 10 s after it starts. Here they're due then,
+// and applied by the first look of the UI's timers after that (t7o_small_lua_take_custom_key) or by a later init of
+// the stand-in, both on the game's main thread: setting a dvar can print (a dvar the game doesn't have, a value it
+// refuses), and the game's printing needs its own threads' thread-local data, which a thread of macOS's doesn't have
+// (crash E of crash-sweep.md). 0 until T7Overcharged starts.
+static _Atomic int64_t dvar_patches_due_ns;
+static atomic_bool dvar_patches_done;
+
+static void dvar_patches_if_due(int64_t now) {
+    int64_t due = atomic_load_explicit(&dvar_patches_due_ns, memory_order_relaxed);
+    if (due == 0 || now < due || atomic_exchange_explicit(&dvar_patches_done, true, memory_order_relaxed))
+        return;
     apply_dvar_changes("dvar flags", t7o_dvar_patches, t7o_dvar_patch_count);
 }
 
-// T7Overcharged's scheduler runs the patches on its main pipeline: here the main queue, which the game's main thread
-// serves while it reads its window's events
-static void schedule_on_main_queue(int seconds, void (*work)(void *)) {
-    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, (int64_t)seconds * (int64_t)NSEC_PER_SEC),
-                     dispatch_get_main_queue(), NULL, work);
-}
-static void (*schedule_after)(int seconds, void (*work)(void *)) = schedule_on_main_queue;
-
 void t7o_small_mod_loaded(void) {
-    // nothing before t7o_small_install, and the first time only
-    if (session_mode_state == NULL || atomic_exchange_explicit(&mod_loaded_once, true, memory_order_relaxed))
+    // nothing before t7o_small_install
+    if (session_mode_state == NULL)
         return;
-    apply_dvar_changes("network defaults", t7o_network_defaults, t7o_network_default_count);
-    schedule_after(T7o_Dvar_Patch_Delay_S, apply_dvar_patches);
+    int64_t now = now_ns();
+    // the first time only: the network defaults now, the dvar flags due in 10 s
+    if (!atomic_exchange_explicit(&mod_loaded_once, true, memory_order_relaxed)) {
+        apply_dvar_changes("network defaults", t7o_network_defaults, t7o_network_default_count);
+        int64_t due = now + (int64_t)T7o_Dvar_Patch_Delay_S * 1000000000;
+        atomic_store_explicit(&dvar_patches_due_ns, due, memory_order_relaxed);
+    }
+    dvar_patches_if_due(now);
 }
 
 void t7o_small_install(uint64_t base_address) {
