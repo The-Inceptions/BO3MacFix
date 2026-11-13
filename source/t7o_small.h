@@ -1,7 +1,7 @@
 // T7Overcharged's smaller pieces that All-around Enhancement uses, done the way T7Overcharged does them (see
-// t7o_small.c): its customkeymap command, keys that call a function of the mod's Lua, and the debounce of its
-// SendMenuResponse command. The rules are plain functions here, so they can be tested without the game; the game's
-// side is at the end.
+// t7o_small.c): its customkeymap command, keys that call a function of the mod's Lua, the debounce of its
+// SendMenuResponse command, and the dvars it changes when it starts. The rules are plain functions here, so they can
+// be tested without the game; the game's side is at the end.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -88,9 +88,33 @@ t7o_number t7o_menuresponse_debounce(int argc, const char *const *argv, int *deb
 // debounce decides
 bool t7o_menuresponse_debounce_passes(t7o_debounce *debounce, int call_debounce_ms, int64_t now_ns);
 
+// ---- dvars T7Overcharged changes by itself when it starts
+
+// one change: the dvar's flags set to flags (when set_flags; for a dvar that has one per session mode, the current
+// mode's), then its value set as with Dvar_SetFromStringByName(name, value, true) (when value isn't NULL)
+typedef struct {
+    const char *name;
+    bool set_flags;
+    uint32_t flags;
+    const char *value;
+} t7o_dvar_change;
+// its patches component, at once: what a host sends (sv_maxRate, sv_network_fps) and votes, map switching and voice
+extern const t7o_dvar_change t7o_network_defaults[];
+extern const size_t t7o_network_default_count;
+
+// the session mode as the game's Com_SessionMode_GetMode gives it: the state's low 4 bits, with their sign
+int t7o_session_mode(uint32_t session_mode_state);
+// the dvar whose flags a change sets: for a dvar of the per-session-mode type (15), the one of the mode, or the dvar
+// itself when the mode has none (Dvar_GetSessionModeSpecificDvar); NULL for a mode other than 0 to 2, for which
+// the game's function may stop the game with an error
+uint8_t *t7o_mode_dvar(uint8_t *dvar, int mode);
+
 // ---- the game's side
 
 // at start-up: the console command and the hook on the game's input events
 void t7o_small_install(uint64_t base_address);
 // SendMenuResponse (t7overcharged.c): whether this call goes on, by T7Overcharged's debounce
 bool t7o_small_menuresponse_passes(int argc, const char *const *argv);
+// the mod has loaded T7Overcharged (the stand-in's init, t7overcharged.c): the first time, what T7Overcharged changes
+// in the game by itself when it starts
+void t7o_small_mod_loaded(void);

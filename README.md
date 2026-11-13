@@ -123,6 +123,11 @@ T7Overcharged's rules: a mapped key counts when it comes up, only when no other 
 console is open, and at most once a second for all of them together. `BO3MACFIX_T7ODEBUG=1` in the environment logs
 every key that comes up while the mod has keys mapped.
 
+T7Overcharged also changes a few things in the game by itself when the mod loads it, and BO3MacFix does the same
+then: a game this Mac hosts sends up to 125 snapshots a second (`sv_network_fps`; the Mac's default is 100) of up to
+50000 bytes a second per player (`sv_maxRate`; 20000), and votes, map switching and voice packets are off
+(`g_allowvote`, `sv_mapswitch` and `maxvoicepacketsperframe` at 0). They stay so until the game quits, as on Windows.
+
 ## Credits
 
 - [Alyssa / alltheamps](https://github.com/shiversoftdev) - guidance, help, t7patch and the cod2map64 patch DLL.

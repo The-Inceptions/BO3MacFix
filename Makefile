@@ -173,7 +173,7 @@ SOURCES += source/t7o_subtitle.c
 SOURCES += source/t7o_guards.c
 # ClientFieldGuard: a script error instead of a crash for a client field nobody registered (clientfield_guard.c)
 SOURCES += source/clientfield_guard.c
-# T7Overcharged's smaller pieces: customkeymap (t7o_small.c)
+# T7Overcharged's smaller pieces: customkeymap, SendMenuResponse's debounce, the dvars it changes (t7o_small.c)
 SOURCES += source/t7o_small.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
 # weapons back with their camo, attachments and ammo types, and its perks (zm_inventory.c, zm_loadout.c)
@@ -519,9 +519,9 @@ tests/test_t7o_subtitle: tests/test_t7o_subtitle.c source/t7o_subtitle.c source/
 
 # t7o_small.c: T7Overcharged's rules, and its game side against a made-up game (the test includes the source)
 tests/test_t7o_small: tests/test_t7o_small.c source/t7o_small.c source/t7o_small.h source/offsets.h source/dobby.h \
-		source/havok.h source/t7overcharged.h
+		source/havok.h source/t7overcharged.h source/gsc_obj.c source/gsc_obj.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-		-o $@ tests/test_t7o_small.c
+		-o $@ tests/test_t7o_small.c source/gsc_obj.c
 
 # script_errors.c's QuietScriptErrors: which script errors it shows, against made-up script engine memory (the test
 # includes the source itself)

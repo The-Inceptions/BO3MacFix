@@ -174,6 +174,8 @@ static int t7o_init(lua_State *s) {
     aae_breath_t7o_started();
     // the first start decides whether client effects get T7Overcharged's bigger table (aae_clientfx.c)
     aae_clientfx_t7o_started();
+    // what T7Overcharged changes in the game by itself when it starts (t7o_small.c)
+    t7o_small_mod_loaded();
     if (hks_load_source(s, (const char *)t7overcharged_lua, t7overcharged_lua_len, "=BO3MacFix T7Overcharged")) {
         hks_push_cfunction(s, lua_create_directory, "CreateDirectory");
         hks_push_cfunction(s, lua_directory_exists, "DirectoryExists");

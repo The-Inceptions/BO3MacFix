@@ -20,6 +20,7 @@
 #include <string.h>
 #include <time.h>
 #include "dobby.h"
+#include "gsc_obj.h"
 #include "havok.h"
 #include "offsets.h"
 #include "t7o_small.h"
@@ -196,6 +197,42 @@ bool t7o_menuresponse_debounce_passes(t7o_debounce *debounce, int call_debounce_
     return true;
 }
 
+#pragma mark - dvars
+
+// T7Overcharged's patches component (T7Overcharged.dll 0x1800f5a37): sv_maxRate and sv_network_fps lose all their
+// flags and get 50000 and 125 (the Mac's defaults are 20000 and 100, its limits 1000 to 50000 and 20 to 200); the
+// other three are only set. The limits aren't touched.
+const t7o_dvar_change t7o_network_defaults[] = {
+    { "sv_maxRate", true, 0, "50000" },
+    { "sv_network_fps", true, 0, "125" },
+    { "g_allowvote", false, 0, "0" },
+    { "sv_mapswitch", false, 0, "0" },
+    { "maxvoicepacketsperframe", false, 0, "0" },
+};
+const size_t t7o_network_default_count = sizeof(t7o_network_defaults) / sizeof(t7o_network_defaults[0]);
+
+int t7o_session_mode(uint32_t session_mode_state) {
+    return (int32_t)(session_mode_state << 28) >> 28;
+}
+
+#define Dvar_Flags 0x18          // uint32_t in dvar_t
+#define Dvar_Type 0x1c           // uint32_t
+#define Dvar_Modes 0x28          // a per-mode dvar's dvar_t * for each mode (the game's 0x100fa35ab reads them)
+#define Dvar_Type_PerMode 15
+#define Session_Modes 3          // zombies, multiplayer, campaign
+
+uint8_t *t7o_mode_dvar(uint8_t *dvar, int mode) {
+    uint32_t type;
+    memcpy(&type, dvar + Dvar_Type, sizeof(type));
+    if (type != Dvar_Type_PerMode)
+        return dvar;
+    if (mode < 0 || mode >= Session_Modes)
+        return NULL;
+    uint8_t *own;
+    memcpy(&own, dvar + Dvar_Modes + 8 * (size_t)mode, sizeof(own));
+    return own != NULL ? own : dvar;
+}
+
 #pragma mark - the game's side
 
 #define ClientUIActive_KeyCatchers 0x4 // int in local client 0's clientUIActive_t (0x1078 bytes each)
@@ -355,6 +392,49 @@ bool t7o_small_menuresponse_passes(int argc, const char *const *argv) {
     return passes;
 }
 
+// T7Overcharged's changes when it starts: on Windows its components start once, when the mod's Lua loads it
+static void *(*Dvar_FindByHash)(uint32_t hash);
+static void (*Dvar_SetFromStringByName)(const char *name, const char *value, bool create_if_missing);
+static const uint32_t *session_mode_state; // the game's
+static atomic_bool mod_loaded_once;
+
+static void apply_dvar_changes(const char *what, const t7o_dvar_change *changes, size_t count) {
+    int mode = t7o_session_mode(*session_mode_state);
+    int flags_set = 0;
+    for (size_t i = 0; i < count; i++) {
+        const t7o_dvar_change *change = &changes[i];
+        if (change->set_flags) {
+            uint8_t *dvar = Dvar_FindByHash(gsc_hash(change->name));
+            uint8_t *target = dvar != NULL ? t7o_mode_dvar(dvar, mode) : NULL;
+            if (target != NULL) {
+                uint32_t before;
+                memcpy(&before, target + Dvar_Flags, sizeof(before));
+                memcpy(target + Dvar_Flags, &change->flags, sizeof(change->flags));
+                flags_set++;
+                if (debug)
+                    printf("T7Overcharged: %s: %s%s flags 0x%x -> 0x%x\n", what, change->name,
+                           target != dvar ? " (this session mode's)" : "", before, change->flags);
+            } else if (debug) {
+                printf("T7Overcharged: %s: %s %s\n", what, change->name,
+                       dvar == NULL ? "isn't in this game" : "has no dvar for this session mode");
+            }
+        }
+        if (change->value != NULL) {
+            Dvar_SetFromStringByName(change->name, change->value, true);
+            if (debug)
+                printf("T7Overcharged: %s: %s set to %s\n", what, change->name, change->value);
+        }
+    }
+    printf("T7Overcharged: %s: %d dvars' flags set, in session mode %d\n", what, flags_set, mode);
+}
+
+void t7o_small_mod_loaded(void) {
+    // nothing before t7o_small_install, and the first time only
+    if (session_mode_state == NULL || atomic_exchange_explicit(&mod_loaded_once, true, memory_order_relaxed))
+        return;
+    apply_dvar_changes("network defaults", t7o_network_defaults, t7o_network_default_count);
+}
+
 void t7o_small_install(uint64_t base_address) {
     const char *debug_env = getenv("BO3MACFIX_T7ODEBUG");
     debug = debug_env != NULL && atoi(debug_env) != 0;
@@ -365,6 +445,9 @@ void t7o_small_install(uint64_t base_address) {
     ui_vm = (lua_State *const *)(base_address + ADDR_UI_luaVM);
     CritSec_ScopedLock = (void *)(base_address + ADDR_CritSec_ScopedLock);
     CritSec_ScopedUnlock = (void *)(base_address + ADDR_CritSec_ScopedUnlock);
+    Dvar_FindByHash = (void *)(base_address + ADDR_Dvar_FindByHash);
+    Dvar_SetFromStringByName = (void *)(base_address + ADDR_Dvar_SetFromStringByName);
+    session_mode_state = (const uint32_t *)(base_address + ADDR_sSessionModeState);
     Cmd_FindCommand = (void *)(base_address + ADDR_Cmd_FindCommand);
     Cmd_AddCommandInternal = (void *)(base_address + ADDR_Cmd_AddCommandInternal);
     if (Cmd_FindCommand("customkeymap") == NULL)

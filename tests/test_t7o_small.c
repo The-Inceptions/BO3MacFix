@@ -525,6 +525,147 @@ static void test_menuresponse(void) {
     CHECK(!t7o_small_menuresponse_passes(ARGC(flash), flash));
 }
 
+// ---- dvars: a made-up dvar table the game's Dvar_FindByHash and Dvar_SetFromStringByName work on
+
+typedef struct {
+    const char *name;
+    uint8_t dvar[0x60];          // dvar_t: flags at +0x18, type at +0x1c, a per-mode dvar's three at +0x28
+    uint8_t modes[3][0x60];      // a per-mode dvar's own ones
+    char value[32];
+    int sets;
+} game_dvar_t;
+static game_dvar_t game_dvars[8];
+static int game_dvar_count;
+static int unknown_sets; // sets of names the table doesn't have (created by the game)
+
+static game_dvar_t *add_dvar(const char *name, uint32_t type, uint32_t flags) {
+    game_dvar_t *d = &game_dvars[game_dvar_count++];
+    memset(d, 0, sizeof(*d));
+    d->name = name;
+    memcpy(d->dvar + 0x18, &flags, sizeof(flags));
+    memcpy(d->dvar + 0x1c, &type, sizeof(type));
+    return d;
+}
+static void set_mode_dvars(game_dvar_t *d, bool zombies, bool multiplayer, bool campaign, uint32_t flags) {
+    bool has[3] = { zombies, multiplayer, campaign };
+    for (int mode = 0; mode < 3; mode++) {
+        uint8_t *own = has[mode] ? d->modes[mode] : NULL;
+        memcpy(d->dvar + 0x28 + 8 * mode, &own, sizeof(own));
+        memcpy(d->modes[mode] + 0x18, &flags, sizeof(flags));
+    }
+}
+static uint32_t flags_of(const uint8_t *dvar) {
+    uint32_t flags;
+    memcpy(&flags, dvar + 0x18, sizeof(flags));
+    return flags;
+}
+static void *game_find_dvar(uint32_t hash) {
+    for (int i = 0; i < game_dvar_count; i++) {
+        if (gsc_hash(game_dvars[i].name) == hash)
+            return game_dvars[i].dvar;
+    }
+    return NULL;
+}
+static void game_set_dvar(const char *name, const char *value, bool create_if_missing) {
+    CHECK(create_if_missing);
+    for (int i = 0; i < game_dvar_count; i++) {
+        if (strcmp(game_dvars[i].name, name) == 0) {
+            snprintf(game_dvars[i].value, sizeof(game_dvars[i].value), "%s", value);
+            game_dvars[i].sets++;
+            return;
+        }
+    }
+    unknown_sets++;
+}
+static uint32_t game_session_mode;
+
+static void wire_dvars(void) {
+    game_dvar_count = 0;
+    unknown_sets = 0;
+    Dvar_FindByHash = game_find_dvar;
+    Dvar_SetFromStringByName = game_set_dvar;
+    session_mode_state = &game_session_mode;
+}
+
+static void test_session_mode(void) {
+    CHECK(t7o_session_mode(0) == 0 && t7o_session_mode(1) == 1 && t7o_session_mode(2) == 2);
+    CHECK(t7o_session_mode(3) == 3);
+    CHECK(t7o_session_mode(0x40 | 2) == 2);   // the network bits above don't count
+    CHECK(t7o_session_mode(0xfffffff0) == 0);
+    CHECK(t7o_session_mode(0x7) == 7 && t7o_session_mode(0x8) == -8 && t7o_session_mode(0xf) == -1); // with its sign
+
+    uint8_t plain[0x60], per_mode[0x60], zombies[0x60], campaign[0x60];
+    memset(plain, 0, sizeof(plain));
+    memset(per_mode, 0, sizeof(per_mode));
+    uint32_t type = 5;
+    memcpy(plain + 0x1c, &type, sizeof(type));
+    CHECK(t7o_mode_dvar(plain, 0) == plain && t7o_mode_dvar(plain, 3) == plain && t7o_mode_dvar(plain, -1) == plain);
+    type = 15;
+    memcpy(per_mode + 0x1c, &type, sizeof(type));
+    uint8_t *modes[3] = { zombies, NULL, campaign };
+    memcpy(per_mode + 0x28, modes, sizeof(modes));
+    CHECK(t7o_mode_dvar(per_mode, 0) == zombies);
+    CHECK(t7o_mode_dvar(per_mode, 1) == per_mode); // a mode without its own: the dvar itself
+    CHECK(t7o_mode_dvar(per_mode, 2) == campaign);
+    CHECK(t7o_mode_dvar(per_mode, 3) == NULL && t7o_mode_dvar(per_mode, -1) == NULL);
+    CHECK(t7o_mode_dvar(per_mode, 7) == NULL);
+    type = 14;
+    memcpy(per_mode + 0x1c, &type, sizeof(type));
+    CHECK(t7o_mode_dvar(per_mode, 0) == per_mode);
+}
+
+static void test_network_defaults(void) {
+    // T7Overcharged's five, in its order
+    CHECK(t7o_network_default_count == 5);
+    const t7o_dvar_change *d = t7o_network_defaults;
+    CHECK(strcmp(d[0].name, "sv_maxRate") == 0 && d[0].set_flags && d[0].flags == 0 &&
+          strcmp(d[0].value, "50000") == 0);
+    CHECK(strcmp(d[1].name, "sv_network_fps") == 0 && d[1].set_flags && d[1].flags == 0 &&
+          strcmp(d[1].value, "125") == 0);
+    CHECK(strcmp(d[2].name, "g_allowvote") == 0 && !d[2].set_flags && strcmp(d[2].value, "0") == 0);
+    CHECK(strcmp(d[3].name, "sv_mapswitch") == 0 && !d[3].set_flags && strcmp(d[3].value, "0") == 0);
+    CHECK(strcmp(d[4].name, "maxvoicepacketsperframe") == 0 && !d[4].set_flags && strcmp(d[4].value, "0") == 0);
+
+    // against the made-up game: the Mac's flags, values and a fourth dvar the table doesn't have
+    wire_dvars();
+    game_dvar_t *rate = add_dvar("sv_maxRate", 5, 0x0), *fps = add_dvar("sv_network_fps", 5, 0x1000);
+    game_dvar_t *vote = add_dvar("g_allowvote", 0, 0x5);
+    add_dvar("sv_mapswitch", 0, 0x100);
+    game_session_mode = 3;
+    mod_loaded_once = false;
+    session_mode_state = NULL;
+    t7o_small_mod_loaded(); // before the install: nothing
+    CHECK(rate->sets == 0 && !mod_loaded_once);
+    session_mode_state = &game_session_mode;
+    t7o_small_mod_loaded();
+    CHECK(flags_of(rate->dvar) == 0 && flags_of(fps->dvar) == 0 && flags_of(vote->dvar) == 0x5);
+    CHECK(strcmp(rate->value, "50000") == 0 && strcmp(fps->value, "125") == 0 && strcmp(vote->value, "0") == 0);
+    CHECK(strcmp(game_dvars[3].value, "0") == 0 && flags_of(game_dvars[3].dvar) == 0x100);
+    CHECK(unknown_sets == 1); // maxvoicepacketsperframe, created as with create_if_missing
+    // once, as T7Overcharged's components start once
+    memcpy(fps->dvar + 0x18, &(uint32_t){ 0x1000 }, sizeof(uint32_t));
+    t7o_small_mod_loaded();
+    CHECK(flags_of(fps->dvar) == 0x1000 && rate->sets == 1);
+    // with the debug lines, and a per-mode one in a mode it has
+    wire_dvars();
+    game_dvar_t *per_mode = add_dvar("sv_maxRate", 15, 0x100);
+    set_mode_dvars(per_mode, true, false, true, 0x101);
+    debug = true;
+    game_session_mode = 0;
+    apply_dvar_changes("network defaults", t7o_network_defaults, t7o_network_default_count);
+    CHECK(flags_of(per_mode->modes[0]) == 0 && flags_of(per_mode->modes[2]) == 0x101);
+    CHECK(flags_of(per_mode->dvar) == 0x100);
+    game_session_mode = 1; // a mode without its own: the dvar itself
+    apply_dvar_changes("network defaults", t7o_network_defaults, t7o_network_default_count);
+    CHECK(flags_of(per_mode->dvar) == 0 && flags_of(per_mode->modes[2]) == 0x101);
+    memcpy(per_mode->dvar + 0x18, &(uint32_t){ 0x100 }, sizeof(uint32_t));
+    game_session_mode = 3; // no mode: left alone, the value is still set
+    per_mode->sets = 0;
+    apply_dvar_changes("network defaults", t7o_network_defaults, t7o_network_default_count);
+    CHECK(flags_of(per_mode->dvar) == 0x100 && per_mode->sets == 1);
+    debug = false;
+}
+
 int main(void) {
     test_stoi();
     test_keyset();
@@ -534,6 +675,8 @@ int main(void) {
     test_keymap_lua();
     test_keymap_game();
     test_menuresponse();
+    test_session_mode();
+    test_network_defaults();
     if (failures == 0)
         printf("test_t7o_small: all passed\n");
     return failures == 0 ? 0 : 1;
