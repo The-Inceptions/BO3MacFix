@@ -31,7 +31,7 @@ bool prepatch_has_hook(uint32_t offset) {
 }
 static struct {
     void *address, *replacement, **original;
-} hooked[8];
+} hooked[16];
 static int hooks;
 // the made-up game's own test: what it answers, and how often it was asked
 static struct {
@@ -45,7 +45,7 @@ static bool game_draw_test(uint8_t *cg, uint8_t *ps) {
     return game_test.answer;
 }
 int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
-    if (hooks < 8)
+    if (hooks < 16)
         hooked[hooks] = (typeof(hooked[0])){ address, fake_func, out_origin_func };
     if (out_origin_func == (void **)&orig_CG_DrawCrosshairTest)
         *out_origin_func = (void *)game_draw_test;
@@ -53,7 +53,7 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     return 0;
 }
 static bool was_hooked(uint32_t place, void *replacement, void **original) {
-    for (int i = 0; i < hooks && i < 8; i++)
+    for (int i = 0; i < hooks && i < 16; i++)
         if (hooked[i].address == (void *)(0x100000000 + (uint64_t)place))
             return hooked[i].replacement == replacement && hooked[i].original == original;
     return false;
@@ -895,6 +895,161 @@ static void test_projectiles(void) {
     memset(clients, 0, sizeof(clients));
 }
 
+// ---- players on other machines: the two hooks, and shots that go by what a machine sent
+
+// the made-up game's server and connections
+static int32_t game_server_state;       // 0: this machine runs no server
+static uint8_t *game_connections;       // two clientConnection_t
+static uint8_t *game_server_clients;    // svs.clients: four client_t
+static struct {
+    int calls, local_client;
+    char text[AAE_FREEAIM_NET_TEXT];
+} queued;
+static void game_add_reliable(int local_client, const char *text) {
+    queued.calls++, queued.local_client = local_client;
+    snprintf(queued.text, sizeof(queued.text), "%s", text);
+}
+static struct {
+    int calls, local_client, queued_before;
+    void *command;
+} finished;
+static void game_finish_move(int local_client, void *command) {
+    finished.calls++, finished.local_client = local_client, finished.command = command;
+    finished.queued_before = queued.calls;
+}
+static struct {
+    int calls, client_ok, from_old_server;
+    uint8_t *client;
+    const char *text;
+} executed;
+static void game_execute(uint8_t *client, const char *text, int client_ok, int from_old_server) {
+    executed.calls++, executed.client = client, executed.text = text;
+    executed.client_ok = client_ok, executed.from_old_server = from_old_server;
+}
+static uint8_t *server_client(int player) {
+    return game_server_clients + (size_t)player * Client_Size;
+}
+static void set_client_state(int player, int32_t state) {
+    memcpy(server_client(player), &state, sizeof(state));
+}
+// the net code with the made-up game where aae_freeaim_init gave it the game's addresses
+static void net_for_tests(void) {
+    aae_freeaim_net_game_t with = net_game;
+    CL_AddReliableCommand = game_add_reliable;
+    with.server_state = &game_server_state;
+    with.client_connections = &game_connections;
+    with.server_clients = &game_server_clients;
+    aae_freeaim_net_init(&with);
+}
+// a client's command comes in at the server: whether the game got it (then with everything it came with)
+static bool reaches_the_game(uint8_t *client, const char *text, int from_old_server) {
+    executed.calls = 0;
+    fake_SV_ExecuteClientCommand(client, text, 7, from_old_server);
+    if (executed.calls == 1)
+        CHECK(executed.client == client && executed.text == text && executed.client_ok == 7 &&
+              executed.from_old_server == from_old_server);
+    return executed.calls == 1;
+}
+// a frame of a local client goes out: whether a command was queued with it (after the game's own function ran, once,
+// with what it was given)
+static bool queues(int local_client) {
+    static int a_command;
+    queued.calls = 0, finished.calls = 0;
+    fake_CL_FinishMove(local_client, &a_command);
+    CHECK(finished.calls == 1 && finished.local_client == local_client && finished.command == &a_command &&
+          finished.queued_before == 0);
+    CHECK(queued.calls <= 1 && (queued.calls == 0 || queued.local_client == local_client));
+    return queued.calls == 1;
+}
+
+static void test_other_machines(void) {
+    set_mod(true);
+    memset(clients, 0, sizeof(clients));
+    net_for_tests();
+    orig_Bullet_Fire = game_bullet, orig_SV_ExecuteClientCommand = game_execute, orig_CL_FinishMove = game_finish_move;
+    orig_Grenade_Spawn = game_grenade, orig_Rocket_Spawn = game_rocket, orig_Projectile_Spawn = game_projectile;
+    set_view(0, true, 0, 0);
+    set_view(1, true, 0, 1);
+    set_text("aae_freeaim_target", "-239 -1208 500");
+    set_dvar_kind("aae_freeaim_target_1", false, "", Dvar_Type_String);
+    set_dvar_kind("aae_freeaim_nonbullet", false, "", Dvar_Type_String);
+    game_server_state = 2;
+    for (int player = 0; player < 4; player++)
+        set_client_state(player, 5);
+
+    // The server's side. Player 2 is on another machine: no local client is theirs, so their shots go straight
+    set_shooter(2, true, true);
+    CHECK(!fires(shooter, shot) && !makes(1, shooter));
+    // their machine says where they aim: the command doesn't reach the game, and their shots go there (the numbers
+    // are half the point's)
+    CHECK(reaches_the_game(server_client(2), "say hi", 0) && reaches_the_game(server_client(2), "aaeoff", 0));
+    // (-140 -1108 140 is 99 and 100 away from where the shot starts)
+    CHECK(!reaches_the_game(server_client(2), "aae -70 -554 70", 0));
+    CHECK(fires(shooter, shot) && near(fired.directions[0], 0.70354f) && near(fired.directions[1], 0.71065f) &&
+          near(fired.directions[2], 0.0f));
+    CHECK(makes(0, shooter) && makes(1, shooter) && makes(2, shooter) && about(made_velocity[0], 633.19f) &&
+          about(made_velocity[1], 639.585f) && about(made_velocity[2], 0));
+    // a command from a server this one took over from is taken, and nothing is kept of it
+    CHECK(!reaches_the_game(server_client(3), "aae -70 -554 70", 1));
+    set_shooter(3, true, true);
+    CHECK(!fires(shooter, shot));
+    set_shooter(2, true, true);
+    // the dvar aae_freeaim_enabled switches it off on the server too; one that can't be read is off here
+    set_text("aae_freeaim_enabled", "0");
+    CHECK(!fires(shooter, shot) && !makes(1, shooter));
+    set_text("aae_freeaim_enabled", "on");
+    CHECK(!fires(shooter, shot));
+    set_dvar("aae_freeaim_enabled", false, 1);
+    CHECK(fires(shooter, shot));
+    // A player who sent a point and is a local client's as well: the point that was sent counts
+    set_view(0, true, 0, 2);
+    CHECK(after_a_while(0, false) && fires(shooter, shot) && near(fired.directions[0], 0.70354f));
+    // and when it doesn't count any more (the client isn't in the game, but its entry is still there), nothing
+    // does: the local client's own point is not used for them
+    set_client_state(2, 4);
+    CHECK(!fires(shooter, shot) && !makes(1, shooter));
+    set_client_state(2, 5);
+    CHECK(fires(shooter, shot) && near(fired.directions[0], 0.70354f));
+    // "aae off": the entry is gone, and the local client's point is theirs again
+    CHECK(!reaches_the_game(server_client(2), "aae off", 0));
+    CHECK(fires(shooter, shot) && near(fired.directions[2], 1.0f));
+    set_view(0, true, 0, 0);
+    // without the mod the command is the game's
+    set_mod(false);
+    CHECK(reaches_the_game(server_client(2), "aae -70 -554 70", 0));
+    set_mod(true);
+    CHECK(!fires(shooter, shot));
+
+    // The client's side. With a server on this machine nothing is sent
+    memset(clients, 0, sizeof(clients));
+    net_for_tests();
+    set_text("aae_freeaim_target", "-139 -1108 140");
+    CHECK(after_a_while(0, false) && !queues(0));
+    // in somebody else's game: the point under the crosshair, halved, once
+    game_server_state = 0;
+    test_now += 1000;
+    CHECK(crosshair_asks(0, false) && queues(0) && strcmp(queued.text, "aae -70 -554 70") == 0);
+    test_now += 1000;
+    CHECK(crosshair_asks(0, false) && !queues(0));
+    // free aim off: "aae off", once
+    set_view(0, false, 0, 0);
+    test_now += 1000;
+    CHECK(!crosshair_asks(0, false) && queues(0) && strcmp(queued.text, "aae off") == 0 && !queues(0));
+    set_view(0, true, 0, 0);
+    // a local client the crosshair code was never at work for sends nothing, and counts as not in third person
+    set_text("aae_freeaim_target_1", "5 6 7");
+    CHECK(!queues(1) && (clients[1].third_person & 3) == 1);
+    // a cg_t that isn't the client's in the game's array any more is not read (this one can't be)
+    CHECK(after_a_while(0, false));
+    clients[0].cg = (const void *)16;
+    set_shooter(0, true, true);
+    test_now += 1000;
+    CHECK(!queues(0) && !fires(shooter, shot) && !makes(1, shooter));
+    game_server_state = 2;
+    memset(clients, 0, sizeof(clients));
+    net_for_tests();
+}
+
 static void test_init(void) {
     const uint64_t base = 0x100000000;
     aae_freeaim_init(base, 0);
@@ -905,15 +1060,29 @@ static void test_init(void) {
         have_stubs = i < 2, stub_missing_for = i < 2 ? places[i] : -1;
         hooks = 0;
         aae_freeaim_init(base, 1);
-        CHECK(hooks == 5 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
+        CHECK(hooks == 7 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
                                        (void **)&orig_CG_DrawCrosshairTest) &&
               was_hooked(ADDR_Bullet_Fire, (void *)fake_Bullet_Fire, (void **)&orig_Bullet_Fire) &&
               was_hooked(ADDR_Grenade_Spawn, (void *)fake_Grenade_Spawn, (void **)&orig_Grenade_Spawn));
     }
     have_stubs = true, stub_missing_for = -1;
     hooks = 0;
+    // (what the net code keeps is emptied when it is set up)
+    atomic_store(&aae_freeaim_net_table()->in_use, 5);
+    aae_freeaim_net_sender(1)->sent_at = 9;
     aae_freeaim_init(base, 1);
-    CHECK(hooks == 7 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
+    CHECK(atomic_load(&aae_freeaim_net_table()->in_use) == 0 && aae_freeaim_net_sender(1)->sent_at == 0);
+    CHECK(was_hooked(ADDR_CL_FinishMove, (void *)fake_CL_FinishMove, (void **)&orig_CL_FinishMove) &&
+          was_hooked(ADDR_SV_ExecuteClientCommand, (void *)fake_SV_ExecuteClientCommand,
+                     (void **)&orig_SV_ExecuteClientCommand));
+    CHECK(net_game.add_reliable_command == queue_command &&
+          CL_AddReliableCommand == (void *)(base + ADDR_CL_AddReliableCommand) &&
+          net_game.server_state == (void *)(base + ADDR_sv_state) &&
+          net_game.client_connections == (void *)(base + ADDR_clientConnections) &&
+          net_game.server_clients == (void *)(base + ADDR_svs_clients) && net_game.client_size == 0xe5270 &&
+          net_game.active == aae_plugin_loaded_lately && net_game.on == net_on && net_game.map == net_map &&
+          net_game.local_target == local_target && net_game.now_ms == net_now);
+    CHECK(hooks == 9 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
                                    (void **)&orig_CG_DrawCrosshairTest));
     CHECK(was_hooked(ADDR_Bullet_Fire, (void *)fake_Bullet_Fire, (void **)&orig_Bullet_Fire));
     CHECK(was_hooked(ADDR_Grenade_Spawn, (void *)fake_Grenade_Spawn, (void **)&orig_Grenade_Spawn) &&
@@ -926,7 +1095,8 @@ static void test_init(void) {
     CHECK(Cg_Size == 0x342a80 && Cg_ThirdPerson == 0x11a8c9 && Cg_PlayerState == 0x11a8d0 && Ps_Kind == 4 &&
           Ps_Sights == 0x2fc && Frame_Sights == -0x50 && Weapon_LeastGap == 0x6f0 && Dvar_Type == 0x1c &&
           Dvar_Type_String == 8 && Entity_Client == 0x250 && Ps_ThirdPerson == 0xbc && Shot_Muzzle == 0x24 &&
-          Max_Players == 64 && Entity_Origin == 0x1c && Entity_Velocity == 0x28 && Entity_Angles == 0x23c);
+          Max_Players == 64 && Entity_Origin == 0x1c && Entity_Velocity == 0x28 && Entity_Angles == 0x23c &&
+          Client_Size == 0xe5270);
     CHECK(Dvar_FindByHash == (void *)(base + ADDR_Dvar_FindByHash) &&
           Dvar_GetString == (void *)(base + ADDR_Dvar_GetString) && cg_clients == (void *)(base + ADDR_cgArray) &&
           crosshair_asks_from == (const void *)(base + ADDR_CG_DrawCrosshair_TestReturn) && now_ms == uptime_ms);
@@ -946,6 +1116,8 @@ int main(void) {
     (void)folder;
     plugin_now_ms = test_plugin_now;
     game_cgs = calloc(3, Cg_Size);
+    game_connections = calloc(2, 0x25780);
+    game_server_clients = calloc(4, Client_Size);
 
     test_init();
     loaded_mod = loaded_name;
@@ -954,6 +1126,7 @@ int main(void) {
     set_text("mapname", "zm_theater");
     cg_clients = &game_cgs;
     now_ms = test_clock;
+    net_for_tests();
     test_rule();
     test_hook();
     test_gap();
@@ -964,8 +1137,11 @@ int main(void) {
     test_shots();
     test_projectile();
     test_projectiles();
+    test_other_machines();
 
     free(game_cgs);
+    free(game_connections);
+    free(game_server_clients);
     snprintf(command, sizeof(command), "rm -rf '%s'", template);
     if (system(command) != 0)
         failures++;

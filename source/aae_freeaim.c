@@ -3,7 +3,8 @@
 // The game has no crosshair in third person: its test for drawing one says no while the view is a third person one
 // (unless the weapon wants one anyway). The mod has a third person view of its own, and its plugin gives it a
 // crosshair and makes shots go to what is under it. This file is that, piece by piece: the crosshair, the crosshair
-// while aiming, and bullets, rockets, grenades and other projectiles ("where the shots go" further down).
+// while aiming, and bullets, rockets, grenades and other projectiles ("where the shots go" further down). How a
+// player on another machine tells the server where they aim is in aae_freeaim_net.c; its hooks are here.
 //
 // The crosshair: the game's test for drawing one says yes while free aim is on. Free aim is on, by the plugin's rule, for a local client
 // whose crosshair code was at work within the last 250 ms (the plugin notes that at a place of its own right before
@@ -37,6 +38,7 @@
 #include <string.h>
 #include <time.h>
 #include "aae_freeaim.h"
+#include "aae_freeaim_net.h"
 #include "aae_plugin.h"
 #include "detour.h"
 #include "dobby.h"
@@ -340,6 +342,7 @@ bool aae_freeaim_projectile(const float origin[3], const float velocity[3], cons
 #define Entity_Velocity 0x28     // and how fast it goes along it
 #define Entity_Angles 0x23c      // pitch, yaw and roll
 #define Max_Players 64
+#define Client_Size 0xe5270      // client_t, the server's record of a connected client (0xe5170 on Windows)
 
 static uint64_t base_address;
 static int debug;
@@ -404,13 +407,14 @@ static int local_client_of(const uint8_t *cg) {
     return (int)(offset / Cg_Size);
 }
 
-// whether free aim is on for the local client this cg_t is of, for the places behind the crosshair's test: the
-// client has been seen there with this cg_t
+// The cg_t the crosshair code was last at work with for this local client, or NULL: for never, and for one that
+// isn't this client's cg_t in the game's array any more (the plugin reads such a pointer with a call that fails for
+// memory that is gone; here it isn't read at all).
 static const void *seen_cg(int which) {
     pthread_mutex_lock(&clients_lock);
     const void *cg = clients[which].cg;
     pthread_mutex_unlock(&clients_lock);
-    return cg;
+    return local_client_of(cg) == which ? cg : NULL;
 }
 static bool on_now(const uint8_t *cg) {
     int which = local_client_of(cg);
@@ -492,8 +496,8 @@ static bool fake_CG_DrawCrosshairTest(uint8_t *cg, uint8_t *ps) {
 // Rockets, grenades and other projectiles are entities the server makes, each with a place and a velocity. Right
 // after one is made for such a player the plugin turns its velocity at the point, from where the thing is, and
 // gives it the angles of its new way (unless the dvar aae_freeaim_nonbullet is 0).
-// For a player on this machine the point is read straight from the dvar. (A player on another machine sends theirs
-// to the server; that part isn't here yet.)
+// For a player on this machine the point is read straight from the dvar. A player on another machine sends theirs
+// to the server (aae_freeaim_net.c), and a point that came that way goes first.
 
 // the point under the crosshair of a local client, as the mod's script left it
 static bool local_target(int which, float target[3]) {
@@ -509,9 +513,13 @@ static bool third_person_player(const uint8_t *entity, uint32_t *number) {
     return player != NULL && player[Ps_ThirdPerson] != 0 && *number < Max_Players;
 }
 
-// The point this player's shots are to go to: the one of the first local client that is this player, while free aim
-// is on for them.
+// The point this player's shots are to go to. A player whose machine sent one: that point, unless the dvar
+// aae_freeaim_enabled is 0 or the lookup says no (the client went away, the map isn't a zombies one), and then none
+// at all: the plugin doesn't look at the local clients for such a player. Anybody else: the point of the first
+// local client that is this player, while free aim is on for them.
 static bool target_of(uint32_t number, float target[3]) {
+    if (aae_freeaim_net_remote_entry(number))
+        return switch_dvar("aae_freeaim_enabled", 0.0f) != 0.0f && aae_freeaim_net_remote_target(number, target);
     for (int which = 0; which < Local_Clients; which++) {
         const uint8_t *cg = seen_cg(which);
         uint32_t cg_number;
@@ -617,6 +625,60 @@ install_hook_name(Projectile_Spawn, uint8_t *, uint8_t *owner, uint64_t second, 
     return made;
 }
 
+// ---- players on other machines: what aae_freeaim_net.c asks of this file, and its two hooks
+
+// The plugin's "is free aim on for this local client", as its hook on CL_FinishMove asks it every frame. For a
+// client the crosshair code never was at work for, the plugin's rule still runs and notes "not third person".
+static bool net_on(int which, uint64_t now) {
+    const uint8_t *cg = seen_cg(which);
+    if (cg != NULL)
+        return on_for(which, cg);
+    pthread_mutex_lock(&clients_lock);
+    aae_freeaim_on(&clients[which], now, UINT32_MAX, false, 0, NULL, 0.0f, 0.0f);
+    pthread_mutex_unlock(&clients_lock);
+    return false;
+}
+static const char *net_map(void) {
+    return dvar_text("mapname", NULL);
+}
+static uint64_t net_now(void) {
+    return now_ms();
+}
+// a debug line for the first few of something that can come many times a second, and for every 200th after
+static bool few(unsigned *count) {
+    return debug && (++*count <= 5 || *count % 200 == 0);
+}
+static void (*CL_AddReliableCommand)(int local_client, const char *text);
+static void queue_command(int local_client, const char *text) {
+    static unsigned count;
+    if (few(&count))
+        printf("free aim: local client %d tells the server \"%s\" (%u so far)\n", local_client, text, count);
+    CL_AddReliableCommand(local_client, text);
+}
+static aae_freeaim_net_game_t net_game = { .active = aae_plugin_loaded_lately, .now_ms = net_now, .map = net_map,
+                                           .on = net_on, .local_target = local_target,
+                                           .add_reliable_command = queue_command, .client_size = Client_Size };
+
+// The client has put together what it sends the server for this frame: (the local client, the command). The
+// plugin's work comes behind the game's.
+install_hook_name(CL_FinishMove, void, int local_client, void *command) {
+    orig_CL_FinishMove(local_client, command);
+    aae_freeaim_net_client_frame(local_client);
+}
+
+// The server got a command from a client: (the client's record, the text, two switches). "aae ..." is the plugin's
+// and doesn't reach the game.
+install_hook_name(SV_ExecuteClientCommand, void, uint8_t *client, const char *text, int client_ok,
+                  int from_old_server) {
+    if (aae_freeaim_net_server_command(client, text, from_old_server)) {
+        static unsigned count;
+        if (few(&count))
+            printf("free aim: a client's \"%s\" was taken (%u so far)\n", text, count);
+        return;
+    }
+    orig_SV_ExecuteClientCommand(client, text, client_ok, from_old_server);
+}
+
 void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     if (!enabled)
         return;
@@ -634,6 +696,13 @@ void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     install_hook_Grenade_Spawn((void *)(base_address + ADDR_Grenade_Spawn));
     install_hook_Rocket_Spawn((void *)(base_address + ADDR_Rocket_Spawn));
     install_hook_Projectile_Spawn((void *)(base_address + ADDR_Projectile_Spawn));
+    CL_AddReliableCommand = (void *)(base_address + ADDR_CL_AddReliableCommand);
+    net_game.server_state = (const int32_t *)(base_address + ADDR_sv_state);
+    net_game.client_connections = (uint8_t *const *)(base_address + ADDR_clientConnections);
+    net_game.server_clients = (uint8_t *const *)(base_address + ADDR_svs_clients);
+    aae_freeaim_net_init(&net_game);
+    install_hook_CL_FinishMove((void *)(base_address + ADDR_CL_FinishMove));
+    install_hook_SV_ExecuteClientCommand((void *)(base_address + ADDR_SV_ExecuteClientCommand));
     if (!prepatch_has_hook(ADDR_CG_DrawCrosshair_Tests) || !prepatch_has_hook(ADDR_CG_DrawCrosshair_Gap)) {
         printf("free aim: not running from the pre-patched executable: the third person crosshair goes away while "
                "aiming down the sights, as the game's own does\n");

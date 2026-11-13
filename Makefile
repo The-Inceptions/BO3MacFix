@@ -32,6 +32,8 @@ TEST_TARGETS += tests/test_detour
 TEST_TARGETS += tests/test_aae_prompt
 # when the mod's free aim is on, and the crosshair test's hook (aae_freeaim.c)
 TEST_TARGETS += tests/test_aae_freeaim
+# free aim for players on other machines: what is sent, what the server keeps (aae_freeaim_net.c)
+TEST_TARGETS += tests/test_aae_freeaim_net
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -95,8 +97,9 @@ SOURCES += source/aae_mantle.c
 SOURCES += source/aae_plugin.c
 # AAEPrompts: the mod's prompts in the world, kept by distance as the plugin makes the game keep them (aae_prompt.c)
 SOURCES += source/aae_prompt.c
-# AAEFreeAim: a crosshair in the mod's third person view (aae_freeaim.c)
-SOURCES += source/aae_freeaim.c
+# AAEFreeAim: a crosshair in the mod's third person view, and shots that go to what is under it (aae_freeaim.c);
+# what a player on another machine sends the server for that (aae_freeaim_net.c)
+SOURCES += source/aae_freeaim.c source/aae_freeaim_net.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -220,11 +223,18 @@ tests/test_aae_prompt: tests/test_aae_prompt.c tests/prompt_glide_frames.h sourc
 
 # aae_freeaim.c: the plugin's rule for free aim being on, and the crosshair test's hook against a made-up game
 tests/test_aae_freeaim: tests/test_aae_freeaim.c tests/freeaim_cases.h source/aae_freeaim.c source/aae_freeaim.h \
-		source/aae_plugin.c \
+		source/aae_plugin.c source/aae_freeaim_net.c source/aae_freeaim_net.h \
 		source/aae_plugin.h source/detour.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h \
 		source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-		-o $@ tests/test_aae_freeaim.c source/gsc_obj.c
+		-o $@ tests/test_aae_freeaim.c source/gsc_obj.c source/aae_freeaim_net.c
+
+# aae_freeaim_net.c: what a client sends the server, what the server keeps and looks up, against a made-up game and
+# against what the plugin's own code gave for the same cases
+tests/test_aae_freeaim_net: tests/test_aae_freeaim_net.c tests/freeaim_net_cases.h tests/freeaim_net_side.h \
+		source/aae_freeaim_net.c source/aae_freeaim_net.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_freeaim_net.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h
