@@ -26,6 +26,7 @@
 #include "aae_breath.h"
 #include "aae_build.h"
 #include "aae_cheats.h"
+#include "aae_lan.h"
 #include "aae_mantle.h"
 #include "aae_move_slide.h"
 #include "aae_freeaim.h"
@@ -1211,6 +1212,10 @@ __attribute__((constructor)) static void dylib_main() {
     // mantling by the rules All-around Enhancement 4 gives its Windows plugin (AAEMantling, on by default), see
     // aae_mantle.c
     aae_mantle_init(game_base_address, read_int_setting_or_env("AAEMantling", 1));
+
+    // games on the local network joined as All-around Enhancement 4's Windows plugin joins them (AAELanJoin, on by
+    // default), see aae_lan.c
+    aae_lan_init(game_base_address, read_int_setting_or_env("AAELanJoin", 1));
 
     // All-around Enhancement 4's prompts in the world shown and hidden by distance, as its Windows plugin makes the
     // game do it (AAEPrompts, on by default), see aae_prompt.c

@@ -8,6 +8,8 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag \
 	tests/test_t7o_subtitle
 TEST_TARGETS += tests/test_launch_args
+# the plugin's packets and rules for joining a game on the local network, its listener over the loopback (aae_lan.c)
+TEST_TARGETS += tests/test_aae_lan
 # compiled scripts and All-around Enhancement 4's patch scripts (gsc_obj.c)
 TEST_TARGETS += tests/test_gsc_obj
 # loading them and redirecting calls, against a made-up game (gsc_detours.c)
@@ -173,6 +175,8 @@ SOURCES += source/t7o_subtitle.c
 SOURCES += source/t7o_guards.c
 # ClientFieldGuard: a script error instead of a crash for a client field nobody registered (clientfield_guard.c)
 SOURCES += source/clientfield_guard.c
+# AAELanJoin: joining a game of the mod on the local network as its plugin makes it work (aae_lan.c)
+SOURCES += source/aae_lan.c
 # T7Overcharged's smaller pieces: customkeymap, SendMenuResponse's debounce, the dvars it changes (t7o_small.c)
 SOURCES += source/t7o_small.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -439,6 +443,12 @@ tests/test_aae_skeleton: tests/test_aae_skeleton.c source/aae_skeleton.c source/
 		source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -fno-omit-frame-pointer -Wall -Wextra -Werror -fsanitize=address,undefined \
 		-fno-sanitize-recover=undefined -o $@ tests/test_aae_skeleton.c
+
+# aae_lan.c: the plugin's packets and rules, and the host's listener talking to the test over the loopback
+tests/test_aae_lan: tests/test_aae_lan.c source/aae_lan.c source/aae_lan.h source/aae_plugin.c source/aae_plugin.h \
+		source/offsets.h source/steam.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_lan.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h
