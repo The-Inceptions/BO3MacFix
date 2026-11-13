@@ -1477,6 +1477,72 @@ static void set_mod(bool loaded) {
     plugin_time += Plugin_Look_Ms;
 }
 
+// LUI starts up: the lines forget the Lua state they were set up from and their references, nothing else
+static void test_forget_lines(void) {
+    fresh();
+    line_args(elements[0], "tag_flash", Hks_Function_Lua);
+    lua_tag_widget_line(L);
+    HKS_BASE(other_L) = stack;
+    HKS_TOP(other_L) = stack + 6;
+    line_args(elements[1], NULL, Hks_Function_Lua);
+    put(1, Light_Userdata, elements[1]);
+    lua_tag_widget_line(other_L);
+    aae_vmwidget_line_t *first = line_of(&state, elements[0], false), *second = line_of(&state, elements[1], false);
+    aae_vmwidget_tag_t *flash = first->tag, *right = second->tag;
+    first->before = fake_before;
+    CHECK(first->lua == L && second->lua == other_L && first->function_reference == 3 && second->table_reference == 6);
+    CHECK(aae_vmwidget_forget_lines(&state) == 2);
+    static const HksObject nothing;
+    for (int i = 0; i < 2; i++) {
+        aae_vmwidget_line_t *line = i == 0 ? first : second;
+        CHECK(line->lua == NULL && line->function_reference == -2 && line->table_reference == -2 &&
+              memcmp(&line->function, &nothing, sizeof(nothing)) == 0 &&
+              memcmp(&line->table, &nothing, sizeof(nothing)) == 0);
+    }
+    // the rest stays: the records by their elements, their tags with their users, offsets, the update from before
+    CHECK(line_of(&state, elements[0], false) == first && line_of(&state, elements[1], false) == second &&
+          state.line_count == 2 && first->tag == flash && second->tag == right && state.users[flash - state.tag] == 1 &&
+          state.users[right - state.tag] == 1 && first->offset[2] == 3.0f && first->before == fake_before);
+    // nothing given back to any Lua VM
+    CHECK(asked.unrefs == 0);
+    // again: none had one left
+    CHECK(aae_vmwidget_forget_lines(&state) == 0);
+    // all of them, also with a full table
+    fresh();
+    for (uint64_t address = 0x10000; state.line_count < AAE_VMWIDGET_WIDGETS && address < 0x200000; address += 0x1a0)
+        aae_vmwidget_line(&state, (void *)address)->lua = L;
+    CHECK(state.line_count == AAE_VMWIDGET_WIDGETS && aae_vmwidget_forget_lines(&state) == AAE_VMWIDGET_WIDGETS &&
+          state.line[AAE_VMWIDGET_WIDGETS - 1].lua == NULL && state.line[0].lua == NULL);
+}
+
+// What the plugin would get wrong after LUI starts up again, as round 3's map_restart showed the game: the new Lua
+// state at the old one's address, the same reference numbers again, and an element at a line's old address.
+static void test_restart(void) {
+    fresh();
+    game_list();
+    generic_method = &list[1];
+    generic_function = generic_stand_in;
+    orig_LUI_Startup = fake_startup;
+    line_args(elements[0], "tag_flash", Hks_Function_Lua);
+    lua_tag_widget_line(L);
+    aae_vmwidget_line_t *line = line_of(&state, elements[0], false);
+    CHECK(line->function_reference == 3 && line->table_reference == 4 && asked.unrefs == 0);
+    // LUI starts up again; the new VM's registry hands out 3 and 4 again
+    fake_LUI_Startup(1, 2);
+    CHECK(startup.calls >= 1 && line->lua == NULL);
+    next_reference = 3;
+    line_args(elements[0], "tag_flash", Hks_Function_Lua);
+    lua_tag_widget_line(L);
+    // the new line keeps its references: none given back (the plugin would give back 3 and 4, its own)
+    CHECK(asked.unrefs == 0 && line->lua == L && line->function_reference == 3 && line->table_reference == 4 &&
+          update_of(elements[0]) == line_update);
+    // set up again in the same VM: the plugin's rule, the old ones given back
+    line_args(elements[0], "tag_flash", Hks_Function_Lua);
+    lua_tag_widget_line(L);
+    CHECK(asked.unrefs == 2 && asked.unref_reference[0] == 3 && asked.unref_reference[1] == 4 &&
+          line->function_reference == 5 && line->table_reference == 6);
+}
+
 static void test_startup(void) {
     fresh();
     game_list();
@@ -1740,6 +1806,8 @@ int main(void) {
     test_widget_update();
     test_line_update();
     test_startup();
+    test_forget_lines();
+    test_restart();
     test_after_skeleton();
     test_like_the_plugin();
 

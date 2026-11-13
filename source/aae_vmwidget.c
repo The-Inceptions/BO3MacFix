@@ -9,7 +9,8 @@
 //   element:setupViewmodelTagWidgetLine(tag, x, y, z, callback)
 //       each frame callback(place) is called with a table {screen x, screen y} of that point (always the same
 //       table), or with nil while there is none; the element's own update runs first. An error in callback switches
-//       it off until the element is set up again.
+//       it off until the element is set up again. Where this differs from the plugin: a line forgets the Lua VM it was
+//       set up in when LUI starts up again (aae_vmwidget_forget_lines says why).
 // The tag is "tag_weapon_right" when none is given. Neither returns anything. All-around Enhancement 4.1.7 calls
 // neither: they are here so that the Mac has what the plugin has, for a version of the mod that uses them.
 //
@@ -221,6 +222,35 @@ aae_vmwidget_widget_t *aae_vmwidget_widget(aae_vmwidget_state_t *state, const vo
 
 aae_vmwidget_line_t *aae_vmwidget_line(aae_vmwidget_state_t *state, const void *element) {
     return line_of(state, element, true);
+}
+
+// LUI starts up: a new Lua VM is made, and the one the lines were set up in is gone, its registry with it.
+//
+// The plugin doesn't do this. It keeps a line's Lua state and its two registry references until the element is set
+// up again, and then, if that is from the same Lua state, gives those references back after it has taken the new
+// ones. LUI starts up again at every map's start and at map_restart; the new Lua state is made at the same address
+// as the old one, and its first references come out with the same numbers (both seen in the game: the state at
+// 0xe675b0188 and the line's references 516 and 517, before and after a map_restart). The elements come from a pool
+// that start-up empties and hands out again, so an element of the new VM can be at the address of a line from
+// before. Set up as a line, the plugin would then give 516 and 517 back in the new VM: the references that line has
+// just taken for itself. Its function and table would be left to the garbage collector while the line still calls
+// them, and the next luaL_ref would hand the same numbers out a second time. So here the lines forget the Lua state
+// and the references (and what they held) when LUI starts up. The rest of each line stays as the plugin keeps it:
+// its element, its tag and offsets (the tag keeps its user, as with the plugin).
+// Returns how many lines had a Lua state to forget.
+int aae_vmwidget_forget_lines(aae_vmwidget_state_t *state) {
+    int forgotten = 0;
+    for (uint32_t i = 0; i < state->line_count && i < AAE_VMWIDGET_WIDGETS; i++) {
+        aae_vmwidget_line_t *line = &state->line[i];
+        if (line->lua != NULL)
+            forgotten++;
+        line->lua = NULL;
+        line->function_reference = No_Lookup;
+        line->table_reference = No_Lookup;
+        memset(&line->function, 0, sizeof(line->function));
+        memset(&line->table, 0, sizeof(line->table));
+    }
+    return forgotten;
 }
 
 void aae_vmwidget_move(aae_vmwidget_state_t *state, aae_vmwidget_tag_t **tag, aae_vmwidget_tag_t *to) {
@@ -609,9 +639,8 @@ static int lua_tag_widget_line(lua_State *s) {
         release(s, table_reference);
         return 0;
     }
-    // The references an element set up before had are given back, when it was set up from this same Lua state. The
-    // plugin's rule, odd as it is: a Lua state made again at the same address (LUI starts up again) gives back the
-    // old VM's numbers in the new one's registry.
+    // The references an element set up before had are given back, when it was set up from this same Lua state (the
+    // plugin's rule; a line from a Lua VM that is gone has forgotten it, see aae_vmwidget_forget_lines).
     if (line->lua == s && hksi_luaL_unref != NULL) {
         if (debug)
             printf("viewmodel widgets: setupViewmodelTagWidgetLine: element %p was set up before from this Lua state: "
@@ -779,6 +808,10 @@ static aae_vmwidget_method_t tag_widget_method = { "setupViewmodelTagWidget", lu
 
 // LUI starts up: a new Lua VM is made and the UI element methods are registered in it
 install_hook_name(LUI_Startup, void, uint64_t first, uint64_t second) {
+    int forgotten = aae_vmwidget_forget_lines(&state);
+    if (debug && forgotten > 0)
+        printf("viewmodel widgets: LUI starts up again: %d lines forget the Lua VM they were set up in and its "
+               "references\n", forgotten);
     bool loaded = aae_plugin_loaded();
     bool there = aae_vmwidget_splice(generic_method, generic_function, &tag_widget_method, &tag_widget_line_method,
                                      loaded);

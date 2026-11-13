@@ -88,6 +88,9 @@ aae_vmwidget_tag_t *aae_vmwidget_tag(aae_vmwidget_state_t *state, uint32_t name)
 // the widget of this element, made when there's none and there is room; NULL when there isn't
 aae_vmwidget_widget_t *aae_vmwidget_widget(aae_vmwidget_state_t *state, const void *element);
 aae_vmwidget_line_t *aae_vmwidget_line(aae_vmwidget_state_t *state, const void *element);
+// LUI starts up: every line forgets the Lua state it was set up from and its two references, which belong to the
+// Lua VM that is gone (unlike the plugin, see aae_vmwidget.c); returns how many had one
+int aae_vmwidget_forget_lines(aae_vmwidget_state_t *state);
 // a widget moves from the tag in *tag to this one: the old one loses a user, the new one gains one
 void aae_vmwidget_move(aae_vmwidget_state_t *state, aae_vmwidget_tag_t **tag, aae_vmwidget_tag_t *to);
 
