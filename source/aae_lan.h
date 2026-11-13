@@ -90,3 +90,8 @@ aae_lan_plan_t aae_lan_plan(aae_lan_join_t *join, uint64_t now, int network_mode
 bool aae_lan_waited(const aae_lan_join_t *join, const aae_lan_plan_t *plan, uint64_t now, uint64_t *id);
 // Whether the Join is dropped: it came in the window and another connect began, or the target changed, meanwhile.
 bool aae_lan_dropped(const aae_lan_join_t *join, const aae_lan_plan_t *plan);
+
+// ---- lobby messages
+// A lobby message's packet as the game sends one to a player (an int 0x28, then '1', the message's type and data):
+// to a person's Steam ID the plugin sends those through the player's own Steam networking first.
+bool aae_lan_lobby_message(uint64_t to, const uint8_t *packet, uint32_t length);

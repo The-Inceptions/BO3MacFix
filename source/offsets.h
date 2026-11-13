@@ -606,6 +606,8 @@
 #define ADDR_PlaylistVersion_Get 0x11153ae // func - int (): the playlist version * 10000 + its minor one, which the host's join check compares with the joiner's (Windows 0x142236fb0)
 #define ADDR_FFOTDVersion_Get 0x12307c8 // func - int (): the ffotd version, compared the same way (Windows 0x141eb7680)
 #define ADDR_localUsers 0x20915f0 // two pointers to the local users' structs, each with its xuid first: what IsLocalXuid (0x103a7f6) compares an xuid with (Windows: IsLocalXuid 0x141eba6a0)
+#define ADDR_LanJoin_SendLobbyPacket 0xf6aa95 // func - bool (uint64_t xuid, const void *packet, int length): a lobby message's packet through the Steam game server's networking; its one caller, SendLobbyPacket (0x1435e56: an int 0x28, then '1', the type and the data; 0x408 bytes), sends it through the player's own (ADDR_LanJoin_UserSend) when this fails (Windows 0x141ea9f70, in 0x141ea3730)
+#define ADDR_LanJoin_UserSend 0x1054ed8 // func - the same through the player's own Steam networking (Windows 0x141ea77d0)
 // -- end lan join
 // T7Overcharged's smaller pieces (t7o_small.c); Windows addresses from T7Overcharged's own patterns for its names
 #define ADDR_Sys_QueEvent 0xd62e06 // func - void (int time, int type, int value, int value2, int, int, void *): the window's key and mouse messages into the game's event queue (256 of 32 bytes, critical section 0x31); type 1 is a key, value2 1 down and 0 up; mouse buttons are keys 200-204 (Windows 0x1422882e0, T7Overcharged's OFF_sys_que_event: the same body and callers)

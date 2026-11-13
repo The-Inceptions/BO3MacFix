@@ -60,6 +60,23 @@ static uint64_t game_join(uint64_t controller, uint64_t xuid, uint64_t join_type
     game.controller = controller, game.xuid = xuid, game.join_type = join_type;
     return 0x55;
 }
+// the two ways a lobby message goes: the game server's networking and the player's own
+static struct {
+    int calls;
+    uint64_t to, length;
+    const uint8_t *packet;
+    uint64_t answer;
+} server_send, user_send;
+static uint64_t game_server_send(uint64_t to, const uint8_t *packet, uint64_t length) {
+    server_send.calls++;
+    server_send.to = to, server_send.packet = packet, server_send.length = length;
+    return server_send.answer;
+}
+static uint64_t game_user_send(uint64_t to, const uint8_t *packet, uint64_t length) {
+    user_send.calls++;
+    user_send.to = to, user_send.packet = packet, user_send.length = length;
+    return user_send.answer;
+}
 int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     if (hooks < 8)
         hooked[hooks] = (typeof(hooked[0])){ address, fake_func, out_origin_func };
@@ -72,6 +89,8 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
         *out_origin_func = (void *)game_ping;
     else if (out_origin_func == (void **)&orig_LanJoin_Join)
         *out_origin_func = (void *)game_join;
+    else if (out_origin_func == (void **)&orig_LanJoin_SendLobbyPacket)
+        *out_origin_func = (void *)game_server_send;
     return 0;
 }
 static bool was_hooked(uint32_t place, void *replacement, void **original) {
@@ -879,6 +898,58 @@ static void test_asking(void) {
     now_ms = test_clock;
 }
 
+// ---- lobby messages
+static void test_lobby_message(void) {
+    uint8_t packet[0x408] = { 0x28, 0, 0, 0, '1', 5 };
+    CHECK(aae_lan_lobby_message(A_Person, packet, sizeof(packet)) && aae_lan_lobby_message(A_Person, packet, 8));
+    // to a game server, or to nobody: the game's way
+    CHECK(!aae_lan_lobby_message(A_Server, packet, sizeof(packet)) && !aae_lan_lobby_message(0, packet, 8) &&
+          !aae_lan_lobby_message(0x0110000100000000ull, packet, 8));
+    // too short, none, or not a lobby message
+    CHECK(!aae_lan_lobby_message(A_Person, packet, 7) && !aae_lan_lobby_message(A_Person, NULL, 8));
+    packet[4] = '2';
+    CHECK(!aae_lan_lobby_message(A_Person, packet, 8));
+    packet[4] = '1', packet[0] = 0x29;
+    CHECK(!aae_lan_lobby_message(A_Person, packet, 8));
+    packet[0] = 0x28, packet[1] = 1;
+    CHECK(!aae_lan_lobby_message(A_Person, packet, 8));
+    packet[1] = 0, packet[3] = 0x80;
+    CHECK(!aae_lan_lobby_message(A_Person, packet, 8));
+}
+
+static void test_lobby_send(void) {
+    uint8_t packet[0x408] = { 0x28, 0, 0, 0, '1', 5 };
+    set_mod(true);
+    // to a person: the player's own networking first, and that's all when it worked
+    memset(&server_send, 0, sizeof(server_send)), memset(&user_send, 0, sizeof(user_send));
+    user_send.answer = 0x101, server_send.answer = 0x77;
+    CHECK(fake_LanJoin_SendLobbyPacket(A_Person, packet, 0x408) == 1 && user_send.calls == 1 &&
+          server_send.calls == 0 && user_send.to == A_Person && user_send.packet == packet &&
+          user_send.length == 0x408);
+    // when it didn't (al 0, whatever else rax holds), the game server's as the game does it
+    user_send.answer = 0x100;
+    CHECK(fake_LanJoin_SendLobbyPacket(A_Person, packet, 0x408) == 0x77 && user_send.calls == 2 &&
+          server_send.calls == 1 && server_send.to == A_Person && server_send.packet == packet &&
+          server_send.length == 0x408);
+    // to a game server, or not a lobby message: the game's way only
+    user_send.answer = 1;
+    CHECK(fake_LanJoin_SendLobbyPacket(A_Server, packet, 0x408) == 0x77 && user_send.calls == 2 &&
+          server_send.calls == 2);
+    packet[4] = '0';
+    CHECK(fake_LanJoin_SendLobbyPacket(A_Person, packet, 0x408) == 0x77 && user_send.calls == 2 &&
+          server_send.calls == 3);
+    packet[4] = '1';
+    // the length is the game's int: its upper half isn't looked at
+    CHECK(fake_LanJoin_SendLobbyPacket(A_Person, packet, 0xffffffff00000408ull) == 1 && user_send.calls == 3 &&
+          user_send.length == 0xffffffff00000408ull);
+    CHECK(fake_LanJoin_SendLobbyPacket(A_Person, packet, 0x100000007ull) == 0x77 && user_send.calls == 3);
+    // without the mod: the game's way
+    set_mod(false);
+    CHECK(fake_LanJoin_SendLobbyPacket(A_Person, packet, 0x408) == 0x77 && user_send.calls == 3 &&
+          server_send.calls == 5);
+    set_mod(true);
+}
+
 // ---- init
 static void *started;
 static void *nothing(void *unused) {
@@ -896,7 +967,10 @@ static void test_init(void) {
     CHECK(started == NULL && lobby_network_mode == NULL && hooks == 0);
     aae_lan_init(base, 1);
     CHECK(started == (void *)listener_main && lobby_network_mode == (const int32_t *)(base + ADDR_lobbyNetworkMode));
-    CHECK(hooks == 4 && was_hooked(ADDR_LanJoin_Connect, (void *)fake_LanJoin_Connect, (void **)&orig_LanJoin_Connect) &&
+    CHECK(was_hooked(ADDR_LanJoin_SendLobbyPacket, (void *)fake_LanJoin_SendLobbyPacket,
+                     (void **)&orig_LanJoin_SendLobbyPacket) &&
+          UserNetworking_Send == (void *)(base + ADDR_LanJoin_UserSend));
+    CHECK(hooks == 5 && was_hooked(ADDR_LanJoin_Connect, (void *)fake_LanJoin_Connect, (void **)&orig_LanJoin_Connect) &&
           was_hooked(ADDR_LanJoin_ParseAddress, (void *)fake_LanJoin_ParseAddress,
                      (void **)&orig_LanJoin_ParseAddress) &&
           was_hooked(ADDR_LanJoin_PingServer, (void *)fake_LanJoin_PingServer, (void **)&orig_LanJoin_PingServer) &&
@@ -937,6 +1011,7 @@ int main(void) {
     PlaylistVersion_Get = game_playlist_version;
     FFOTDVersion_Get = game_ffotd_version;
     local_users = game_users;
+    UserNetworking_Send = game_user_send;
     local_id = test_steam_id;
     now_ms = test_clock;
     test_ids();
@@ -954,6 +1029,8 @@ int main(void) {
     test_waited();
     test_no_thread();
     test_asking();
+    test_lobby_message();
+    test_lobby_send();
 
     snprintf(command, sizeof(command), "rm -rf '%s'", template);
     if (system(command) != 0)

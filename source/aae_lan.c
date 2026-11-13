@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -602,6 +603,38 @@ static uint64_t fake_LanJoin_Join(uint64_t controller, uint64_t server, uint64_t
     return join_server(controller, server, join_type, __builtin_return_address(0) == join_from_ping);
 }
 
+// ---- lobby messages: through the player's own Steam networking first
+//
+// The game sends a lobby message to a player (SendLobbyPacket: an int 0x28, then '1', the message's type and data,
+// 0x408 bytes in all) through its Steam game server's networking, and through the player's own only when that fails.
+// A joiner who joined the host player's own Steam ID (above) knows the host by that ID, so for messages to a person
+// the plugin turns that round: the player's own networking first, the game server's when it fails.
+
+#define Lobby_Packet_Mark 0x28
+#define Lobby_Message '1'
+#define Lobby_Packet_Least 8
+
+bool aae_lan_lobby_message(uint64_t to, const uint8_t *packet, uint32_t length) {
+    return aae_lan_is_individual(to) && packet != NULL && length >= Lobby_Packet_Least &&
+           read_u32(packet) == Lobby_Packet_Mark && packet[4] == Lobby_Message;
+}
+
+// the player's own Steam networking: (Steam ID, packet, length), its answer (true when sent) in al
+static uint64_t (*UserNetworking_Send)(uint64_t to, const uint8_t *packet, uint64_t length);
+
+// the game server's: the same
+install_hook_name(LanJoin_SendLobbyPacket, uint64_t, uint64_t to, const uint8_t *packet, uint64_t length) {
+    if (aae_plugin_loaded_lately() && aae_lan_lobby_message(to, packet, (uint32_t)length) &&
+        (uint8_t)UserNetworking_Send(to, packet, length) != 0) {
+        static _Atomic bool said;
+        if (debug && !atomic_exchange(&said, true))
+            printf("lan join: lobby messages to players go through the player's own Steam networking first (the "
+                   "first to %llu)\n", (unsigned long long)to);
+        return 1;
+    }
+    return orig_LanJoin_SendLobbyPacket(to, packet, length);
+}
+
 void aae_lan_init(uint64_t game_base_address, int enabled) {
     if (!enabled)
         return;
@@ -618,6 +651,8 @@ void aae_lan_init(uint64_t game_base_address, int enabled) {
     install_hook_LanJoin_ParseAddress((void *)(game_base_address + ADDR_LanJoin_ParseAddress));
     install_hook_LanJoin_PingServer((void *)(game_base_address + ADDR_LanJoin_PingServer));
     DobbyHook((void *)(game_base_address + ADDR_LanJoin_Join), (void *)fake_LanJoin_Join, (void **)&orig_LanJoin_Join);
+    UserNetworking_Send = (uint64_t (*)(uint64_t, const uint8_t *, uint64_t))(game_base_address + ADDR_LanJoin_UserSend);
+    install_hook_LanJoin_SendLobbyPacket((void *)(game_base_address + ADDR_LanJoin_SendLobbyPacket));
     pthread_t thread;
     if (start_thread(&thread, NULL, listener_main, NULL) == 0)
         pthread_detach(thread);

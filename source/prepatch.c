@@ -161,6 +161,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_LanJoin_Join, Push_R15 },
     { ADDR_LanJoin_ParseAddress, Push_R15 },
     { ADDR_LanJoin_PingServer, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x89, 0xF8 } }, // ...; mov eax, edi
+    { ADDR_LanJoin_SendLobbyPacket, Push_R15 },
     { ADDR_load_workshop_texture, Push_R15 },
     { ADDR_LobbyMsgRW_PrepReadMsg, Push_R14 },
     { ADDR_LobbyMsgRW_PrepWriteMsg, Push_R14 },
