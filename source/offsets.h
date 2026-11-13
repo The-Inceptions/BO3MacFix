@@ -195,7 +195,6 @@
 // are T7Overcharged's where it has one (its build-two addresses are these + 0x6c0)
 #define ADDR_UIElement_RenderHoldBreathHint 0x1130467 // func - void (int localClientNum, the element, the renderer's context, four floats, lua_State *): the render function setupHoldBreathHint (0x112faf0) gives an element, which draws "Hold [key] to steady" (PLATFORM_HOLD_BREATH) unless cg_drawBreathHint is 0 or the client is in a killcam, flashbanged, spectating ... (Windows 0x142074e10; T7Overcharged's game::OFF_UIElement_RenderHoldBreathHint)
 #define ADDR_BG_GetViewmodelWeapon 0xed3bf3 // func - Weapon (const playerState_s *) (Windows 0x142657770)
-#define ADDR_BG_GetWeaponDef 0x12362cd // func - const WeaponDef *(Weapon) (Windows 0x142670e50)
 #define ADDR_BG_WeaponOverlayReticle 0x138606c // func - int (Weapon): the definition's overlayReticle (+0xdb0), or an attachment's (+0x390); the first test of the game's "Hold [key] to zoom" hint (0x10113069a) (Windows 0x142677de0; T7Overcharged's game::OFF_BG_IsWeaponZoomed) - name is a guess
 #define ADDR_BG_WeaponHasZoomLevels 0x138337e // func - int (Weapon): 1 when its three ADS zoom focal lengths (variant +0x22c, +0x234, +0x23c, or an attachment's) differ, the second test of that hint (Windows 0x14267a5e0; T7Overcharged's game::OFF_BG_IsWeaponScoped) - name is a guess
 #define ADDR_Com_LocalClient_GetControllerIndex 0xeae63e // func - int (int localClientNum): its controller, -1 for none (Windows 0x1420e31b0)
@@ -346,7 +345,6 @@
 // each gives the dvar back; an existing one that was set before as text ("External Dvar", flag 0x400) gets the type,
 // its text turned into a value and put inside the domain (0xfa4dc5, 0xfa30ff, 0xfa00b5)
 #define ADDR_Dvar_RegisterBool 0xfa1328 // func - dvar_t *(uint32_t hash, const char *name, bool value, uint32_t flags, const char *description) (Windows 0x142273de0)
-#define ADDR_Dvar_RegisterInt 0xfa149e // func - dvar_t *(uint32_t hash, const char *name, int value, int min, int max, uint32_t flags, const char *description) (Windows 0x142273fc0)
 #define ADDR_Dvar_RegisterFloat 0xfa1614 // func - dvar_t *(uint32_t hash, const char *name, float value, float min, float max, uint32_t flags, const char *description) (Windows 0x142273f40)
 #define ADDR_Dvar_SetName 0xfa4242 // func - void (dvar_t *, const char *name): gives a dvar its name (+8) the game's way: releases the one there (FreeString 0x1254262) and stores the game's own copy (CopyString 0x125420f), which Dvar_Shutdown (0xfa0aa4) releases at every quit; the register function calls it for dvars with flag 0x20000 (0xfa49cf) - name is a guess
 // fast ADS in the ADS update (0xed5ad3: how far the sights are up, the player state's +0x2fc, moves by msec * rate), as
@@ -526,7 +524,6 @@
 // func - int (int localClientNum): the controller of a local client from the 2-entry table at 0x119c1370 (0x24 bytes
 // each: +4 the client's number, +8 its controller), -1 when that entry's number isn't localClientNum; no bounds test
 // (Windows 0x1420e31b0, which T7Overcharged's local_client_bounds_fix hooks)
-#define ADDR_Com_LocalClient_GetControllerIndex 0xeae63e
 // -- end T7O crash guards
 // All-around Enhancement 4's pause for everybody in a co-op game (aae_coop_pause.c)
 #define ADDR_SV_CheckPaused 0x11d5ba4 // func - int (void): with cl_paused set and one client, sets sv_paused and gives 1; with more clients puts cl_paused and sv_paused back to 0; 0 not paused. Called by SV_Frame and the game's frame (Windows 0x1421f7080)
@@ -552,7 +549,6 @@
 // -- end coop pause
 // T7Overcharged's moves of the first person gun's bones (aae_viewmodel.c): what its bullet_depletion component calls
 #define ADDR_CG_UpdateViewModelDynamicBones 0xd37a72 // func - void (cg_t *, playerState_s *, DObj *, Weapon, centity_t *): sets the bones of the view model the game moves by itself (a spinning barrel...) on its DObj, every frame; T7Overcharged's hook (Windows 0x14126eeb0)
-#define ADDR_DObjGetBoneIndex 0xf74d4f // func - int (DObj *, scr_string_t name, uint16_t *index, int model mask): *index goes in as a guess (0xfffe none, 0xffff known missing) and comes out as the bone (Windows 0x1422c4240)
 #define ADDR_DObjSetLocalTag 0xf74879 // func - void (DObj *, int *part bits, int bone, const float trans[3], const float angles[3]): the bone's local tag; a bone's first one in a frame counts (a bit at DObj +0x68) (Windows 0x1422c50b0)
 #define ADDR_DObjGetLocalClientIndex 0xf94a1b // func - int (const DObj *): the signed byte at +0x123, -1 for none (Windows 0x1422bdd00)
 #define ADDR_GScr_AllocString 0x1172afc // func - scr_string_t (const char *): SL_GetString(name, 1), one reference per name (Windows 0x141a77150)
