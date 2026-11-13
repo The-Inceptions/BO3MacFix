@@ -7,6 +7,7 @@
 // something: its registers hold values, and nothing was called, so there is no return address. So the stub jumps to
 // a few instructions of assembly (a thunk) made by the macros here, which call a C function and then jump on: to the
 // instructions the stub's jump replaced and from there back into the game, or to another place in the game.
+// Three kinds: detour_with_registers for anywhere, detour_before_test and detour_choice for places around a call.
 //
 // Only x86_64 has the thunks. On anything else (the unit tests are built for the Mac's own CPU) the macros leave the
 // C functions, which the tests call themselves.
@@ -90,6 +91,26 @@ static inline uint8_t *detour_stack(const detour_registers_t *registers) {
     }                                                                                                                  \
     static bool handler_##name(void)
 
+// detour_choice(name, setup) { ... first, second ... return whether the game is to go on somewhere else ... }: for
+// a place where every register a function may change is unused, like right behind a call's return. The handler gets
+// two values: setup is the assembly that puts them into %rdi and %rsi, from registers a call leaves alone (the
+// function's frame pointer, what it keeps in %rbx or %r12 to %r15). When the handler says yes the game goes on at the
+// other place given to install_detour_##name(address, other), otherwise with its own instructions. The stack is
+// aligned for a call at such a place.
+#define detour_choice(name, setup)                                                                                     \
+    static void *orig_##name __attribute__((used));                                                                    \
+    static void *other_##name __attribute__((used));                                                                   \
+    __attribute__((used)) static bool handler_##name(uint64_t first, uint64_t second);                                 \
+    __attribute__((naked, used)) static void thunk_##name(void) {                                                      \
+        __asm__(setup "call _handler_" #name "\n test %al, %al\n jz 1f\n jmp *_other_" #name "(%rip)\n"              \
+                      "1: jmp *_orig_" #name "(%rip)\n");                                                              \
+    }                                                                                                                  \
+    static void install_detour_##name(void *address, void *other) {                                                    \
+        other_##name = other;                                                                                          \
+        DobbyHook(address, (void *)thunk_##name, &orig_##name);                                                        \
+    }                                                                                                                  \
+    static bool handler_##name(uint64_t first, uint64_t second)
+
 #else
 
 // without the thunks: the handlers, and install functions that hand the handler itself to the hooking function, so a
@@ -110,5 +131,14 @@ static inline uint8_t *detour_stack(const detour_registers_t *registers) {
         DobbyHook(address, (void *)handler_##name, &orig_##name);                                                      \
     }                                                                                                                  \
     static bool handler_##name(void)
+
+#define detour_choice(name, setup)                                                                                     \
+    static void *orig_##name, *other_##name;                                                                           \
+    static bool handler_##name(uint64_t first, uint64_t second);                                                       \
+    __attribute__((unused)) static void install_detour_##name(void *address, void *other) {                            \
+        other_##name = other;                                                                                          \
+        DobbyHook(address, (void *)handler_##name, &orig_##name);                                                      \
+    }                                                                                                                  \
+    static bool handler_##name(uint64_t first, uint64_t second)
 
 #endif

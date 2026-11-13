@@ -13,6 +13,21 @@
 //
 // The plugin wraps the one call of the test in the crosshair function. Here the test itself is hooked and only
 // answers differently when that call is the one asking.
+//
+// The crosshair while aiming down the sights. In first person it goes away as the sights come up: the crosshair
+// function keeps how far they are up (the player state's +0x2fc) and draws nothing when that is 1, fades and
+// shrinks the crosshair by it before that, and has a row of tests for what the weapon is doing (reloading, being
+// raised ...) that hide it as well. In third person there are no sights to look through, so the plugin keeps the
+// crosshair: from behind the crosshair's colour on, its copy of the sights' value counts as 0, the tests for what
+// the weapon is doing count as passed, and the gap between the crosshair's lines closes from what the weapon's
+// spread gives to the weapon's least gap as the sights come up.
+// On Windows that is three places (a register zeroed, a call's answer changed, a register changed where the gap
+// is worked out). In the Mac's crosshair function the tests are part of the function itself, so here it is two:
+// - behind the colour and the test for the crosshair being visible at all, where "cmp bl, 0 ; jne" begins the
+//   test for the sights being all the way up: with free aim on, the function's copy of the sights' value (at rbp -
+//   0x50) is set to 0 and the function goes on where it draws, past its tests;
+// - where the gap is the larger one of the spread's and the weapon's least, in xmm1: changed as above.
+// Both only from the pre-patched executable (detour.h).
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,10 +35,14 @@
 #include <time.h>
 #include "aae_freeaim.h"
 #include "aae_plugin.h"
+#include "detour.h"
 #include "dobby.h"
 #include "gsc_obj.h"
 #include "offsets.h"
 #include "prepatch.h"
+
+// the sums below are the plugin's, in its order: nothing is to be folded into one operation
+#pragma STDC FP_CONTRACT OFF
 
 #define Seen_For_Ms 250        // how long a client counts as seen after the crosshair code was at work for it
 #define Third_Person_For_Ms 250 // how long the view has to have been third person
@@ -57,11 +76,32 @@ bool aae_freeaim_on(aae_freeaim_client_t *client, uint64_t now, uint32_t client_
     return enabled != 0.0f && enabled_for_client != 0.0f;
 }
 
+static bool is_number(float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return (bits & 0x7f800000) != 0x7f800000;
+}
+
+float aae_freeaim_gap(float gap, float least, float sights) {
+    if (!is_number(sights) || !is_number(gap) || !is_number(least) || !(0.0f <= least))
+        return gap;
+    if (0.0f <= sights) {
+        if (1.0f < sights)
+            sights = 1.0f;
+    } else {
+        sights = 0.0f;
+    }
+    return (least - gap) * sights + gap;
+}
+
 // ---- the game's side
 #define Cg_Size 0x342a80
 #define Cg_ThirdPerson 0x11a8c9  // a byte: the view is a third person one
 #define Cg_PlayerState 0x11a8d0
 #define Ps_Kind 0x4
+#define Ps_Sights 0x2fc          // how far the sights are up, 0 to 1
+#define Frame_Sights (-0x50)     // the crosshair function's own copy of that, from its frame pointer
+#define Weapon_LeastGap 0x6f0    // the weapon's definition: the least gap of its crosshair, an int
 
 static uint64_t base_address;
 static int debug;
@@ -94,6 +134,60 @@ static bool on_for(int which, const uint8_t *cg) {
                           number_dvar(which == 0 ? "aae_freeaim_enabled" : "aae_freeaim_enabled_1", 1.0f));
 }
 
+// which local client's cg_t this is, -1 for anything else (counted like this, something from before them is far
+// behind them)
+static int local_client_of(const uint8_t *cg) {
+    const uint8_t *first = *cg_clients;
+    uintptr_t offset = (uintptr_t)cg - (uintptr_t)first;
+    if (cg == NULL || first == NULL || offset % Cg_Size != 0 || offset / Cg_Size >= Local_Clients)
+        return -1;
+    return (int)(offset / Cg_Size);
+}
+
+// whether free aim is on for the local client this cg_t is of, for the places behind the crosshair's test: the
+// client has been seen there with this cg_t
+static bool on_now(const uint8_t *cg) {
+    int which = local_client_of(cg);
+    if (which < 0 || clients[which].cg != cg || !aae_plugin_loaded_lately())
+        return false;
+    return on_for(which, cg);
+}
+
+// a line the first time each of the two places changes something (BO3MACFIX_FREEAIMDEBUG=1)
+static void said_once(int which, const char *what) {
+    static _Atomic unsigned char said[2];
+    if (debug && !atomic_exchange_explicit(&said[which], 1, memory_order_relaxed))
+        printf("free aim: %s (the first time)\n", what);
+}
+
+// "cmp bl, 0 ; jne": behind the crosshair's colour and its test for being visible at all, where the tests for the
+// sights and for what the weapon is doing begin. The cg_t is in r13.
+detour_choice(Crosshair_Tests, "mov %r13, %rdi\n mov %rbp, %rsi\n") {
+    uint8_t *frame = (uint8_t *)second;
+    if (!on_now((const uint8_t *)first))
+        return false;
+    const float down = 0.0f;
+    memcpy(frame + Frame_Sights, &down, sizeof(down));
+    said_once(0, "the crosshair is drawn whatever the sights and the weapon are doing");
+    return true;
+}
+
+// "movss xmm0, [r12 + 0xe0c]": the gap is the larger one of the spread's and the weapon's least, in xmm1. The
+// weapon's definition is in r12, the cg_t in r13.
+detour_with_registers(Crosshair_Gap) {
+    const uint8_t *cg = (const uint8_t *)registers->r13, *weapon = (const uint8_t *)registers->r12;
+    if (!on_now(cg))
+        return;
+    float gap, sights;
+    int32_t least;
+    memcpy(&gap, registers->xmm[1], sizeof(gap));
+    memcpy(&least, weapon + Weapon_LeastGap, sizeof(least));
+    memcpy(&sights, cg + Cg_PlayerState + Ps_Sights, sizeof(sights));
+    gap = aae_freeaim_gap(gap, (float)least, sights);
+    memcpy(registers->xmm[1], &gap, sizeof(gap));
+    said_once(1, "the crosshair's gap goes by how far the sights are up");
+}
+
 // the game's test for drawing the crosshair at all, (cg_t *, playerState_s *), which is hooked below
 static bool (*orig_CG_DrawCrosshairTest)(uint8_t *cg, uint8_t *ps);
 
@@ -103,12 +197,9 @@ static bool crosshair_test(uint8_t *cg, uint8_t *ps, bool from_the_crosshair) {
     bool draw = orig_CG_DrawCrosshairTest(cg, ps);
     if (!from_the_crosshair || cg == NULL || !aae_plugin_loaded_lately())
         return draw;
-    const uint8_t *first = *cg_clients;
-    // which local client's it is (counted like this, something from before them is far behind them)
-    uintptr_t offset = (uintptr_t)cg - (uintptr_t)first;
-    if (first == NULL || offset % Cg_Size != 0 || offset / Cg_Size >= Local_Clients)
+    int which = local_client_of(cg);
+    if (which < 0)
         return draw;
-    int which = (int)(offset / Cg_Size);
     aae_freeaim_seen(&clients[which], cg, now_ms());
     bool on = on_for(which, cg);
     if (debug) {
@@ -138,4 +229,12 @@ void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     crosshair_asks_from = (const void *)(base_address + ADDR_CG_DrawCrosshair_TestReturn);
     DobbyHook((void *)(base_address + ADDR_CG_DrawCrosshairTest), (void *)fake_CG_DrawCrosshairTest,
               (void **)&orig_CG_DrawCrosshairTest);
+    if (!prepatch_has_hook(ADDR_CG_DrawCrosshair_Tests) || !prepatch_has_hook(ADDR_CG_DrawCrosshair_Gap)) {
+        printf("free aim: not running from the pre-patched executable: the third person crosshair goes away while "
+               "aiming down the sights, as the game's own does\n");
+        return;
+    }
+    install_detour_Crosshair_Tests((void *)(base_address + ADDR_CG_DrawCrosshair_Tests),
+                                   (void *)(base_address + ADDR_CG_DrawCrosshair_Draws));
+    install_detour_Crosshair_Gap((void *)(base_address + ADDR_CG_DrawCrosshair_Gap));
 }

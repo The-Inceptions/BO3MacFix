@@ -220,8 +220,8 @@ tests/test_aae_prompt: tests/test_aae_prompt.c tests/prompt_glide_frames.h sourc
 
 # aae_freeaim.c: the plugin's rule for free aim being on, and the crosshair test's hook against a made-up game
 tests/test_aae_freeaim: tests/test_aae_freeaim.c source/aae_freeaim.c source/aae_freeaim.h source/aae_plugin.c \
-		source/aae_plugin.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h source/prepatch.h \
-		source/t7overcharged.h
+		source/aae_plugin.h source/detour.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h \
+		source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_freeaim.c source/gsc_obj.c
 

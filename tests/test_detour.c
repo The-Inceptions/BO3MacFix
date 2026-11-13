@@ -17,8 +17,9 @@ static int failures;
     } while (0)
 
 // the stubs' slots and the places' own instructions, by the address a detour is installed at
-void *slot_registers, *slot_test;
+void *slot_registers, *slot_test, *slot_choice;
 extern char site_registers[], moved_registers[], site_test[], moved_test[], yes_of_test[];
+extern char site_choice[], moved_choice[], other_of_choice[];
 static int DobbyHook(void *address, void *fake_func, void **out_origin_func) {
     if (address == (void *)site_registers) {
         *out_origin_func = moved_registers;
@@ -26,6 +27,9 @@ static int DobbyHook(void *address, void *fake_func, void **out_origin_func) {
     } else if (address == (void *)site_test) {
         *out_origin_func = moved_test;
         slot_test = fake_func;
+    } else if (address == (void *)site_choice) {
+        *out_origin_func = moved_choice;
+        slot_choice = fake_func;
     } else {
         return -1;
     }
@@ -216,9 +220,73 @@ static void test_before_test(void) {
     CHECK(game_test_user() == 107 && asked.calls == 3 && the_test.calls == 2 && the_test.argument == 2);
 }
 
+// ---- a place right behind a call, with a choice of where to go on
+
+// game_choice_user(flag): keeps values in the registers a call leaves alone, calls something, and then, at the
+// place, tests the flag: 300 + what it kept when the flag is set, 400 + that when it isn't. The other place it can
+// be sent to answers 500 + what it kept.
+int game_choice_user(int flag);
+static int called_before;
+void game_before_choice(void) {
+    called_before++;
+}
+__asm__(".globl _game_choice_user, _site_choice, _moved_choice, _other_of_choice\n"
+        "_game_choice_user:\n"
+        "  push %rbp\n mov %rsp, %rbp\n push %rbx\n push %r13\n"
+        "  mov %edi, %ebx\n"               // the flag, kept across the call
+        "  movabs $0x1313131313131313, %r13\n"
+        "  call _game_before_choice\n"
+        "_site_choice:\n"
+        "  jmp *_slot_choice(%rip)\n"
+        "back_choice:\n"                   // behind the moved "cmp ; jne"
+        "  lea 400(%r13d), %eax\n"
+        "  jmp 3f\n"
+        "choice_set:\n"
+        "  lea 300(%r13d), %eax\n"
+        "  jmp 3f\n"
+        "_other_of_choice:\n"
+        "  lea 500(%r13d), %eax\n"
+        "3: pop %r13\n pop %rbx\n pop %rbp\n ret\n"
+        // the place's own instructions: a test and a short jump, which a stub makes a near one
+        "_moved_choice:\n"
+        "  cmp $0, %bl\n"
+        "  jne choice_set\n"
+        "  jmp back_choice\n");
+
+static struct {
+    int calls;
+    bool answer;
+    uint64_t first, second, frame;
+} chosen;
+detour_choice(Choice, "mov %r13, %rdi\n mov %rbp, %rsi\n") {
+    chosen.calls++;
+    chosen.first = first, chosen.second = second;
+    chosen.frame = (uint64_t)__builtin_frame_address(0);
+    volatile double busy = 3.5; // uses registers of its own
+    for (int i = 0; i < 8; i++)
+        busy = busy * 1.5 + (double)i;
+    return chosen.answer;
+}
+
+static void test_choice(void) {
+    install_detour_Choice(site_choice, other_of_choice);
+    CHECK(slot_choice != NULL && orig_Choice == (void *)moved_choice && other_Choice == (void *)other_of_choice);
+    const int kept = 0x13131313;
+    // the handler says no: the game's own test decides, either way
+    chosen.answer = false, chosen.calls = called_before = 0;
+    CHECK(game_choice_user(0) == 400 + kept && game_choice_user(1) == 300 + kept && chosen.calls == 2 &&
+          called_before == 2);
+    // it got the two values the game keeps, and was called as a function has to be
+    CHECK(chosen.first == 0x1313131313131313 && chosen.second != 0 && chosen.second % 16 == 0 && chosen.frame % 16 == 0);
+    // yes: the game goes on at the other place, whatever its own test would say
+    chosen.answer = true;
+    CHECK(game_choice_user(0) == 500 + kept && game_choice_user(1) == 500 + kept && chosen.calls == 4);
+}
+
 int main(void) {
     test_registers();
     test_before_test();
+    test_choice();
     if (failures != 0) {
         printf("test_detour: %d failed\n", failures);
         return 1;

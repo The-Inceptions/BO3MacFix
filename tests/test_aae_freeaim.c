@@ -1,5 +1,6 @@
 // aae_freeaim.c: the plugin's rule for when free aim is on, and the crosshair test's hook against a made-up game.
 #include <fcntl.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -21,13 +22,15 @@ static char mod_folder[4096];
 const char *t7o_mod_folder(void) {
     return mod_folder;
 }
+// which places the pre-patched executable has stubs for
+static bool have_stubs = true;
+static int stub_missing_for = -1;
 bool prepatch_has_hook(uint32_t offset) {
-    (void)offset;
-    return true;
+    return have_stubs && (int)offset != stub_missing_for;
 }
 static struct {
-    void *address, *replacement;
-} hooked;
+    void *address, *replacement, **original;
+} hooked[8];
 static int hooks;
 // the made-up game's own test: what it answers, and how often it was asked
 static struct {
@@ -41,10 +44,18 @@ static bool game_draw_test(uint8_t *cg, uint8_t *ps) {
     return game_test.answer;
 }
 int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
-    hooked.address = address, hooked.replacement = fake_func;
-    *out_origin_func = (void *)game_draw_test;
+    if (hooks < 8)
+        hooked[hooks] = (typeof(hooked[0])){ address, fake_func, out_origin_func };
+    if (out_origin_func == (void **)&orig_CG_DrawCrosshairTest)
+        *out_origin_func = (void *)game_draw_test;
     hooks++;
     return 0;
+}
+static bool was_hooked(uint32_t place, void *replacement, void **original) {
+    for (int i = 0; i < hooks && i < 8; i++)
+        if (hooked[i].address == (void *)(0x100000000 + (uint64_t)place))
+            return hooked[i].replacement == replacement && hooked[i].original == original;
+    return false;
 }
 
 // ---- the made-up game: dvars and two local clients' cg_t
@@ -249,13 +260,144 @@ static void test_hook(void) {
     CHECK(crosshair_asks(0, false));
 }
 
+// ---- the crosshair while aiming
+
+static void test_gap(void) {
+    // from the spread's gap to the weapon's least one as the sights come up
+    CHECK(aae_freeaim_gap(40.0f, 8.0f, 0.0f) == 40.0f && aae_freeaim_gap(40.0f, 8.0f, 1.0f) == 8.0f &&
+          aae_freeaim_gap(40.0f, 8.0f, 0.5f) == 24.0f && aae_freeaim_gap(40.0f, 8.0f, 0.25f) == 32.0f);
+    // the sights' value counts within 0 and 1
+    CHECK(aae_freeaim_gap(40.0f, 8.0f, 1.5f) == 8.0f && aae_freeaim_gap(40.0f, 8.0f, -0.5f) == 40.0f);
+    // a least gap of 0 is one, a negative one isn't
+    CHECK(aae_freeaim_gap(40.0f, 0.0f, 1.0f) == 0.0f && aae_freeaim_gap(40.0f, -1.0f, 1.0f) == 40.0f);
+    // the gap is already the least one, or below it (the game takes the larger one before): it stays or goes up to it
+    CHECK(aae_freeaim_gap(8.0f, 8.0f, 0.7f) == 8.0f && aae_freeaim_gap(4.0f, 8.0f, 1.0f) == 8.0f);
+    // anything that isn't a number: the gap as it is
+    CHECK(aae_freeaim_gap(40.0f, 8.0f, NAN) == 40.0f && aae_freeaim_gap(40.0f, 8.0f, INFINITY) == 40.0f &&
+          aae_freeaim_gap(40.0f, NAN, 1.0f) == 40.0f && aae_freeaim_gap(40.0f, INFINITY, 1.0f) == 40.0f);
+    CHECK(isnan(aae_freeaim_gap(NAN, 8.0f, 1.0f)) && isinf(aae_freeaim_gap(INFINITY, 8.0f, 1.0f)));
+}
+
+// the crosshair function's frame, with its copy of the sights' value, and a weapon's definition
+static struct {
+    uint8_t below[0x100];
+    uint8_t top[0x40];
+} game_frame;
+static uint8_t game_weapon[0x1000];
+static float frame_sights(void) {
+    float value;
+    memcpy(&value, game_frame.top + Frame_Sights, sizeof(value));
+    return value;
+}
+// the game comes to where its tests for the sights and the weapon begin: whether it is sent past them
+static bool at_the_tests(const uint8_t *cg) {
+    const float up = 0.8f;
+    memset(&game_frame, 0xee, sizeof(game_frame));
+    memcpy(game_frame.top + Frame_Sights, &up, sizeof(up));
+    bool past = handler_Crosshair_Tests((uint64_t)cg, (uint64_t)game_frame.top);
+    // only the copy of the sights' value is ever written, and only when the game is sent on
+    for (int i = 0; i < (int)sizeof(game_frame.below); i++) {
+        int offset = i - (int)sizeof(game_frame.below);
+        if (!(offset >= Frame_Sights && offset < Frame_Sights + 4) && game_frame.below[i] != 0xee) {
+            CHECK(!"something else on the game's frame was written");
+            break;
+        }
+    }
+    CHECK(frame_sights() == (past ? 0.0f : up));
+    return past;
+}
+// the game comes to where the gap is worked out, with this one: what it goes on with
+static float at_the_gap(const uint8_t *cg, float gap) {
+    detour_registers_t registers;
+    memset(&registers, 0x5a, sizeof(registers));
+    registers.r13 = (uint64_t)cg;
+    registers.r12 = (uint64_t)game_weapon;
+    memcpy(registers.xmm[1], &gap, sizeof(gap));
+    detour_registers_t before = registers;
+    handler_Crosshair_Gap(&registers);
+    float after;
+    memcpy(&after, registers.xmm[1], sizeof(after));
+    memcpy(registers.xmm[1], &gap, sizeof(gap));
+    CHECK(memcmp(&before, &registers, sizeof(registers)) == 0); // nothing but the gap is changed
+    return after;
+}
+static void set_sights(int which, float value) {
+    memcpy(cg_of(which) + Cg_PlayerState + Ps_Sights, &value, sizeof(value));
+}
+
+static void test_aiming(void) {
+    const int32_t least = 8;
+    memcpy(game_weapon + Weapon_LeastGap, &least, sizeof(least));
+    set_mod(true);
+    memset(clients, 0, sizeof(clients));
+    set_view(0, true, 0, 0);
+    set_view(1, false, 0, 1);
+    set_sights(0, 0.5f);
+    set_sights(1, 0.5f);
+    // a client the crosshair function hasn't asked about yet: the game's own way
+    CHECK(!at_the_tests(cg_of(0)) && at_the_gap(cg_of(0), 40.0f) == 40.0f);
+    // free aim on: past the tests with the sights counted as down, and the gap by the sights
+    CHECK(after_a_while(0, false));
+    CHECK(at_the_tests(cg_of(0)) && at_the_gap(cg_of(0), 40.0f) == 24.0f);
+    set_sights(0, 1.0f);
+    CHECK(at_the_gap(cg_of(0), 40.0f) == 8.0f);
+    set_sights(0, 0.0f);
+    CHECK(at_the_gap(cg_of(0), 40.0f) == 40.0f);
+    set_sights(0, 0.5f);
+    // the other local client is in first person: nothing for it
+    CHECK(crosshair_asks(1, true) && !at_the_tests(cg_of(1)) && at_the_gap(cg_of(1), 40.0f) == 40.0f);
+    CHECK(at_the_tests(cg_of(0)));
+    // off for whatever reason: the game's own way again
+    set_dvar("aae_freeaim_enabled", true, 0);
+    CHECK(!at_the_tests(cg_of(0)) && at_the_gap(cg_of(0), 40.0f) == 40.0f);
+    set_dvar("aae_freeaim_enabled", false, 1);
+    CHECK(at_the_tests(cg_of(0)) && at_the_gap(cg_of(0), 40.0f) == 24.0f);
+    set_view(0, false, 0, 0);
+    CHECK(!at_the_tests(cg_of(0)) && at_the_gap(cg_of(0), 40.0f) == 40.0f);
+    set_view(0, true, 0, 0);
+    CHECK(after_a_while(0, false) && at_the_tests(cg_of(0)));
+    set_mod(false);
+    CHECK(!at_the_tests(cg_of(0)) && at_the_gap(cg_of(0), 40.0f) == 40.0f);
+    set_mod(true);
+    CHECK(at_the_tests(cg_of(0)));
+    // not seen by the crosshair's test for more than a quarter of a second
+    test_now += Seen_For_Ms + 1;
+    CHECK(!at_the_tests(cg_of(0)) && at_the_gap(cg_of(0), 40.0f) == 40.0f);
+    CHECK(after_a_while(0, false) && at_the_tests(cg_of(0)));
+    // something that isn't a local client's cg_t, or not the one the client was seen with
+    CHECK(!at_the_tests(cg_of(2)) && !at_the_tests(cg_of(0) + 8) && !at_the_tests(NULL));
+    CHECK(at_the_gap(cg_of(2), 40.0f) == 40.0f && at_the_gap(NULL, 40.0f) == 40.0f);
+    clients[0].cg = cg_of(1);
+    CHECK(!at_the_tests(cg_of(0)) && at_the_gap(cg_of(0), 40.0f) == 40.0f);
+    clients[0].cg = cg_of(0);
+    CHECK(at_the_tests(cg_of(0)));
+    memset(clients, 0, sizeof(clients));
+}
+
 static void test_init(void) {
     const uint64_t base = 0x100000000;
     aae_freeaim_init(base, 0);
     CHECK(hooks == 0);
+    // not from the pre-patched executable, or from one without both places: the crosshair's test only
+    const int places[] = { ADDR_CG_DrawCrosshair_Tests, ADDR_CG_DrawCrosshair_Gap };
+    for (int i = 0; i < 3; i++) {
+        have_stubs = i < 2, stub_missing_for = i < 2 ? places[i] : -1;
+        hooks = 0;
+        aae_freeaim_init(base, 1);
+        CHECK(hooks == 1 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
+                                       (void **)&orig_CG_DrawCrosshairTest));
+    }
+    have_stubs = true, stub_missing_for = -1;
+    hooks = 0;
     aae_freeaim_init(base, 1);
-    CHECK(hooks == 1 && hooked.address == (void *)(base + ADDR_CG_DrawCrosshairTest) &&
-          hooked.replacement == (void *)fake_CG_DrawCrosshairTest);
+    CHECK(hooks == 3 && was_hooked(ADDR_CG_DrawCrosshairTest, (void *)fake_CG_DrawCrosshairTest,
+                                   (void **)&orig_CG_DrawCrosshairTest));
+    CHECK(was_hooked(ADDR_CG_DrawCrosshair_Tests, (void *)handler_Crosshair_Tests, &orig_Crosshair_Tests) &&
+          other_Crosshair_Tests == (void *)(base + ADDR_CG_DrawCrosshair_Draws));
+    CHECK(was_hooked(ADDR_CG_DrawCrosshair_Gap, (void *)handler_Crosshair_Gap, &orig_Crosshair_Gap));
+    // the places in the game's own structures, as they were read from its code
+    CHECK(Cg_Size == 0x342a80 && Cg_ThirdPerson == 0x11a8c9 && Cg_PlayerState == 0x11a8d0 && Ps_Kind == 4 &&
+          Ps_Sights == 0x2fc && Frame_Sights == -0x50 && Weapon_LeastGap == 0x6f0);
     CHECK(Dvar_FindByHash == (void *)(base + ADDR_Dvar_FindByHash) && Dvar_GetFloat == (void *)(base + ADDR_Dvar_GetFloat) &&
           Dvar_GetString == (void *)(base + ADDR_Dvar_GetString) && cg_clients == (void *)(base + ADDR_cgArray) &&
           crosshair_asks_from == (const void *)(base + ADDR_CG_DrawCrosshair_TestReturn) && now_ms == uptime_ms);
@@ -285,6 +427,8 @@ int main(void) {
     now_ms = test_clock;
     test_rule();
     test_hook();
+    test_gap();
+    test_aiming();
 
     free(game_cgs);
     snprintf(command, sizeof(command), "rm -rf '%s'", template);

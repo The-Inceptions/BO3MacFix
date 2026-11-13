@@ -18,3 +18,7 @@ void aae_freeaim_seen(aae_freeaim_client_t *client, const void *cg, uint64_t now
 // player isn't a spectator, the map is a zombies one and neither dvar switches it off.
 bool aae_freeaim_on(aae_freeaim_client_t *client, uint64_t now, uint32_t client_number, bool third_person,
                     int player_kind, const char *map, float enabled, float enabled_for_client);
+// The crosshair's gap while free aim is on: from the gap the weapon's spread gives to the weapon's least gap as the
+// sights come up (sights: 0 down, 1 all the way up).
+float aae_freeaim_gap(float gap, float least, float sights);
+
