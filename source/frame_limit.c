@@ -44,6 +44,8 @@ int frame_limit_for_frame(frame_limits_t *limits, uint64_t now, int *started, in
         { atomic_load(&limits->pause_menu_fps), lasts(&limits->pause_menu_until, now) },
         { atomic_load(&limits->menu_fps), lasts(&limits->menus_until, now) },
         { atomic_load(&limits->background_fps), atomic_load(&limits->in_background) && lasts(&limits->ui_until, now) },
+        // not one of the situational ones logged here: the power watch (gpu_tweaks.c) logs it, like BatteryFPS
+        { atomic_load(&limits->low_power_fps), atomic_load(&limits->low_power) },
     };
     // the situational ones, in Limit_* bit order, from all[2]
     int situations = 0, limiting = 0;

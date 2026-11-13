@@ -8,6 +8,7 @@
 //   panel's resolution instead when the display is in a scaled mode.
 // - FrameStats: logs the frame rate, 1% low and worst frame time every few seconds, for benchmarking.
 // - BatteryFPS: paces frames to that rate only while the Mac runs on battery, to save power.
+// - LowPowerFPS: the same while macOS's Low Power Mode is on, the user's own request to save power.
 // - PauseMenuFPS: paces frames to that rate while the pause menu is open in a match (notices.lua says when), to save
 //   power.
 // - MenuFPS: the same in the menus outside a match (the main menu, the lobby, the mods menu; notices.lua says when).
@@ -808,17 +809,39 @@ static bool running_on_battery(void) {
     return battery;
 }
 
-// checks the power source now and then every 5 seconds (once, however often it's asked)
-static void start_battery_watch(void) {
+// whether macOS's Low Power Mode is on (System Settings > Battery, or Control Center), from NSProcessInfo's
+// lowPowerModeEnabled (macOS 12 and later; off before that). BO3MACFIX_LOWPOWERMODE=1 pretends it is, for testing.
+static bool low_power_mode_on(void) {
+    const char *env = getenv("BO3MACFIX_LOWPOWERMODE");
+    if (env != NULL)
+        return atoi(env) != 0;
+    Class process_info_class = objc_getClass("NSProcessInfo");
+    SEL enabled = sel_registerName("isLowPowerModeEnabled");
+    if (process_info_class == Nil)
+        return false;
+    id info = ((id (*)(Class, SEL))objc_msgSend)(process_info_class, sel_registerName("processInfo"));
+    if (info == nil || !class_respondsToSelector(object_getClass(info), enabled))
+        return false;
+    return ((BOOL (*)(id, SEL))objc_msgSend)(info, enabled) != NO;
+}
+
+// checks the power source and Low Power Mode now and then every 5 seconds (once, however often it's asked), for
+// BatteryFPS and LowPowerFPS, and says so when one of them changes while its limit is set
+static void start_power_watch(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         atomic_store(&limits.on_battery, running_on_battery());
+        atomic_store(&limits.low_power, low_power_mode_on());
         dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
         dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC);
         dispatch_source_set_event_handler(timer, ^{
             bool battery = running_on_battery();
             if (battery != atomic_exchange(&limits.on_battery, battery) && atomic_load(&limits.battery_fps) > 0)
                 printf("%s, %s\n", battery ? "running on battery" : "plugged in", battery ? "limiting the frame rate" : "frame rate unlimited");
+            bool low_power = low_power_mode_on();
+            if (low_power != atomic_exchange(&limits.low_power, low_power) && atomic_load(&limits.low_power_fps) > 0)
+                printf("Low Power Mode %s, %s\n", low_power ? "on" : "off",
+                       low_power ? "limiting the frame rate" : "its frame limit is off");
         });
         dispatch_resume(timer);
     });
@@ -836,8 +859,22 @@ void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch) {
     }
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
     atomic_store(&limits.battery_fps, fps);
-    start_battery_watch();
+    start_power_watch();
     printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
+}
+
+void gpu_tweaks_low_power_fps_init(int fps, code_patch_fn checked_code_patch) {
+    if (fps < 30 || fps > 240)
+        return;
+    if (!redirect_present(checked_code_patch)) {
+        printf("couldn't hook Aspyr's present, no LowPowerFPS\n");
+        return;
+    }
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    start_power_watch();
+    atomic_store(&limits.low_power_fps, fps);
+    printf("limiting the frame rate to %i fps in Low Power Mode (%s now)\n", fps,
+           atomic_load(&limits.low_power) ? "on" : "off");
 }
 
 void gpu_tweaks_pause_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
@@ -943,12 +980,29 @@ bool gpu_tweaks_set_battery_fps(int fps) {
         return false;
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
     if (fps != 0)
-        start_battery_watch();
+        start_power_watch();
     atomic_store(&limits.battery_fps, fps);
     if (fps != 0)
         printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
     else
         printf("not limiting the frame rate on battery\n");
+    return true;
+}
+
+bool gpu_tweaks_set_low_power_fps(int fps) {
+    if (fps != 0 && (fps < 30 || fps > 240))
+        return false;
+    if (fps != 0 && !present_live())
+        return false;
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    if (fps != 0)
+        start_power_watch();
+    atomic_store(&limits.low_power_fps, fps);
+    if (fps != 0)
+        printf("limiting the frame rate to %i fps in Low Power Mode (%s now)\n", fps,
+               atomic_load(&limits.low_power) ? "on" : "off");
+    else
+        printf("not limiting the frame rate in Low Power Mode\n");
     return true;
 }
 

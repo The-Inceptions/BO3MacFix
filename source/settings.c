@@ -74,6 +74,7 @@ static const setting_t settings[] = {
     { "FramesInFlight", "Frames in flight", "How many frames the CPU may queue ahead of the GPU: fewer means less input lag.", "Graphics", false, 3, { 1, 2, 3 }, { "1 (least lag)", "2 (normal)", "3 (smoothest)" }, 2, false },
     { "FramePacingFPS", "Frame pacing", "Keeps each frame on screen for a minimum time, for even pacing below the refresh rate.", "Graphics", false, 6, { 0, 30, 45, 60, 90, 120 }, { "Off", "30", "45", "60", "90", "120" }, 0, Live_Present },
     { "BatteryFPS", "Battery frame limit", "Limits the frame rate only while the Mac runs on battery, to save power.", "Graphics", false, 5, { 0, 30, 45, 60, 90 }, { "Off", "30", "45", "60", "90" }, 0, Live_Present },
+    { "LowPowerFPS", "Low Power Mode frame limit", "Limits the frame rate while macOS's Low Power Mode is on, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 30, Live_Present },
     { "PauseMenuFPS", "Pause menu frame limit", "Limits the frame rate while the pause menu is open in a match, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 30, Live_Present },
     { "MenuFPS", "Menu frame limit", "Limits the frame rate in the menus outside a match (main menu, lobby, mods), to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 40, Live_Present },
     { "BackgroundFPS", "Background frame limit", "Limits the frame rate while the game isn't the active app, or is hidden or minimized, to save power.", "Graphics", false, 4, { 0, 15, 30, 60 }, { "Off", "15", "30", "60" }, 30, Live_Present },
@@ -169,6 +170,8 @@ static bool apply_live(const setting_t *t, int value) {
         return gpu_tweaks_set_pacing(value);
     if (strcmp(n, "BatteryFPS") == 0)
         return gpu_tweaks_set_battery_fps(value);
+    if (strcmp(n, "LowPowerFPS") == 0)
+        return gpu_tweaks_set_low_power_fps(value);
     if (strcmp(n, "PauseMenuFPS") == 0)
         return gpu_tweaks_set_pause_menu_fps(value);
     if (strcmp(n, "MenuFPS") == 0)

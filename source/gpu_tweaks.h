@@ -19,6 +19,8 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch);
 
 // fps: the frame rate limit while on battery, 30 to 240 (0 = off)
 void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch);
+// fps: the frame rate limit while macOS's Low Power Mode is on, 30 to 240 (0 = off)
+void gpu_tweaks_low_power_fps_init(int fps, code_patch_fn checked_code_patch);
 
 // fps: the frame rate limit while the pause menu is open in a match, 30 to 240 (0 = off)
 void gpu_tweaks_pause_menu_fps_init(int fps, code_patch_fn checked_code_patch);
@@ -54,13 +56,14 @@ int gpu_tweaks_dynres_held_base(void);
 // turns on macOS's Metal performance HUD (FPS and GPU time) when enabled
 void gpu_tweaks_metal_hud_init(int enabled);
 
-// changes from the settings menu while the game runs: FramePacingFPS, BatteryFPS, PauseMenuFPS, MenuFPS,
+// changes from the settings menu while the game runs: FramePacingFPS, BatteryFPS, LowPowerFPS, PauseMenuFPS, MenuFPS,
 // BackgroundFPS and FrameStats. Each
 // returns false when it needs a restart (turning it on needs present hooked, which only the pre-patched executable can
 // do late).
 bool gpu_tweaks_live_possible(void);
 bool gpu_tweaks_set_pacing(int fps);
 bool gpu_tweaks_set_battery_fps(int fps);
+bool gpu_tweaks_set_low_power_fps(int fps);
 bool gpu_tweaks_set_pause_menu_fps(int fps);
 bool gpu_tweaks_set_menu_fps(int fps);
 bool gpu_tweaks_set_background_fps(int fps);

@@ -1,5 +1,6 @@
 // Tests for frame_limit.c: which frame rate limit applies to a frame, and when the pause menu's limit (PauseMenuFPS),
-// the menus' (MenuFPS) and the background's (BackgroundFPS) start, stop and are logged.
+// the menus' (MenuFPS) and the background's (BackgroundFPS) start, stop and are logged, and Low Power Mode's
+// (LowPowerFPS).
 #include <stdio.h>
 #include "../source/frame_limit.h"
 
@@ -288,6 +289,47 @@ static void test_in_match(void) {
     CHECK(!frame_limit_in_match(&limits, 20 * Second + Pause_Menu_Timeout_NS)); // its polls stopped
 }
 
+// LowPowerFPS applies while macOS's Low Power Mode is on, on battery or not, and the lowest limit still wins. The power
+// watch logs it, so frame_limit_for_frame doesn't.
+static void test_low_power(void) {
+    frame_limits_t limits = { 0 };
+    int started, stopped;
+    atomic_store(&limits.low_power_fps, 30);
+    CHECK(frame_limit_for_frame(&limits, Second, &started, &stopped) == 0); // the mode is off
+    atomic_store(&limits.low_power, true);
+    CHECK(frame_limit_for_frame(&limits, 2 * Second, &started, &stopped) == 30 && started == 0 && stopped == 0);
+    // plugged in or on battery alike, and below a higher BatteryFPS
+    atomic_store(&limits.battery_fps, 60);
+    CHECK(frame_limit_for_frame(&limits, 3 * Second, &started, &stopped) == 30);
+    atomic_store(&limits.on_battery, true);
+    CHECK(frame_limit_for_frame(&limits, 4 * Second, &started, &stopped) == 30);
+    // a lower limit that applies wins over it: BatteryFPS 25 isn't a setting's value, but the rule is the lowest one
+    atomic_store(&limits.battery_fps, 25);
+    CHECK(frame_limit_for_frame(&limits, 5 * Second, &started, &stopped) == 25);
+    atomic_store(&limits.battery_fps, 60);
+    // with the pause menu open in a match at PauseMenuFPS 20 (below it): the menu's limit, logged as usual
+    atomic_store(&limits.pause_menu_fps, 20);
+    frame_limit_set_pause_menu(&limits, true, 6 * Second);
+    CHECK(frame_limit_for_frame(&limits, 6 * Second, &started, &stopped) == 20 && started == Limit_Pause_Menu);
+    frame_limit_set_pause_menu(&limits, false, 7 * Second);
+    CHECK(frame_limit_for_frame(&limits, 7 * Second, &started, &stopped) == 30 && stopped == Limit_Pause_Menu);
+    // the mode turned off: BatteryFPS on battery is what's left; then plugged in, nothing
+    atomic_store(&limits.low_power, false);
+    CHECK(frame_limit_for_frame(&limits, 8 * Second, &started, &stopped) == 60 && started == 0 && stopped == 0);
+    atomic_store(&limits.on_battery, false);
+    CHECK(frame_limit_for_frame(&limits, 9 * Second, &started, &stopped) == 0);
+    // LowPowerFPS off (0) with the mode on: no limit from it
+    atomic_store(&limits.low_power_fps, 0);
+    atomic_store(&limits.low_power, true);
+    CHECK(frame_limit_for_frame(&limits, 10 * Second, &started, &stopped) == 0);
+    // FramePacingFPS 60 with LowPowerFPS 40 in the mode: 40; with the mode off: 60
+    atomic_store(&limits.pacing_fps, 60);
+    atomic_store(&limits.low_power_fps, 40);
+    CHECK(frame_limit_for_frame(&limits, 11 * Second, &started, &stopped) == 40);
+    atomic_store(&limits.low_power, false);
+    CHECK(frame_limit_for_frame(&limits, 12 * Second, &started, &stopped) == 60);
+}
+
 int main(void) {
     test_lowest();
     test_lowest_limit();
@@ -298,6 +340,7 @@ int main(void) {
     test_background();
     test_background_not_loading();
     test_in_match();
+    test_low_power();
     if (failures == 0)
         printf("test_frame_limit: all passed\n");
     return failures == 0 ? 0 : 1;

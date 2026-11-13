@@ -29,9 +29,11 @@ typedef struct {
 int frame_limit_lowest(const frame_limit_t *limits, int count);
 
 typedef struct {
-    // FramePacingFPS, BatteryFPS, PauseMenuFPS, MenuFPS and BackgroundFPS, 0 = off
-    atomic_int pacing_fps, battery_fps, pause_menu_fps, menu_fps, background_fps;
-    atomic_bool on_battery, in_background;
+    // FramePacingFPS, BatteryFPS, PauseMenuFPS, MenuFPS, BackgroundFPS and LowPowerFPS, 0 = off
+    atomic_int pacing_fps, battery_fps, pause_menu_fps, menu_fps, background_fps, low_power_fps;
+    // on battery, in the background, and macOS's Low Power Mode on (the user asked macOS to save power, which can be
+    // on with the charger in too)
+    atomic_bool on_battery, in_background, low_power;
     // when the pause menu stops counting as open, the game as in the menus, and the UI as up (nanoseconds of a clock
     // that only goes forward), 0 while it isn't. The UI is up while notices.lua polls: in the menus and in a match,
     // not while the game starts or a map loads.
