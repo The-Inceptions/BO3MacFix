@@ -398,6 +398,10 @@ static bool read_game(const uint8_t *from, void *into, size_t size) {
                                   (mach_vm_address_t)(uintptr_t)into, &got) == KERN_SUCCESS && got == size;
 }
 
+// what starts the watcher's thread (a test gives its own)
+static int (*start_thread)(pthread_t *thread, const pthread_attr_t *attributes, void *(*body)(void *),
+                           void *argument) = pthread_create;
+
 static void *watch(void *unused) {
     (void)unused;
     watched_t watched = { 0 };
@@ -424,7 +428,7 @@ void aae_move_slide_init(uint64_t game_base_address) {
     cg_clients = (uint8_t *const *)(game_base_address + ADDR_cgArray);
     if (debug) {
         pthread_t thread;
-        if (pthread_create(&thread, NULL, watch, NULL) == 0)
+        if (start_thread(&thread, NULL, watch, NULL) == 0)
             pthread_detach(thread);
     }
     if (!aae_movement_enabled()) {

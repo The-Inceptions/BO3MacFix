@@ -103,6 +103,10 @@ __attribute__((format(printf, 1, 2))) static int test_say(const char *format, ..
     return n;
 }
 
+static bool said_has(const char *text) {
+    return strstr(said, text) != NULL;
+}
+
 // ---- the made-up game's PM_Accelerate and PM_DoSlideAdjustments
 static struct {
     int calls;
@@ -439,6 +443,16 @@ static void test_pitch_clamp(void) {
 }
 
 // ---- what is installed where
+// the watcher's thread: started how often, with what
+static int thread_starts;
+static void *(*thread_body)(void *);
+static int test_start_thread(pthread_t *thread, const pthread_attr_t *attributes, void *(*body)(void *),
+                             void *argument) {
+    (void)thread, (void)attributes, (void)argument;
+    thread_starts++;
+    thread_body = body;
+    return 1; // as if it couldn't be started: nothing runs, nothing is detached
+}
 static void init_with(bool enabled, bool stubs, uint32_t missing) {
     test_enabled = enabled, have_stubs = stubs, stub_missing_for = missing;
     hooks = 0;
@@ -478,6 +492,26 @@ static void test_install(void) {
         CHECK(hooks == 0);
     }
     test_enabled = true, have_stubs = true, stub_missing_for = 1;
+    // the watcher's thread: only with BO3MACFIX_MOVEDEBUG (not 0), whatever the setting says
+    start_thread = test_start_thread;
+    thread_starts = 0, thread_body = NULL;
+    unsetenv("BO3MACFIX_MOVEDEBUG");
+    init_with(true, true, 1);
+    init_with(false, true, 1);
+    setenv("BO3MACFIX_MOVEDEBUG", "0", 1);
+    init_with(true, true, 1);
+    CHECK(thread_starts == 0);
+    setenv("BO3MACFIX_MOVEDEBUG", "1", 1);
+    init_with(true, true, 1);
+    CHECK(thread_starts == 1 && thread_body == watch);
+    CHECK(said_has("movement: T7Overcharged's slide changes are hooked"));
+    init_with(false, true, 1);
+    CHECK(thread_starts == 2 && hooks == 0);
+    CHECK(said_has("movement: AAEMovement is 0: nothing of T7Overcharged's slide changes is hooked\n"));
+    unsetenv("BO3MACFIX_MOVEDEBUG");
+    init_with(true, true, 1);
+    CHECK(thread_starts == 2 && debug == 0);
+    start_thread = pthread_create;
     // the places, as the research found and this piece checked them in the game's file
     CHECK(ADDR_PM_DoSlideAdjustments == 0x11488f0 && ADDR_PM_Accelerate == 0x1147ed9 &&
           ADDR_PM_CmdScale_SlideRampCmp == 0x11486ac && ADDR_PM_Friction_SlideFriction == 0x113c526 &&
@@ -488,9 +522,6 @@ static void test_install(void) {
 }
 
 // ---- the debug lines the game checks look for (wip/agents/movec/gamecheck)
-static bool said_has(const char *text) {
-    return strstr(said, text) != NULL;
-}
 static void test_debug_lines(void) {
     uint8_t ps[0x900];
     memset(ps, 0, sizeof(ps));
