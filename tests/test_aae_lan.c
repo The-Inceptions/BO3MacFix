@@ -154,6 +154,13 @@ static int game_ffotd_version(void) {
 }
 static const uint64_t game_user_xuid = A_Person;
 static const uint64_t *game_users[2] = { &game_user_xuid, NULL };
+static int game_netfield_checksum(void) {
+    return (int)0x8badf00d;
+}
+// the join request's two instructions as BO3MacFix's patches leave them, and the game's changelist
+static uint8_t game_request_protocol[7] = { 0xc7, 0x45, 0x90, 0x64, 0x48, 0x00, 0x00 }; // mov dword [rbp-0x70], 18532
+static uint8_t game_request_changelist[5] = { 0xb8, 0x12, 0xfc, 0xd3, 0x00 };          // mov eax, 13892626
+static int32_t game_changelist_value = 13891234;
 static uint64_t test_now = 1000000;
 static uint64_t test_clock(void) {
     return test_now;
@@ -967,6 +974,30 @@ static void test_join_caller(void) {
           game.join_type == 4 && !join.matched && join.given_id == 0);
 }
 
+// ---- what the debug lines show a join compares
+static void test_join_values(void) {
+    char text[256];
+    game_network_mode = 1;
+    join_values(text, sizeof(text));
+    CHECK(strcmp(text, "network mode 1, playlist version 1230005, ffotd version 42, netfield checksum 8badf00d, "
+                       "changelist 13892626, protocol version 18532") == 0);
+    // the game's own instructions: its call for the changelist, which then is the game's, and its protocol version
+    static const uint8_t shipped_changelist[5] = { 0xe8, 0xc0, 0x46, 0xce, 0xff };
+    static const uint8_t shipped_protocol[7] = { 0xc7, 0x45, 0x90, 0x62, 0x48, 0x00, 0x00 };
+    request_changelist = shipped_changelist, request_protocol_version = shipped_protocol;
+    game_network_mode = 2;
+    join_values(text, sizeof(text));
+    CHECK(strcmp(text, "network mode 2, playlist version 1230005, ffotd version 42, netfield checksum 8badf00d, "
+                       "changelist 13891234, protocol version 18530") == 0);
+    request_changelist = game_request_changelist, request_protocol_version = game_request_protocol;
+    game_network_mode = 1;
+    // what doesn't fit is cut, not written past
+    char small[24];
+    memset(small, 'x', sizeof(small));
+    join_values(small, 20);
+    CHECK(small[19] == '\0' && small[20] == 'x' && strncmp(small, "network mode 1, pla", 19) == 0);
+}
+
 // ---- lobby messages
 static void test_lobby_message(void) {
     uint8_t packet[0x408] = { 0x28, 0, 0, 0, '1', 5 };
@@ -1145,6 +1176,11 @@ static void test_init(void) {
           was_hooked(ADDR_LanJoin_Join, (void *)fake_LanJoin_Join, (void **)&orig_LanJoin_Join));
     CHECK(join_from_ping == (const void *)(base + ADDR_LanJoin_JoinFromPing) && now_ms == uptime_ms &&
           query_port == 27018);
+    CHECK(NetfieldChecksum_Get == (void *)(base + ADDR_NetfieldChecksum_Get) &&
+          request_protocol_version == (const uint8_t *)(base + ADDR_JoinRequest_ProtocolVersionInst) &&
+          request_changelist == (const uint8_t *)(base + ADDR_LobbyHostMsg_SendJoinRequest_GetChangelistCall) &&
+          game_changelist == (const int32_t *)(base + ADDR_Changelist) && Mov_Eax_Imm == 0xb8 &&
+          Protocol_Version_At == 3);
     CHECK(lobby_ui_screen == (const int32_t *)(base + ADDR_lobbyUIScreen) &&
           PlaylistVersion_Get == (void *)(base + ADDR_PlaylistVersion_Get) &&
           FFOTDVersion_Get == (void *)(base + ADDR_FFOTDVersion_Get) &&
@@ -1179,6 +1215,10 @@ int main(void) {
     PlaylistVersion_Get = game_playlist_version;
     FFOTDVersion_Get = game_ffotd_version;
     local_users = game_users;
+    NetfieldChecksum_Get = game_netfield_checksum;
+    request_protocol_version = game_request_protocol;
+    request_changelist = game_request_changelist;
+    game_changelist = &game_changelist_value;
     UserNetworking_Send = game_user_send;
     Dvar_FindByHash = game_find;
     Dvar_GetString = game_string;
@@ -1200,6 +1240,7 @@ int main(void) {
     test_no_thread();
     test_asking();
     test_join_caller();
+    test_join_values();
     test_lobby_message();
     test_lobby_send();
     test_switch();

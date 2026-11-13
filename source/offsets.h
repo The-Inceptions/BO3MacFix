@@ -613,6 +613,9 @@
 #define ADDR_LanJoin_PlaylistChecked 0x1233df6 // where that check goes on when the versions are the same: the ffotd check
 #define ADDR_LanJoin_FFOTDRejected 0x1233f4d // mid-func - "mov r15d, [rbp - 0xdc]": the same for the ffotd version (from 0x12307c8); only the jne at 0x1233e0a comes here (Windows: the check at 0x141ed290e)
 #define ADDR_LanJoin_FFOTDChecked 0x1233e10 // where that check goes on when they are the same (r14d loaded before its jne)
+#define ADDR_NetfieldChecksum_Get 0x104e12e // func - int (): the checksum of the game's netfield tables (0x104dc4d, kept by 0x104e0b9), which a join request carries (0x1232441) and the host's join handler compares (0x1233e16, "netfield checksum does not match") (Windows: not looked up)
+#define ADDR_JoinRequest_ProtocolVersionInst 0x1232449 // mid-func - "mov dword [rbp - 0x70], 18530" in the join request's builder (0x12321fd): the protocol version it carries, the immediate at +3 (one of ADDRS_NetworkVersion's places)
+#define ADDR_Changelist 0x18a51b4 // int: the game's changelist (getter 0xf16b1d), which the join request carries unless BO3MacFix's patch at ADDR_LobbyHostMsg_SendJoinRequest_GetChangelistCall puts the Windows build's there
 // -- end lan join
 // T7Overcharged's smaller pieces (t7o_small.c); Windows addresses from T7Overcharged's own patterns for its names
 #define ADDR_Sys_QueEvent 0xd62e06 // func - void (int time, int type, int value, int value2, int, int, void *): the window's key and mouse messages into the game's event queue (256 of 32 bytes, critical section 0x31); type 1 is a key, value2 1 down and 0 up; mouse buttons are keys 200-204 (Windows 0x1422882e0, T7Overcharged's OFF_sys_que_event: the same body and callers)

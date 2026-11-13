@@ -273,6 +273,28 @@ static uint64_t steam_local_id(void) {
 }
 static uint64_t (*local_id)(void) = steam_local_id;
 
+// What this game's join request carries and what this game, as a host, compares a joiner's with: the host's join
+// handler (0x1012334e4) checks the lobby's network mode, the playlist and ffotd versions and the netfield checksum
+// itself, and hands the changelist and the protocol version to the Lua "JoinableCheck". The debug lines show them,
+// so that a join one of them refuses can be told from the two machines' logs. The changelist and the protocol
+// version are read from the instructions that put them into the request (BO3MacFix's version patches change both).
+#define Mov_Eax_Imm 0xb8       // "mov eax, imm32", which BO3MacFix puts in place of the request's call for its changelist
+#define Protocol_Version_At 3  // where the immediate is in the request's "mov dword [rbp - 0x70], imm32"
+static int (*PlaylistVersion_Get)(void), (*FFOTDVersion_Get)(void), (*NetfieldChecksum_Get)(void);
+static const uint8_t *request_protocol_version, *request_changelist;
+static const int32_t *game_changelist;
+static void join_values(char *text, size_t size) {
+    int32_t protocol, changelist;
+    memcpy(&protocol, request_protocol_version + Protocol_Version_At, sizeof(protocol));
+    if (request_changelist[0] == Mov_Eax_Imm)
+        memcpy(&changelist, request_changelist + 1, sizeof(changelist));
+    else
+        changelist = *game_changelist;
+    snprintf(text, size, "network mode %d, playlist version %d, ffotd version %d, netfield checksum %08x, changelist "
+             "%d, protocol version %d", *lobby_network_mode, PlaylistVersion_Get(), FFOTDVersion_Get(),
+             (uint32_t)NetfieldChecksum_Get(), changelist, protocol);
+}
+
 static const char *address_text(uint32_t address, char text[16]) {
     snprintf(text, 16, "%u.%u.%u.%u", address >> 24, address >> 16 & 0xff, address >> 8 & 0xff, address & 0xff);
     return text;
@@ -328,10 +350,13 @@ static void listener_serve(int fd) {
     uint8_t reply[AAE_LAN_PACKET];
     aae_lan_reply(reply, number, id);
     ssize_t sent = sendto(fd, reply, sizeof(reply), 0, (struct sockaddr *)&from, from_size);
-    if (debug && replies_logged++ < Logged_Most)
-        printf("lan join: answered the query %08x from %s:%u with Steam ID %llu%s (network mode %d)\n", number,
+    if (debug && replies_logged++ < Logged_Most) {
+        char values[256];
+        join_values(values, sizeof(values));
+        printf("lan join: answered the query %08x from %s:%u with Steam ID %llu%s (this host: %s)\n", number,
                address_text(address, text), ntohs(from.sin_port), (unsigned long long)id,
-               sent == (ssize_t)sizeof(reply) ? "" : " (not sent)", mode);
+               sent == (ssize_t)sizeof(reply) ? "" : " (not sent)", values);
+    }
 }
 
 // The listener's state and one turn of its loop: true when the thread is to wait a while before the next.
@@ -400,9 +425,8 @@ static aae_lan_join_t join; // under lock, and so is this:
 static bool asker_started;
 static uint16_t query_port = AAE_LAN_PORT; // the tests ask a host of their own on another port
 static const void *join_from_ping;         // where the ping's answer goes on after its Join
-// what the debug line of a connect shows of the game
+// what the debug line of a connect shows of the game besides what a join compares
 static const int32_t *lobby_ui_screen;
-static int (*PlaylistVersion_Get)(void), (*FFOTDVersion_Get)(void);
 static const uint64_t *const *local_users;
 
 static uint64_t uptime_ms(void) {
@@ -524,12 +548,14 @@ install_hook_name(LanJoin_Connect, void, void) {
         uint32_t attempt = join.attempt;
         pthread_cond_broadcast(&answered);
         pthread_mutex_unlock(&lock);
-        if (debug)
-            printf("lan join: connect %u begins (network mode %d, lobby UI screen %d, playlist version %d, ffotd "
-                   "version %d; the game's local user %llu, Steam's %llu)\n", attempt, *lobby_network_mode,
-                   *lobby_ui_screen, PlaylistVersion_Get(), FFOTDVersion_Get(),
+        if (debug) {
+            char values[256];
+            join_values(values, sizeof(values));
+            printf("lan join: connect %u begins (lobby UI screen %d, %s; the game's local user %llu, Steam's %llu)\n",
+                   attempt, *lobby_ui_screen, values,
                    local_users[0] != NULL ? (unsigned long long)*local_users[0] : 0ull,
                    (unsigned long long)local_id());
+        }
     }
     orig_LanJoin_Connect();
 }
@@ -723,6 +749,10 @@ void aae_lan_init(uint64_t game_base_address, int enabled) {
     PlaylistVersion_Get = (int (*)(void))(game_base_address + ADDR_PlaylistVersion_Get);
     FFOTDVersion_Get = (int (*)(void))(game_base_address + ADDR_FFOTDVersion_Get);
     local_users = (const uint64_t *const *)(game_base_address + ADDR_localUsers);
+    NetfieldChecksum_Get = (int (*)(void))(game_base_address + ADDR_NetfieldChecksum_Get);
+    request_protocol_version = (const uint8_t *)(game_base_address + ADDR_JoinRequest_ProtocolVersionInst);
+    request_changelist = (const uint8_t *)(game_base_address + ADDR_LobbyHostMsg_SendJoinRequest_GetChangelistCall);
+    game_changelist = (const int32_t *)(game_base_address + ADDR_Changelist);
     install_hook_LanJoin_Connect((void *)(game_base_address + ADDR_LanJoin_Connect));
     install_hook_LanJoin_ParseAddress((void *)(game_base_address + ADDR_LanJoin_ParseAddress));
     install_hook_LanJoin_PingServer((void *)(game_base_address + ADDR_LanJoin_PingServer));
