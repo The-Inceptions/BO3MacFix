@@ -39,6 +39,7 @@
 #include "lua_unref.h"
 #include "t7o_guards.h"
 #include "pmem_spill.h"
+#include "aae_clientfx.h"
 #include "bo3macnative.h"
 #include "codhavoktypes.h"
 #include "cpu_tuning.h"
@@ -1195,6 +1196,9 @@ __attribute__((constructor)) static void dylib_main() {
     // 2 GB more address space for loaded files when the game's 2 GB are full, as All-around Enhancement's Windows
     // plugin gives it (MoreMapMemory, on by default), see pmem_spill.c
     pmem_spill_init(game_base_address, read_int_setting_or_env("MoreMapMemory", 1));
+    // client effects get a table of 2048 once a mod has started T7Overcharged, as T7Overcharged gives them
+    // (MoreClientEffects, on by default), see aae_clientfx.c
+    aae_clientfx_init(game_base_address, read_int_setting_or_env("MoreClientEffects", 1));
     // mantling by the rules All-around Enhancement 4 gives its Windows plugin (AAEMantling, on by default), see
     // aae_mantle.c
     aae_mantle_init(game_base_address, read_int_setting_or_env("AAEMantling", 1));

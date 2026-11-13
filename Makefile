@@ -38,6 +38,8 @@ TEST_TARGETS += tests/test_aae_freeaim
 TEST_TARGETS += tests/test_aae_linkcam
 # free aim for players on other machines: what is sent, what the server keeps (aae_freeaim_net.c)
 TEST_TARGETS += tests/test_aae_freeaim_net
+# T7Overcharged's bigger table of client effects: its rules, and the six hooks against a made-up cache (aae_clientfx.c)
+TEST_TARGETS += tests/test_aae_clientfx
 # T7Overcharged's weapon attachment and local client guards (t7o_guards.c)
 TEST_TARGETS += tests/test_t7o_guards
 # the pause for everybody in a co-op game: the plugin's packets and rules, machines playing together (aae_coop_pause.c)
@@ -112,6 +114,8 @@ SOURCES += source/aae_prompt.c
 # AAEFreeAim: a crosshair in the mod's third person view, and shots that go to what is under it (aae_freeaim.c);
 # what a player on another machine sends the server for that (aae_freeaim_net.c)
 SOURCES += source/aae_freeaim.c source/aae_freeaim_net.c
+# MoreClientEffects: T7Overcharged's table of 2048 client effects instead of the game's 1024 (aae_clientfx.c)
+SOURCES += source/aae_clientfx.c
 # AAEGestures: the mod's left-hand gestures put at the camera, as its plugin does (aae_linkcam.c)
 SOURCES += source/aae_linkcam.c
 # AAECoopPause: the pause for everybody in a co-op game, as the mod's plugin does it (aae_coop_pause.c)
@@ -254,6 +258,12 @@ tests/test_aae_freeaim: tests/test_aae_freeaim.c tests/freeaim_cases.h tests/fre
 		source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_freeaim.c source/gsc_obj.c source/aae_freeaim_net.c
+
+# aae_clientfx.c: T7Overcharged's rules for its table of client effects, and the six hooks against a made-up cache
+tests/test_aae_clientfx: tests/test_aae_clientfx.c source/aae_clientfx.c source/aae_clientfx.h source/gsc_obj.c \
+		source/gsc_obj.h source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_clientfx.c source/gsc_obj.c
 
 # aae_freeaim_net.c: what a client sends the server, what the server keeps and looks up, against a made-up game and
 # against what the plugin's own code gave for the same cases

@@ -45,6 +45,7 @@ tests/test_weapon_anim
 tests/test_detour
 tests/test_aae_prompt
 tests/test_aae_freeaim
+tests/test_aae_clientfx
 tests/test_aae_linkcam
 tests/test_aae_freeaim_net
 tests/test_t7o_guards

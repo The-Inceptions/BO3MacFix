@@ -10,6 +10,7 @@
 #include <strings.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#include "aae_clientfx.h"
 #include "dobby.h"
 #include "havok.h"
 #include "offsets.h"
@@ -166,6 +167,8 @@ static int t7o_init(lua_State *s) {
     // the stack can be reallocated while our Lua runs, so remember the top as an index
     ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
     apply_asset_limits();
+    // the first start decides whether client effects get T7Overcharged's bigger table (aae_clientfx.c)
+    aae_clientfx_t7o_started();
     if (hks_load_source(s, (const char *)t7overcharged_lua, t7overcharged_lua_len, "=BO3MacFix T7Overcharged")) {
         hks_push_cfunction(s, lua_create_directory, "CreateDirectory");
         hks_push_cfunction(s, lua_directory_exists, "DirectoryExists");

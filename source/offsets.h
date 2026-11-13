@@ -431,6 +431,19 @@
 #define ADDR_BG_GetShieldHealth 0x1387ecf // func - int (int, int client_num, Weapon): through the thread-local bgs; the start hit points without one - name is a guess
 #define ADDR_BG_ThreadBgs 0x12ddff8 // func - bgs_t **(void): this thread's bgs pointer (thread-local) - name is a guess
 // -- end zm inventory
+// -- client effects (aae_clientfx.c): the "BG cache" of numbered assets, matched with Windows (wip/night/impl-clientfx.md)
+#define ADDR_bgCache 0xa974930 // two copies of 0x45fe00 bytes, the server's then the client's; client effects at +0x43c00, 1024 entries of 16 bytes (Windows 0x1436051f0)
+#define ADDR_BG_Cache_Init 0x12a1ae0 // func - void (int side): zeroes that copy, then registers bgCachePrintValues (Windows 0x1400a8310)
+#define ADDR_BG_Cache_GetIndexInternal 0x12a7048 // func - int (int side, int kind, entry *table, int count, const char *name, bool free_entry): index, 0 for none; "Exceeded" when full (Windows 0x1400a4860)
+#define ADDR_BG_Cache_RegisterDef 0x12a7d0d // func - int (int side, int kind, entry *table, int count, const char *name, const void *asset, bool reference): index, 0 for none (Windows 0x1400a5d60; T7Overcharged's name)
+#define ADDR_BG_Cache_Release 0x12a7237 // func - void (int side, int kind, entry *table, int count, const char *name): a reference less, free at 0 (inlined in Windows 0x1400a4550) - name is a guess
+#define ADDR_BG_Cache_FindAsset 0x12a29ea // func - bool (int asset type, const char *name, const void **asset): DB_FindXAssetHeader, "Couldn't find asset '%s'" when missing - name is a guess
+#define ADDR_BG_Cache_ReleaseClientFx 0x12a75a1 // func - (int side, const char *name), the type table's release for client_fx (Windows 0x1400a4550, T7Overcharged's clientfx function 1)
+#define ADDR_BG_Cache_GetClientFx 0x12a7474 // func - const void *(int side, int index) (Windows 0x1400a7710, function 2)
+#define ADDR_BG_Cache_GetClientFxIndex 0x12a74d5 // func - int (int side, const char *name) (Windows 0x1400a7730, function 3)
+#define ADDR_BG_Cache_GetClientFxName 0x12a749c // func - const char *(int side, int index) (Windows 0x1400a7770, function 4)
+#define ADDR_BG_Cache_RegisterClientFx 0x12a750a // func - void (int side, const char *name, bool reference); the type table's register is 0x12a7592, which calls it with 1 (Windows 0x1400a9f20, function 5)
+#define ADDR_Com_Printf 0xe71396 // func - void (int kind, int channel, const char *format, ...): the cache prints with kind 7, 8 or 9 and channel 0x17 (Windows 0x1420f04a0; T7Overcharged's name)
 // -- T7O crash guards (t7o_guards.c)
 // "mov ecx, [rax + 4*rcx + 0x3c0]" in the function that works out one of a weapon's fields for CG_RegisterWeapon
 // (0x1381200: weapon, its variant definition, field, the weapon's mode attachment; Windows 0x1426752f0): the override

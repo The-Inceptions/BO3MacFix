@@ -75,6 +75,12 @@ static const hook_def_t hook_defs[] = {
     { ADDR_ASL_Window_UpdateLetterbox, Push_R14 },
     { ADDR_ASL_XInputGetState, Push_R14 },
     { ADDR_ASL_XInputSetState, Push_R14 },
+    { ADDR_BG_Cache_GetClientFx, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x89, 0xF8 } },          // ...; mov eax, edi
+    { ADDR_BG_Cache_GetClientFxIndex, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x89, 0xF0 } }, // ...; mov rax, rsi
+    { ADDR_BG_Cache_GetClientFxName, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x89, 0xF8 } },      // ...; mov eax, edi
+    { ADDR_BG_Cache_Init, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } },                        // ...; push rbx
+    { ADDR_BG_Cache_RegisterClientFx, Push_R15 },
+    { ADDR_BG_Cache_ReleaseClientFx, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x89, 0xF0 } }, // ...; mov rax, rsi
     { ADDR_BG_WeaponAttachment_Overrides, 7, 0, { 0x8B, 0x8C, 0x88, 0xC0, 0x03, 0x00, 0x00 } }, // mov ecx, [rax+4*rcx+0x3c0] (a detour)
     { ADDR_AddDObjToScene, Push_R15 },
     { ADDR_CG_CalcViewValues_ViewAxis, 5, 4, { 0x83, 0xFB, 0x0B, 0x74, 0x08 } }, // cmp ebx, 0xb; je +8 (a detour)
