@@ -429,7 +429,7 @@
 #define ADDR_Com_Frame_SV_FrameReturn 0xe75a3e // where the game's frame's call of SV_Frame with the frame's msec returns to
 #define ADDR_Com_Frame_SV_FrameReturn2 0xe75a54 // and its call with -1 (one call on Windows; 0xe1c63a's call with 0 is another caller)
 #define ADDR_CL_Frame 0xe1a4c3 // func - void (int localClientNum, int msec, float frac in xmm0): the client's frame, called once a frame by the game's frame; hands msec to the add to the client's real time (0x110aa1d) (Windows 0x14135c910) - name is a guess
-#define ADDR_CanPauseGame_Test 0x136b736 // "mov al, 1 ; cmp dword [rcx + 0x1790], 0 ; jne <pop rbp; ret>" at the start of Engine.CanPauseGame's function (0x136b72b, bool (void); rcx = 0x1113b7880 there) (Windows 0x140843bd0)
+#define ADDR_CanPauseGame_Test 0x136b736 // "mov al, 1 ; cmp dword [rcx + 0x1790], 0 ; jne <pop rbp; ret>" at the start of Engine.CanPauseGame's function (0x136b72b, bool (void); rcx = 0x1113b7880 there, its +0x1790 a flag set only while the game renders one picture in several passes, 0 in play) (Windows 0x140843bd0)
 #define ADDR_Cmd_TokenizeString 0xf76456 // func - void (const char *text) (Windows 0x1420e2690)
 #define ADDR_CL_ServerCommand_TokenizeReturn 0xe2dfc7 // where CL_CGameNeedsServerCommand's call of it returns to (Windows: the call at 0x14131fd33)
 #define ADDR_NET_GetPacket 0xd6dacf // func - int (netadr_t *from, msg_t *msg): msg's data (+8) is moved past the header byte, its size (+0x1c) is the packet's, +0x34 the socket it came for (Windows 0x1422b9040)

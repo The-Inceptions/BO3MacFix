@@ -9,9 +9,10 @@
 // PauseOnDisconnect: when the controller the game reads disconnects and no other takes its place within half a second
 // (gc_bridge.m works that out: not an idle second controller, nor a DualSense going from Bluetooth to USB or back),
 // notices.lua is asked to pause. It does if the game is in a match that can pause (Engine.CanPauseGame: solo and
-// offline games), the pause menu isn't open already and the last input came from a controller. To pause, this posts
-// an Escape key press to the game's own event queue, so the engine opens its pause menu and pauses exactly as when
-// the player presses Esc.
+// offline games, and with AAECoopPause a co-op game this Mac hosts with All-around Enhancement 4, which then pauses
+// for everybody, as on Windows with the mod's plugin), the pause menu isn't open already and the last input came
+// from a controller. To pause, this posts an Escape key press to the game's own event queue, so the engine opens its
+// pause menu and pauses exactly as when the player presses Esc.
 //
 // PauseMenuFPS and MenuFPS: notices.lua also tells gpu_tweaks.c when the pause menu is open in a match and when the
 // game is in the menus outside one, which works with Notices and PauseOnDisconnect off too (notices.lua is loaded in

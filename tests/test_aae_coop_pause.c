@@ -1905,17 +1905,28 @@ static void test_world(void) {
         took = run_until(clients_paused(1, 3, false), 3000);
         CHECK(took >= 0 && took < (loss == 0 ? 200 : 1000));
 
-        // somebody joins while paused: the server runs until the newcomer acknowledged too
+        // somebody joins while paused (the plugin's behaviour, kept): for as long as the newcomer is loading, the
+        // server runs (the zombies move) while the host's view and every client stay held, and no give-up comes;
+        // once the newcomer is in and has answered, everything is held again
         set_cl_paused(host, 1);
         CHECK(run_until(nodes[0].server_msec == 0 && clients_paused(1, 3, true), 3000) >= 0);
+        uint64_t confirmed = h->confirmed;
+        CHECK(confirmed == h->sequence && h->state == 1);
         node_count = 5;
         nodes[4].ip = 5, nodes[4].port = 500;
         machine_init(&nodes[4].m, &world_clock, 0, 0x50000);
+        nodes[4].m.connection = 3, nodes[4].m.connection_data = false; // loading: no server info yet
+        seat(host, 4, 3, adr(5, 500, 4, 0), 104, 0); // connecting
+        int loading_frames = 0, as_the_plugin = 0;
+        for (int t = 0; t < 20000; t += 16) {
+            run_world(16);
+            loading_frames++;
+            as_the_plugin += nodes[0].server_msec == 16 && nodes[0].client_msec == 0 && clients_paused(1, 3, true) &&
+                             !h->timed_out && h->state == 1 && h->sequence == confirmed && h->confirmed == confirmed;
+        }
+        CHECK(as_the_plugin == loading_frames);
         nodes[4].m.connection = 9, nodes[4].m.connection_data = true;
         nodes[4].m.server = adr(1, 100, 4, 4), nodes[4].m.server_id = 0x5e;
-        seat(host, 4, 3, adr(5, 500, 4, 0), 104, 0); // connecting
-        run_world(32);
-        CHECK(nodes[0].server_msec == 16 && nodes[0].client_msec == 0);
         seat(host, 4, 5, adr(5, 500, 4, 0), 104, 0);
         took = run_until(nodes[0].server_msec == 0 && clients_paused(1, 4, true), 3500);
         CHECK(took >= 0);
@@ -1933,7 +1944,9 @@ static void test_world(void) {
         CHECK(world_clock - asked >= 3500 && world_clock - asked < 3500 + 32);
         CHECK(h->state == 0 && nodes[0].client_msec == 16 && nodes[0].server_msec == 16);
         CHECK(run_until(clients_paused(1, 4, false), 3000) >= 0);
-        CHECK(!aae_coop_can_pause(h, &host->game)); // until the host lets go of its menu
+        // CanPauseGame says no now; in the game the game itself then puts cl_paused back to 0 (0x10154e0c4), which
+        // closes the mod's pause menu, as set_cl_paused(host, 0) does here, and the host can pause again at once
+        CHECK(!aae_coop_can_pause(h, &host->game));
         set_cl_paused(host, 0);
         run_world(16);
         CHECK(aae_coop_can_pause(h, &host->game) && !h->timed_out);
@@ -2192,7 +2205,7 @@ static void test_init(void) {
           Dvar_GetString == (void *)(base + ADDR_Dvar_GetString) &&
           Dvar_SetFromStringByName == (void *)(base + ADDR_Dvar_SetFromStringByName) &&
           NET_SendPacket == (void *)(base + ADDR_NET_SendPacket) &&
-          CL_LocalClientSocket == (void *)(base + ADDR_Com_LocalClient_GetControllerIndex));
+          local_client_controller == (void *)(base + ADDR_Com_LocalClient_GetControllerIndex));
     CHECK(dvar_cl_paused == (void *)(base + ADDR_dvar_cl_paused) &&
           dvar_sv_paused == (void *)(base + ADDR_dvar_sv_paused) &&
           dvar_max_clients == (void *)(base + ADDR_dvar_sv_maxclients) &&
@@ -2225,7 +2238,7 @@ static void game_setup(void) {
     Dvar_GetString = fake_get_string;
     Dvar_SetFromStringByName = fake_set_from_string;
     NET_SendPacket = fake_NET_SendPacket;
-    CL_LocalClientSocket = fake_local_socket;
+    local_client_controller = fake_local_socket;
     dvar_cl_paused = &p_cl_paused, dvar_sv_paused = &p_sv_paused, dvar_max_clients = &p_max_clients;
     dvar_sv_running = &p_sv_running;
     table = calloc(4, Client_Size);

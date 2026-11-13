@@ -33,7 +33,8 @@
 //   nothing sends anywhere). The function can't be hooked at its start (its second instruction refers to its own
 //   address); a detour on its "add" would do it;
 // - Engine.CanPauseGame's function: its second instruction refers to its own address too, so it is a detour on
-//   its first test (that "some menu is open" global is nonzero), which says yes by pointing the test at a 1 of ours;
+//   its first test (a flag the game sets only while it renders one picture in several passes, 0 in play), which
+//   says yes by pointing the test at a 1 of ours;
 // - the client's server commands: the tokenizer's hook acts only where the client takes apart a server command;
 // - NET_GetPacket where the network thread asks it (by where it returns to), and the network thread's sending for a
 //   local client: hooked.
@@ -355,7 +356,8 @@ static void host_rules(aae_coop_t *coop, const aae_coop_game_t *game) {
     coop->host_view_frozen = false;
     if (requested) {
         if (mask != 0 || not_ready) {
-            // too late: the pause is given up until it is asked for anew
+            // too late: the pause is given up until it is asked for anew (CanPauseGame says no then, so the game
+            // itself puts cl_paused back to 0, 0x10154e0c4, and the mod's HUD closes the host's pause menu)
             if (coop->confirmed != coop->sequence && !coop->timed_out && coop->changed_at != 0 &&
                 now - coop->changed_at >= Answer_Ms) {
                 if (coop->state != 0) {
@@ -366,6 +368,10 @@ static void host_rules(aae_coop_t *coop, const aae_coop_game_t *game) {
                 }
                 coop->timed_out = true;
             }
+            // Somebody joining while the game is paused (connected or loading, not active yet) makes not_ready but
+            // no slot, so the sequence stays confirmed: the server runs again (the zombies move) while the host's
+            // view and every client stay held, and no give-up comes, until the newcomer is in (then it answers, or
+            // the give-up comes 3.5 s later). The plugin does the same.
             paused = mask == 0 ? !not_ready
                                : !not_ready && coop->confirmed == coop->sequence && !coop->timed_out;
         } else {
@@ -794,7 +800,7 @@ static void *(*Dvar_FindByHash)(uint32_t hash);
 static const char *(*Dvar_GetString)(void *dvar);
 static void (*Dvar_SetFromStringByName)(const char *name, const char *value, bool create);
 static bool (*NET_SendPacket)(int sock, int length, const void *data, uint64_t to_low, uint64_t to_high);
-static int (*CL_LocalClientSocket)(int local_client);
+static int (*local_client_controller)(int local_client);
 static uint8_t *const *dvar_cl_paused, *const *dvar_sv_paused, *const *dvar_max_clients, *const *dvar_sv_running;
 static uint8_t *const *server_clients;
 static uint8_t *const *client_connections;
@@ -894,7 +900,9 @@ static bool game_server(const aae_coop_game_t *game, aae_coop_adr_t *adr, uint64
 
 static int game_local_sock(const aae_coop_game_t *game) {
     (void)game;
-    return CL_LocalClientSocket(0);
+    // local client 0's controller is its socket too: the game gives local client n controller n and socket n; on the
+    // main branch the crash guards (t7o_guards.c) hook this function, and hand 0 and 1 on unchanged
+    return local_client_controller(0);
 }
 
 static uint64_t game_nonce(const aae_coop_game_t *game) {
@@ -1146,8 +1154,10 @@ static void client_frame(int local_client, int msec, float frac) {
         report();
 }
 
-// Engine.CanPauseGame's function at its first test, "mov al, 1 ; cmp dword [rcx + 0x1790], 0": with a yes, rcx is
-// pointed at a 1 of ours, so the test finds a menu open and the function returns its al, 1. rcx isn't used after.
+// Engine.CanPauseGame's function at its first test, "mov al, 1 ; cmp dword [rcx + 0x1790], 0": a flag the game sets
+// only for a special render of one picture in several passes (0x100d7d948, called from 0x1014a7bc5; 0 in play), with
+// which the function returns its al, 1. With a yes, rcx is pointed at a 1 of ours, so the test finds the flag set.
+// rcx isn't used after.
 #define Can_Pause_Test 0x1790
 static const int32_t say_yes = 1;
 detour_with_registers(Can_Pause) {
@@ -1251,7 +1261,7 @@ void aae_coop_pause_init(uint64_t game_base_address, int enabled) {
     Dvar_GetString = (void *)(game_base_address + ADDR_Dvar_GetString);
     Dvar_SetFromStringByName = (void *)(game_base_address + ADDR_Dvar_SetFromStringByName);
     NET_SendPacket = (void *)(game_base_address + ADDR_NET_SendPacket);
-    CL_LocalClientSocket = (void *)(game_base_address + ADDR_Com_LocalClient_GetControllerIndex);
+    local_client_controller = (void *)(game_base_address + ADDR_Com_LocalClient_GetControllerIndex);
     dvar_cl_paused = (uint8_t *const *)(game_base_address + ADDR_dvar_cl_paused);
     dvar_sv_paused = (uint8_t *const *)(game_base_address + ADDR_dvar_sv_paused);
     dvar_max_clients = (uint8_t *const *)(game_base_address + ADDR_dvar_sv_maxclients);
