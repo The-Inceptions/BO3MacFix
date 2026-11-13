@@ -6,9 +6,12 @@
 // its ammo bag refills it. Its server scripts tell every client "lowready,<entity>" or
 // "firstraise,<entity>" (the client system "deadshot_keyline"), and its client script then starts the animation in
 // first person (startweaponanim, weapon_anim.h) and asks T7Overcharged's anim_event for the matching event on that
-// player's body: 101 FLOURISH, the inspect in third person, or 15 FIRSTRAISEWEAPON. (A third branch, for
-// "reloadempty" and 17 RELOAD_EMPTY, is sent by no script of AAE 4.1.7.) The body is what the third person view and
-// the other players see. On the Mac anim_event did nothing, so there it stood still.
+// player's body: 15 FIRSTRAISEWEAPON for a weapon without an inspect animation of its own and after the refill, 101
+// FLOURISH for one with it. (A third branch, for "reloadempty" and 17 RELOAD_EMPTY, is sent by no script of AAE 4.1.7.)
+// The body is what the third person view and the other players see. Zombies' player anim script has a first raise
+// for every weapon class, a torso animation, and no flourish at all (no zombies zone has a body animation for it), so
+// the body shows the first raise and, for FLOURISH, nothing, on Windows too. On the Mac anim_event did nothing, so the
+// body never showed the first raise either.
 //
 // T7Overcharged's handler (T7O 0x180071b30), all of it:
 //     entity = GetEntity({ number = Scr_GetInt(inst, 1), class 0 })
@@ -17,9 +20,10 @@
 //                            G_GetRandomSeed());
 // and nothing goes back to the script. The game makes the same call itself when a player gets off something
 // (0x1012d1cee). BG_AnimScriptEvent looks up the player's anim script for the event in the player's state (weapon,
-// stance, movement), puts its animation in the player state and gives back how long it lasts, or -1 when the anim
-// script has nothing for it. The server sends the player state to everyone: the third person view and the other
-// players show the animation.
+// stance, movement) and puts its animations in the player state. It gives back how long the legs' animation lasts,
+// and -1 when it started none: when nothing in the script fits, and also when it started a torso animation alone, as
+// for zombies' first raise (its command, 0x1012df31a, is Wolfenstein ET's BG_ExecuteCommand). The server sends the
+// player state to everyone: the third person view and the other players show the animation.
 //
 // It acts on the server's entities and player states, whichever script calls it. From a client script, as AAE's, it
 // only changes something where this machine runs the server (solo, or the host of a co-op game), and it does so
@@ -109,8 +113,8 @@ static void say(int number, int event, anim_event_outcome_t outcome, int given, 
                "%d), legs 0x%04x -> 0x%04x (timer %d -> %d): the body's animation %s; the move's player state is "
                "%s\n",
                number, event, event_name(event), what[outcome], given,
-               given < 0 ? " (its anim script has nothing for this event now)" : "", before->torso, after->torso,
-               before->torso_timer, after->torso_timer, before->legs, after->legs, before->legs_timer,
+               given < 0 ? " (it started no legs animation: a torso one alone, or none)" : "", before->torso,
+               after->torso, before->torso_timer, after->torso_timer, before->legs, after->legs, before->legs_timer,
                after->legs_timer, changed ? "changed" : "stayed", own ? "the client's" : "another one");
     } else if (outcome == AnimEvent_NotMoving)
         printf("anim_event: entity %d, event %d %s: %s\n", number, event, event_name(event), what[outcome]);

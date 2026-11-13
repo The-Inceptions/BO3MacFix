@@ -215,7 +215,7 @@ static void test_played(void) {
     give_move(3);
     CHECK(call(1, 3, 1023, 17) && outcome == AnimEvent_Played && played.move == game_moves + 3 * 0x1660 &&
           played.event == 17);
-    // whatever the game answers, the call is done (its -1: the player's anim script has nothing for the event)
+    // whatever the game answers, the call is done (its -1: no legs animation started, a torso one alone or none)
     played.answer = -1;
     CHECK(call(1, 3, 1023, 17) && outcome == AnimEvent_Played && played.calls == 1);
 }
@@ -319,9 +319,10 @@ static void test_names(void) {
     set_body(game_player_states[0], 0x1001, 0x2002, 300, 400);
     played.plays = false, played.answer = -1;
     CHECK(call_said(1, 3, 0, 102) && outcome == AnimEvent_Played);
-    CHECK(strcmp(said, "anim_event: entity 0, event 102 ?: played, the game gave -1 (its anim script has nothing for "
-                       "this event now); torso 0x2002 -> 0x2002 (timer 400 -> 400), legs 0x1001 -> 0x1001 (timer 300 "
-                       "-> 300): the body's animation stayed; the move's player state is another one\n") == 0);
+    CHECK(strcmp(said, "anim_event: entity 0, event 102 ?: played, the game gave -1 (it started no legs animation: a "
+                       "torso one alone, or none); torso 0x2002 -> 0x2002 (timer 400 -> 400), legs 0x1001 -> 0x1001 "
+                       "(timer 300 -> 300): the body's animation stayed; the move's player state is another "
+                       "one\n") == 0);
     // any one of the four counts as a change
     const struct {
         uint16_t legs, torso;

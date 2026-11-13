@@ -235,9 +235,10 @@ void t7o_push_init(lua_State *s, const char *dll_path) {
 // - startweaponanim(localclientnum, state, hand): with the WeaponAnims setting on (BO3MACFIX_WEAPONANIMS=1), the
 //   client's viewmodel update starts that weapon animation state (weapon_anim.h); on by default. Otherwise
 //   the weapon just keeps its usual animation and the script gets the 0 the game's isprofilebuild gave it.
-// - anim_event(entnum, event): with WeaponAnims on, the event (101 FLOURISH, 15 FIRSTRAISEWEAPON) is played on that
-//   player's body as T7Overcharged plays it, which the third person view and the other players see
-//   (t7o_anim_event.c); like T7Overcharged it gives the script nothing back. Otherwise a no-op that gives 0.
+// - anim_event(entnum, event): with WeaponAnims on, the event is played on that player's body as T7Overcharged plays
+//   it, which the third person view and the other players see (t7o_anim_event.c): 15 FIRSTRAISEWEAPON shows as the
+//   first raise; 101 FLOURISH has no animation in zombies, on Windows neither. Like T7Overcharged it gives the script
+//   nothing back. Otherwise a no-op that gives 0.
 // - playanim: only AAE's debug loop calls it, still a no-op.
 #define Hash_Native 0x22ea46c7u
 

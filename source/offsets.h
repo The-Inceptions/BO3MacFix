@@ -81,7 +81,7 @@
 #define ADDR_Scr_AddInt 0x11a30e6 // func - void (scriptInstance_t inst, int value)
 #define ADDR_Scr_AddVector 0x11a344b // func - void (scriptInstance_t inst, const float *value)
 // T7Overcharged's anim_event (t7o_anim_event.c); the game calls the first two so at 0x1012d1cee (Windows 0x141bb34c8)
-#define ADDR_BG_AnimScriptEvent 0x12dfb48 // func - int (pmove_t *, int event, int isContinue, int force, int *randomSeed): plays a player anim script event on pm->ps, the anim's time back, -1 when the anim script has nothing for it (Windows 0x1425da500)
+#define ADDR_BG_AnimScriptEvent 0x12dfb48 // func - int (pmove_t *, int event, int isContinue, int force, int *randomSeed): plays a player anim script event on pm->ps, the legs' animation's time back, -1 when it started none (nothing fits, or a torso animation alone) (Windows 0x1425da500)
 #define ADDR_G_GetRandomSeed 0x11c042e // func - int * (void): the server's random seed (Windows 0x141b6d6f0)
 #define ADDR_pmove 0x118e0b10 // pmove_t[18]: the server's moves, one per client by its number, 0x1660 bytes each, playerState_s * first (Windows 0x149ec48f0)
 #define ADDR_animEventTypesStr 0x20fba20 // the 102 anim script events' names, 16 bytes each with the name's pointer first (Windows 0x1435cf8c0)
