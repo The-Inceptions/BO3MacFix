@@ -75,6 +75,11 @@ static const hook_def_t hook_defs[] = {
     { ADDR_ASL_Window_UpdateLetterbox, Push_R14 },
     { ADDR_ASL_XInputGetState, Push_R14 },
     { ADDR_ASL_XInputSetState, Push_R14 },
+    { ADDR_AddDObjToScene, Push_R15 },
+    { ADDR_CG_CalcViewValues_ViewAxis, 5, 4, { 0x83, 0xFB, 0x0B, 0x74, 0x08 } }, // cmp ebx, 0xb; je +8 (a detour)
+    { ADDR_CScr_Delete, Push_R14 },
+    { ADDR_CScr_ForceDelete, Push_R15 },
+    { ADDR_CScr_LinkToCamera, Push_R15 },
     { ADDR_Bullet_Endpos, Push_R15 },
     { ADDR_Bullet_Fire, Push_R15 },
     { ADDR_Bullet_QueuedShots_Loop, 7, 0, { 0x48, 0x69, 0xCE, 0xB0, 0x08, 0x00, 0x00 } }, // imul rcx, rsi, 0x8b0 (a detour)

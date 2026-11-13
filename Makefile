@@ -34,6 +34,8 @@ TEST_TARGETS += tests/test_detour
 TEST_TARGETS += tests/test_aae_prompt
 # when the mod's free aim is on, and the crosshair test's hook (aae_freeaim.c)
 TEST_TARGETS += tests/test_aae_freeaim
+# the left-hand gestures' entities at the camera, against a made-up game (aae_linkcam.c)
+TEST_TARGETS += tests/test_aae_linkcam
 # free aim for players on other machines: what is sent, what the server keeps (aae_freeaim_net.c)
 TEST_TARGETS += tests/test_aae_freeaim_net
 
@@ -104,6 +106,8 @@ SOURCES += source/aae_prompt.c
 # AAEFreeAim: a crosshair in the mod's third person view, and shots that go to what is under it (aae_freeaim.c);
 # what a player on another machine sends the server for that (aae_freeaim_net.c)
 SOURCES += source/aae_freeaim.c source/aae_freeaim_net.c
+# AAEGestures: the mod's left-hand gestures put at the camera, as its plugin does (aae_linkcam.c)
+SOURCES += source/aae_linkcam.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
@@ -245,6 +249,13 @@ tests/test_aae_freeaim_net: tests/test_aae_freeaim_net.c tests/freeaim_net_cases
 		source/aae_freeaim_net.c source/aae_freeaim_net.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_freeaim_net.c
+
+# aae_linkcam.c: the plugin's rules for entities linked to the camera, and its hooks against a made-up game
+tests/test_aae_linkcam: tests/test_aae_linkcam.c tests/linkcam_cases.h tests/linkcam_side.h source/aae_linkcam.c \
+		source/aae_linkcam.h source/aae_plugin.c source/aae_plugin.h source/detour.h source/offsets.h source/dobby.h \
+		source/prepatch.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_linkcam.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

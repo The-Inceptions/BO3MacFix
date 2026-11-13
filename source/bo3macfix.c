@@ -27,6 +27,7 @@
 #include "aae_cheats.h"
 #include "aae_mantle.h"
 #include "aae_freeaim.h"
+#include "aae_linkcam.h"
 #include "aae_hostmig.h"
 #include "aae_prompt.h"
 #include "gsc_detours.h"
@@ -1199,6 +1200,10 @@ __attribute__((constructor)) static void dylib_main() {
     // a crosshair in All-around Enhancement 4's third person view, as its Windows plugin gives it one (AAEFreeAim, on
     // by default), see aae_freeaim.c
     aae_freeaim_init(game_base_address, read_int_setting_or_env("AAEFreeAim", 1));
+
+    // All-around Enhancement 4's left-hand gestures at the camera, as its Windows plugin puts them there (AAEGestures,
+    // on by default), see aae_linkcam.c
+    aae_linkcam_init(game_base_address, read_int_setting_or_env("AAEGestures", 1));
 
     // a host who leaves an online game with All-around Enhancement hands it to another player instead of ending it for
     // everyone, as its Windows plugin makes the game do (AAEHostMigration, on by default), see aae_hostmig.c

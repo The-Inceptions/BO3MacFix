@@ -151,6 +151,15 @@
 #define ADDR_UIModel_Child 0x10365c3 // func - uint16_t (uint16_t model, const char *name): the model's child of that name, made if it isn't there (0x1036418 doesn't make it)
 #define ADDR_UIModel_SetBool 0x1036a60 // func - bool (uint16_t model, bool value): whether that changed it
 
+// entities the client scripts link to the camera, which All-around Enhancement 4's left-hand gestures use (aae_linkcam.c) - names are guesses
+#define ADDR_CScr_LinkToCamera 0xef8f94 // func - the client scripts' method linktocamera([mode], [offset]): (instance, the entity's number in the low half of the second, the local client in the high half of the third); adds it to the local client's cg_t list (+0x3272f4: count, 4 numbers, 4 modes, 4 offsets) or makes a script error when 4 are there (Windows 0x140b2cab0)
+#define ADDR_CScr_Delete 0xef8174 // func - the client scripts' method delete, the same arguments (Windows 0x140a222f0)
+#define ADDR_CScr_ForceDelete 0xef825d // func - and forcedelete (Windows 0x140a25580)
+#define ADDR_AddDObjToScene 0xe0f8b8 // func - void (the model, centity_t *, int number, flags, a lighting struct or NULL): draws a client entity (Windows 0x141ce9410)
+#define ADDR_CG_CalcViewValues_ViewAxis 0xfbd911 // "cmp ebx, 0xb ; je" right behind AnglesToAxis(cg->viewAngles, cg->refdef.viewaxis) in CG_CalcViewValues, which a frame calls after it has drawn the client entities; cg_t in r12 (and r14), the local client in r15d (Windows: the call at 0x1410ae259)
+#define ADDR_AnglesToAxis 0x1352ba1 // func - void (const float angles[3], float axis[3][3]); reads 16 bytes of angles (Windows 0x14224e620)
+#define ADDR_CG_EntityPoseChanged 0x104b9ab // func - void (int localClientNum, int entnum): what the game calls after it moved a client entity's origin or angles (Windows 0x1412ab840)
+
 // the host's leave decision and the migration that follows it (aae_hostmig.c) - names are guesses
 #define ADDR_HostMigrationStart_Decision 0x140daf1 // "test al, al ; je <end the match> ; mov edi, 4" in the server command hostmigration_start (it starts at 0x140dae8): right behind its call of the game's test whether it may migrate (0x127b0c2: no mod loaded, online, game mode not 1, 5 or 6; Windows 0x1420ead00), al its answer. Then it asks Com_SessionMode_IsGameMode(4) (0x127af8e, freerun) and ends the match (0xff422b) on either (Windows: the command at 0x1421e8cf0, its calls at 0x1421e8cf4 and 0x1421e8d02)
 #define ADDR_HostMigrationStart_Migrate 0x140db09 // where it goes on to migrate: sv_running, no migration in progress, then the migration's start (0xe06d3e, Windows 0x1421f9bb0)
