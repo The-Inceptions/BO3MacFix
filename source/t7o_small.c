@@ -251,12 +251,13 @@ const t7o_dvar_change t7o_network_defaults[] = {
 const size_t t7o_network_default_count = sizeof(t7o_network_defaults) / sizeof(t7o_network_defaults[0]);
 
 // T7Overcharged's dvar_patches component (T7Overcharged.dll 0x18008e35c, scheduled once on its main pipeline 10 s
-// after it starts): the flags are replaced, not some bits cleared: 0x1 (only "archive": saved in the config), 0 or
-// 0x40. On the Mac as on Windows 0x100 is "cheat protected", 0x20 read only, 0x80 write protected and 0x10 latched for
-// a set from the console (the Mac's Dvar_SetVariant, 0x100fa0c1d). Three get a value after their flags; T7Overcharged
-// sets com_disable_popups with Dvar_SetFromStringByNameFromSource(name, "0", 0, 0), which is what the Mac's
-// Dvar_SetFromStringByName (source 0, flags 0) calls. r_glow_allowed isn't in the Mac's game, so it is left out there
-// as T7Overcharged leaves out a dvar it doesn't find.
+// after it starts): the flags are replaced, not some bits cleared: 0x1 (only "archive", which nothing in the Mac's game
+// saves a dvar by: `dvarlist` and `dvardump` show it), 0 or 0x40. On the Mac as on Windows 0x100 is "cheat
+// protected", 0x20 read only, 0x80 write protected and 0x10 latched for a set from the console (the Mac's
+// Dvar_SetVariant, 0x100fa0c1d). Three get a value after their flags; T7Overcharged sets com_disable_popups with
+// Dvar_SetFromStringByNameFromSource(name, "0", 0, 0), which is what the Mac's Dvar_SetFromStringByName (source 0,
+// flags 0) calls. r_glow_allowed isn't in the Mac's game, so it is left out there as T7Overcharged leaves out a dvar it
+// doesn't find.
 const t7o_dvar_change t7o_dvar_patches[] = {
     { "cg_fovscale", true, 0x1, NULL },
     { "ui_enabled", true, 0x1, NULL },
