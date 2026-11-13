@@ -44,6 +44,8 @@ tests/test_gpu_diag
 tests/test_t7o_subtitle
 tests/test_launch_args
 tests/test_weapon_anim
+tests/test_aae_move_slide
+tests/test_aae_move_slide_x86
 tests/test_detour
 tests/test_aae_prompt
 tests/test_aae_move_sprint

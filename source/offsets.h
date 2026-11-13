@@ -191,6 +191,17 @@
 #define ADDR_HostMigration_SendToNewHost 0x123297b // func - bool (int controller, uint64_t new host's xuid, int lobby type, uint64_t xuids[], int count): the "migrate to" message to those players, through that lobby if the new host is a member of it (Windows 0x141ed50b0, its one call at 0x1421fa299, here 0xe076b9)
 #define ADDR_LobbySessions 0x101c8760 // the lobby sessions, 0x66828 bytes each: 0 the private (party) one, 1 the game's; state at +0x40 (2 when it can migrate), 18 members of 0x30 bytes at +0xf8, their xuid first (Windows 0x1555fd410)
 
+// T7Overcharged's slide changes (aae_move_slide.c): the player state (ps) and the move (pml_t) are at the same places as
+// in the Windows game; T7O's names for the places (wip/night/agent-t7o-movement.md, sections 3, 4, 6)
+#define ADDR_CanSlide_SpeedTest 0xe814f5 // detour - in the test whether a slide may start (0x100e8148b, Windows 0x1401684b0): "ucomiss xmm0, xmm2; jbe", xmm0 the least speed 150, xmm2 the horizontal speed (OFF_InstantSlide_Patch, Windows 0x140168534)
+#define ADDR_PM_Accelerate 0x1147ed9 // func - void (playerState_s *, pml_t *, const float wishdir[3], float wishspeed, float accel) (Windows 0x14260ecd0, whose wishspeed is in xmm3 and accel on the stack)
+#define ADDR_PM_CmdScale_SlideRampCmp 0x11486ac // detour - in PM_CmdScaleImpl (Windows 0x142611630): "sub ecx, [rdx+0x844]; cmp ecx, eax; jge", the time since a slide ended against the length of the speed ramp after it (OFF_SlideSlowdown_Patch1, Windows 0x142611575)
+#define ADDR_PM_DoSlideAdjustments 0x11488f0 // func - void (playerState_s *, pml_t *): the push of a sliding player after each move's PM_Accelerate (Windows 0x1426121f0)
+#define ADDR_PM_Friction_SlideFriction 0x113c526 // detour - in PM_Friction (Windows 0x142613540): "mulss xmm0, xmm2; mulss xmm0, [r14+0x24]", the extra friction on a slide surface, its 1.5 in xmm0 (OFF_SlideSlowdown_Patch2, Windows 0x1426136f4)
+#define ADDR_PM_UpdateViewAngles_SlideClamp 0x113e4b3 // detour - in PM_UpdateViewAngles: "mov edx, 20" before the call of PM_ClampViewAngles (0x10113e860, Windows 0x142618590) that clamps the view's pitch while sliding
+#define ADDR_PM_UpdateViewAngles_SlideClampDone 0x113e4c3 // behind that call
+#define ADDR_StartSlide_PitchLoad 0xe82226 // detour - in a slide's start (0x100e82086, Windows 0x140169080): "movss xmm0, [rax+0x318]", the view's pitch, compared with 10.05 next to pull the view to 10 (OFF_SlideAngles_Patch, Windows 0x140169268)
+
 // traversal, the way over obstacles from multiplayer and the campaign (aae_mantle.c) - names are guesses
 #define ADDR_level_clients 0x1096ee40 // gclient_s *: the game's players, 0x17210 bytes each (0x20 more than in the Windows game: what comes after the player's state is that much further). The number one was connected as is at +0x16c18 (Windows +0x16bf8)
 #define ADDR_sv_gentities 0x144fbde8 // gentity_s *: the entities the server was last given (what the game's start gives it is the array at 0x110cea410), 0x4f8 bytes each: type (a word, 15 a vehicle) at +0x1a0, origin +0x230, angles +0x23c, client +0x250, vehicle data +0x270

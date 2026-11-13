@@ -26,6 +26,7 @@
 #include "aae_build.h"
 #include "aae_cheats.h"
 #include "aae_mantle.h"
+#include "aae_move_slide.h"
 #include "aae_freeaim.h"
 #include "aae_linkcam.h"
 #include "aae_hostmig.h"
@@ -1230,6 +1231,7 @@ __attribute__((constructor)) static void dylib_main() {
     // T7Overcharged's movement changes, which All-around Enhancement switches on for every player (AAEMovement, on by
     // default), see aae_movement.c; each piece of them installs its own hooks after the switches
     aae_movement_init(game_base_address, read_int_setting_or_env("AAEMovement", 1));
+    aae_move_slide_init(game_base_address);
     aae_move_jump_init(game_base_address);
     aae_move_sprint_init(game_base_address);
 

@@ -30,6 +30,8 @@ TEST_TARGETS += tests/test_aae_hostmig
 TEST_TARGETS += tests/test_aae_movement tests/test_aae_movement_x86_64
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
+# T7Overcharged's slide changes, their places and its own slide push compared with T7Overcharged (aae_move_slide.c)
+TEST_TARGETS += tests/test_aae_move_slide tests/test_aae_move_slide_x86
 # the thunks for detours inside the game's functions (detour.h); x86_64 code, so this test is built for x86_64
 TEST_TARGETS += tests/test_detour
 # All-around Enhancement's prompts in the world (aae_prompt.c) and the test for its plugin (aae_plugin.c)
@@ -131,6 +133,8 @@ SOURCES += source/aae_move_sprint.c
 SOURCES += source/aae_plugin.c
 # AAEPrompts: the mod's prompts in the world, kept by distance as the plugin makes the game keep them (aae_prompt.c)
 SOURCES += source/aae_prompt.c
+# AAEMovement: T7Overcharged's slide changes (aae_move_slide.c)
+SOURCES += source/aae_move_slide.c
 # AAEFreeAim: a crosshair in the mod's third person view, and shots that go to what is under it (aae_freeaim.c);
 # what a player on another machine sends the server for that (aae_freeaim_net.c)
 SOURCES += source/aae_freeaim.c source/aae_freeaim_net.c
@@ -264,6 +268,17 @@ tests/test_aae_mantle: tests/test_aae_mantle.c source/aae_mantle.c source/aae_ma
 # detour.h: its thunks against two made-up game functions in assembly
 tests/test_detour: tests/test_detour.c source/detour.h
 	$(CLANG) -arch x86_64 -std=gnu11 -O1 -g -Wall -Wextra -Werror -o $@ tests/test_detour.c
+
+# T7Overcharged's slide changes against a made-up game, with the cases its own slide push was compared on
+# (tests/slide_cases.h)
+tests/test_aae_move_slide: tests/test_aae_move_slide.c tests/slide_cases.h source/aae_move_slide.c \
+		source/aae_move_slide.h source/aae_movement.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_move_slide.c
+# and for x86_64, the game's own code, where the cases are compared with every NaN's bits
+tests/test_aae_move_slide_x86: tests/test_aae_move_slide.c tests/slide_cases.h source/aae_move_slide.c \
+		source/aae_move_slide.h source/aae_movement.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h
+	$(CLANG) -arch x86_64 -std=gnu11 -O1 -g -Wall -Wextra -Werror -o $@ tests/test_aae_move_slide.c
 
 # aae_hostmig.c: the plugin's rules and the detour's and hooks' handlers against a made-up game
 tests/test_aae_hostmig: tests/test_aae_hostmig.c source/aae_hostmig.c source/aae_hostmig.h source/aae_plugin.c \

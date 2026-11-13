@@ -119,6 +119,13 @@ static const hook_def_t hook_defs[] = {
     { ADDR_CL_PlayLogoMovies, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
     { ADDR_Cocoa_HandleMouseEvent, Push_R15 },
     { ADDR_CL_SetCGameTime, Push_R15 },
+    // T7Overcharged's slide changes (aae_move_slide.c)
+    { ADDR_CanSlide_SpeedTest, 5, 4, { 0x0F, 0x2E, 0xC2, 0x76, 0x04 } }, // ucomiss xmm0, xmm2; jbe +4 (a detour)
+    { ADDR_PM_CmdScale_SlideRampCmp, 10, 9, { 0x2B, 0x8A, 0x44, 0x08, 0x00, 0x00, 0x39, 0xC1, 0x7D, 0x2E } }, // sub ecx, [rdx+0x844]; cmp ecx, eax; jge +0x2e
+    { ADDR_PM_DoSlideAdjustments, Push_R15 },
+    { ADDR_PM_Friction_SlideFriction, 10, 0, { 0xF3, 0x0F, 0x59, 0xC2, 0xF3, 0x41, 0x0F, 0x59, 0x46, 0x24 } }, // mulss xmm0, xmm2; mulss xmm0, [r14+0x24]
+    { ADDR_PM_UpdateViewAngles_SlideClamp, 5, 0, { 0xBA, 0x14, 0x00, 0x00, 0x00 } }, // mov edx, 20
+    { ADDR_StartSlide_PitchLoad, 8, 0, { 0xF3, 0x0F, 0x10, 0x80, 0x18, 0x03, 0x00, 0x00 } }, // movss xmm0, [rax+0x318]
     { ADDR_Com_GetBuildIntField, 5, 4, { 0x83, 0xFF, 0x02, 0x74, 0x11 } }, // cmp edi, 2; je +0x11
     { ADDR_Com_LocalClient_GetControllerIndex, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xF7 } }, // ...; movsxd rsi, edi
     { ADDR_CSteamAPIContext_Init, Push_R15 },
