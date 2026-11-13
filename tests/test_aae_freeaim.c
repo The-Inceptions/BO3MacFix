@@ -80,6 +80,7 @@ static int wrong_asks; // times the text of a dvar without text was asked for
 static int target_asks, replaced_at_ask;
 static bool replaced_every_time;
 static char replaced_text[2][200];
+static int scribbled_at_ask; // from this ask on, what the text's place holds is something else, at the same place
 static void *game_find(uint32_t hash) {
     for (size_t i = 0; i < sizeof(dvars) / sizeof(dvars[0]); i++)
         if (dvars[i].there && gsc_hash(dvars[i].name) == hash)
@@ -94,6 +95,8 @@ static const char *game_string(void *dvar) {
         wrong_asks++;
         return "garbage";
     }
+    if (strcmp(d->name, "aae_freeaim_target") == 0 && scribbled_at_ask != 0 && ++target_asks >= scribbled_at_ask)
+        memset(d->text, '9', sizeof(d->text) - 1);
     if (strcmp(d->name, "aae_freeaim_target") == 0 && replaced_at_ask != 0 && ++target_asks >= replaced_at_ask) {
         int asked = target_asks - replaced_at_ask;
         if (asked == 0 || replaced_every_time)
@@ -654,6 +657,15 @@ static void test_shots(void) {
     CHECK(!fires(shooter, shot) && target_asks == 8);
     replaced_at_ask = 0;
     replaced_every_time = false;
+    // The copy is made between the two asks, not after them: a text that is whole at the first ask and something
+    // else at the second (at the same place, so the second ask can't tell) was copied while it was whole.
+    set_text("aae_freeaim_target", "-139 -1108 140");
+    target_asks = 0;
+    scribbled_at_ask = 2;
+    CHECK(fires(shooter, shot) && near(fired.directions[0], 0.70710678f) && near(fired.directions[2], 0.0f) &&
+          target_asks == 2);
+    scribbled_at_ask = 0;
+    set_text("aae_freeaim_target", "-139 -1108 140");
     // a text of 191 characters is read, one of 192 isn't (the plugin's copy is 192 bytes with its end)
     char long_text[200];
     memset(long_text, ' ', sizeof(long_text));
