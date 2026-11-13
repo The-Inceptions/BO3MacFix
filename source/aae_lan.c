@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include "aae_lan.h"
 #include "aae_plugin.h"
+#include "dobby.h"
 #include "offsets.h"
 #include "steam.h"
 
@@ -72,6 +73,178 @@ void aae_lan_reply(uint8_t packet[AAE_LAN_PACKET], uint32_t number, uint64_t id)
     write_u32(packet + Packet_Number, number);
     write_u32(packet + Packet_Kind, Kind_Reply);
     write_u64(packet + Packet_Id, id);
+}
+
+// ---- the joiner's side: the rules
+
+#define Number_Constant 0xaabbef35u // the plugin's, in the number of a query
+#define Window_Ms 90000             // how long after a connect begins its ping and Join count
+#define Target_Ms 10000             // how long after it begins its target can be found
+#define Answer_Kept_Ms 5000         // how long a host's Steam ID is kept
+#define No_Answer_Kept_Ms 600       // and that a host didn't answer
+#define Join_Direct 4               // the join type for a direct join to a host
+#define Account_Game_Server 3       // Steam account types: a game server, and (4) an anonymous one
+#define Address_Most 95             // the most characters of the address before "@" the plugin keeps
+
+void aae_lan_query(uint8_t packet[AAE_LAN_PACKET], uint32_t number) {
+    memset(packet, 0, AAE_LAN_PACKET);
+    memcpy(packet, Magic, Magic_Size);
+    write_u32(packet + Packet_Number, number);
+    write_u32(packet + Packet_Kind, Kind_Query);
+}
+
+uint32_t aae_lan_number(uint64_t now, uint32_t attempt) {
+    return (uint32_t)now ^ attempt << 16 ^ Number_Constant;
+}
+
+bool aae_lan_read_reply(const uint8_t *packet, size_t length, uint32_t from, uint16_t from_port, uint32_t asked,
+                        uint16_t asked_port, uint32_t number, uint64_t *id) {
+    if (length != AAE_LAN_PACKET || from != asked || from_port != asked_port ||
+        memcmp(packet, Magic, Magic_Size) != 0 || read_u32(packet + Packet_Kind) != Kind_Reply ||
+        read_u32(packet + Packet_Number) != number)
+        return false;
+    uint64_t steam_id = (uint64_t)read_u32(packet + Packet_Id) | (uint64_t)read_u32(packet + Packet_Id + 4) << 32;
+    if (!aae_lan_is_individual(steam_id))
+        return false;
+    *id = steam_id;
+    return true;
+}
+
+// The plugin's reading: digits in the base until the text ends; anything else, or more than 64 bits, and it isn't a
+// number.
+bool aae_lan_split(const char *text, char address[AAE_LAN_ADDRESS], uint64_t *id) {
+    size_t at = 0;
+    while (text[at] != '\0' && text[at] != '@' && at < Address_Most)
+        at++;
+    if (text[at] != '@' || text[at + 1] == '\0')
+        return false;
+    const char *digits = text + at + 1;
+    unsigned base = 10;
+    if (digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X')) {
+        digits += 2;
+        if (*digits == '\0')
+            return false;
+        base = 16;
+    }
+    uint64_t value = 0;
+    for (; *digits != '\0'; digits++) {
+        unsigned char c = (unsigned char)*digits;
+        unsigned digit;
+        if (c >= '0' && c <= '9')
+            digit = c - '0';
+        else if (base == 16 && c >= 'a' && c <= 'f')
+            digit = c - 'a' + 10;
+        else if (base == 16 && c >= 'A' && c <= 'F')
+            digit = c - 'A' + 10;
+        else
+            return false;
+        if (value > (UINT64_MAX - digit) / base)
+            return false;
+        value = value * base + digit;
+    }
+    if (!aae_lan_is_individual(value))
+        return false;
+    memset(address, 0, AAE_LAN_ADDRESS);
+    memcpy(address, text, at);
+    *id = value;
+    return true;
+}
+
+void aae_lan_connect(aae_lan_join_t *join, uint64_t now) {
+    join->attempt++;
+    join->matched = false;
+    join->target = 0;
+    join->pinged = 0;
+    join->given_id = 0;
+    join->started = now;
+}
+
+// the connect began, and less than 90 s ago (the plugin's ping asks for a count of connects too, its Join doesn't)
+static bool in_window(const aae_lan_join_t *join, uint64_t now) {
+    return join->started != 0 && now >= join->started && now - join->started < Window_Ms;
+}
+
+bool aae_lan_cached(const aae_lan_join_t *join, uint32_t address, uint64_t now, uint64_t *id) {
+    for (int i = 0; i < AAE_LAN_CACHED; i++) {
+        if (join->cached[i].address == address && now < join->cached[i].expires) {
+            *id = join->cached[i].id;
+            return true;
+        }
+    }
+    return false;
+}
+
+// The plugin takes the first entry that is this address's or has expired, in the order they are kept; with none such,
+// the first of those that expire first.
+void aae_lan_cache(aae_lan_join_t *join, uint32_t address, uint64_t id, uint64_t now) {
+    aae_lan_cached_t *entry = NULL, *first_to_expire = &join->cached[0];
+    for (int i = 0; i < AAE_LAN_CACHED && entry == NULL; i++) {
+        aae_lan_cached_t *this = &join->cached[i];
+        if (this->address == address || this->expires <= now)
+            entry = this;
+        else if (this->expires < first_to_expire->expires)
+            first_to_expire = this;
+    }
+    if (entry == NULL)
+        entry = first_to_expire;
+    entry->address = address;
+    entry->id = id;
+    entry->expires = now + (id != 0 ? Answer_Kept_Ms : No_Answer_Kept_Ms);
+}
+
+int aae_lan_ask(aae_lan_join_t *join, uint32_t address, uint32_t attempt, uint64_t now) {
+    uint64_t id;
+    if (address == 0 || !aae_lan_is_private(address))
+        return 0;
+    if (aae_lan_cached(join, address, now, &id) || join->asking == address || join->requested == address)
+        return 1;
+    join->requested = address;
+    join->requested_attempt = attempt;
+    return 2;
+}
+
+bool aae_lan_ping(aae_lan_join_t *join, uint32_t address, uint64_t now) {
+    bool matched = false;
+    if (join->attempt != 0 && in_window(join, now)) {
+        if (join->target == 0 && now - join->started < Target_Ms && aae_lan_is_private(address))
+            join->target = address;
+        matched = join->target != 0 && join->target == address;
+    }
+    join->pinged = address;
+    join->matched = matched;
+    if (!matched || aae_lan_is_individual(join->given_id))
+        return false;
+    return aae_lan_ask(join, address, join->attempt, now) == 2;
+}
+
+aae_lan_plan_t aae_lan_plan(aae_lan_join_t *join, uint64_t now, int network_mode, uint64_t server, int join_type) {
+    aae_lan_plan_t plan = { .join_type = join_type, .attempt = join->attempt, .target = join->target };
+    bool matched = join->matched;
+    join->matched = false;
+    plan.window = matched && in_window(join, now) && join->target != 0 && join->pinged == join->target;
+    plan.swap = plan.window && (network_mode == 1 || network_mode == 2) && aae_lan_is_private(join->pinged);
+    if (!plan.swap)
+        return plan;
+    if (join_type == 0)
+        plan.join_type = Join_Direct;
+    if (aae_lan_is_individual(join->given_id))
+        plan.id = join->given_id;
+    else
+        plan.wait = (unsigned)(server >> 52 & 0xf) - Account_Game_Server <= 1;
+    return plan;
+}
+
+// the connect and its target are still the ones the Join was planned for
+static bool unchanged(const aae_lan_join_t *join, const aae_lan_plan_t *plan) {
+    return join->attempt == plan->attempt && join->target == plan->target;
+}
+
+bool aae_lan_waited(const aae_lan_join_t *join, const aae_lan_plan_t *plan, uint64_t now, uint64_t *id) {
+    return !unchanged(join, plan) || aae_lan_cached(join, plan->target, now, id);
+}
+
+bool aae_lan_dropped(const aae_lan_join_t *join, const aae_lan_plan_t *plan) {
+    return plan->window && !unchanged(join, plan);
 }
 
 // ---- the host's side
@@ -201,8 +374,233 @@ static void *listener_main(void *unused) {
     return NULL;
 }
 
-// how the threads are started (the tests start none)
+// how the threads are started (the tests start their own)
 static int (*start_thread)(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *) = pthread_create;
+
+// ---- the joiner's side: the game's connect, and asking the host
+//
+// The plugin replaces four calls in the game: the connect command's first (a connect begins), the reading of its
+// address (a Steam ID after "@" is taken off), the ping of the server at that address (the host is asked for its
+// Steam ID), and the Join the ping's answer makes (the host's Steam ID in place of the game server's, and a direct
+// join). Here the functions those calls go to are hooked, the Join only for the call the ping's answer makes, as on
+// Windows. All four run on the game's main thread. The host is asked by a thread of its own, started the first time
+// one is to be asked, as the plugin's is; a Join waits for its answer at most 350 ms.
+
+#define Tries 2             // queries to the host
+#define Reply_Wait_Ms 140   // how long each waits for the reply
+#define Answer_Wait_Ms 350  // how long the Join waits for the answer
+
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t asker_wakes = PTHREAD_COND_INITIALIZER, answered = PTHREAD_COND_INITIALIZER;
+static aae_lan_join_t join; // under lock, and so is this:
+static bool asker_started;
+static uint16_t query_port = AAE_LAN_PORT; // the tests ask a host of their own on another port
+static const void *join_from_ping;         // where the ping's answer goes on after its Join
+// what the debug line of a connect shows of the game
+static const int32_t *lobby_ui_screen;
+static int (*PlaylistVersion_Get)(void), (*FFOTDVersion_Get)(void);
+static const uint64_t *const *local_users;
+
+static uint64_t uptime_ms(void) {
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000;
+}
+static uint64_t (*now_ms)(void) = uptime_ms;
+
+// The plugin's questioning of a host: one socket, the query sent up to twice, each time waiting 140 ms for one
+// datagram, which counts only when it is the reply from that host. The Steam ID it gave, or 0.
+static uint64_t ask_host(uint32_t address, uint32_t attempt, int *tries) {
+    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0)
+        return 0;
+    struct timeval wait = { .tv_sec = 0, .tv_usec = Reply_Wait_Ms * 1000 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof(wait));
+    struct sockaddr_in to = { .sin_len = sizeof(to), .sin_family = AF_INET, .sin_port = htons(query_port),
+                              .sin_addr.s_addr = htonl(address) };
+    uint32_t number = aae_lan_number(now_ms(), attempt);
+    uint8_t query[AAE_LAN_PACKET];
+    aae_lan_query(query, number);
+    uint64_t id = 0;
+    while (id == 0 && *tries < Tries) {
+        ++*tries;
+        if (sendto(fd, query, sizeof(query), 0, (struct sockaddr *)&to, sizeof(to)) != (ssize_t)sizeof(query))
+            continue;
+        uint8_t packet[512]; // more than a reply: a longer datagram must not look like one
+        struct sockaddr_in from;
+        socklen_t from_size = sizeof(from);
+        ssize_t length = recvfrom(fd, packet, sizeof(packet), 0, (struct sockaddr *)&from, &from_size);
+        if (length >= 0 && from_size == sizeof(from) && from.sin_family == AF_INET)
+            aae_lan_read_reply(packet, (size_t)length, ntohl(from.sin_addr.s_addr), ntohs(from.sin_port), address,
+                               query_port, number, &id);
+    }
+    close(fd);
+    return id;
+}
+
+// The asking thread: takes the address last requested, asks it unless its answer is kept, and keeps the answer (none
+// too) for the Joins waiting on it.
+static void *asker_main(void *unused) {
+    (void)unused;
+    pthread_setname_np("BO3MacFix LAN join query");
+    pthread_mutex_lock(&lock);
+    for (;;) {
+        while (join.requested == 0)
+            pthread_cond_wait(&asker_wakes, &lock);
+        uint32_t address = join.requested, attempt = join.requested_attempt;
+        uint64_t id = 0;
+        join.requested = 0;
+        join.asking = address;
+        bool kept = aae_lan_cached(&join, address, now_ms(), &id);
+        pthread_mutex_unlock(&lock);
+        if (aae_lan_is_private(address) && !kept) {
+            int tries = 0;
+            id = ask_host(address, attempt, &tries);
+            pthread_mutex_lock(&lock);
+            aae_lan_cache(&join, address, id, now_ms());
+            pthread_cond_broadcast(&answered);
+            pthread_mutex_unlock(&lock);
+            char text[16];
+            if (id != 0)
+                printf("lan join: the host at %s says its Steam ID is %llu (connect %u, %d %s)\n",
+                       address_text(address, text), (unsigned long long)id, attempt, tries, tries == 1 ? "query" : "queries");
+            else
+                printf("lan join: the host at %s didn't give its Steam ID (connect %u, %d queries): it has neither the "
+                       "mod's plugin nor this, or isn't in a LAN or online game\n", address_text(address, text),
+                       attempt, tries);
+        }
+        pthread_mutex_lock(&lock);
+        join.asking = 0;
+    }
+    return NULL;
+}
+
+// Sends the asking thread to work, starting it the first time. False when it can't be started. Under the lock.
+static bool wake_asker(void) {
+    if (!asker_started) {
+        pthread_t thread;
+        if (start_thread(&thread, NULL, asker_main, NULL) != 0)
+            return false;
+        pthread_detach(thread);
+        asker_started = true;
+    }
+    pthread_cond_signal(&asker_wakes);
+    return true;
+}
+
+// The Join's wait for the host's answer, under the lock (which the waiting lets go of): the Steam ID the host gave,
+// 0 for none. Ends early when another connect begins, as the plugin's does.
+static uint64_t wait_for_answer(const aae_lan_plan_t *plan) {
+    uint64_t id = 0, now = now_ms();
+    if (!unchanged(&join, plan))
+        return 0;
+    if (aae_lan_cached(&join, plan->target, now, &id))
+        return id;
+    int asked = aae_lan_ask(&join, plan->target, plan->attempt, now);
+    if (asked == 2 && !wake_asker()) {
+        join.requested = 0;
+        asked = 0;
+    }
+    if (asked == 0)
+        return 0;
+    uint64_t until = now + Answer_Wait_Ms;
+    // the plugin's wait: until it's over, looking once more when the time is up
+    while (!aae_lan_waited(&join, plan, now = now_ms(), &id) && now < until) {
+        uint64_t left = until - now;
+        struct timespec span = { .tv_sec = (time_t)(left / 1000), .tv_nsec = (long)(left % 1000) * 1000000 };
+        pthread_cond_timedwait_relative_np(&answered, &lock, &span);
+    }
+    return unchanged(&join, plan) ? id : 0;
+}
+
+// a connect command: (), what it reads it takes from the command's arguments
+install_hook_name(LanJoin_Connect, void, void) {
+    if (aae_plugin_loaded_lately()) {
+        pthread_mutex_lock(&lock);
+        aae_lan_connect(&join, now_ms());
+        uint32_t attempt = join.attempt;
+        pthread_cond_broadcast(&answered);
+        pthread_mutex_unlock(&lock);
+        if (debug)
+            printf("lan join: connect %u begins (network mode %d, lobby UI screen %d, playlist version %d, ffotd "
+                   "version %d; the game's local user %llu, Steam's %llu)\n", attempt, *lobby_network_mode,
+                   *lobby_ui_screen, PlaylistVersion_Get(), FFOTDVersion_Get(),
+                   local_users[0] != NULL ? (unsigned long long)*local_users[0] : 0ull,
+                   (unsigned long long)local_id());
+    }
+    orig_LanJoin_Connect();
+}
+
+// the connect's address read into the game's: (text, the network address it fills), true when it could be read
+install_hook_name(LanJoin_ParseAddress, uint64_t, const char *text, void *address) {
+    char cut[AAE_LAN_ADDRESS];
+    uint64_t id;
+    if (text == NULL || !aae_plugin_loaded_lately() || !aae_lan_split(text, cut, &id))
+        return orig_LanJoin_ParseAddress(text, address);
+    pthread_mutex_lock(&lock);
+    join.given_id = id;
+    pthread_mutex_unlock(&lock);
+    if (debug)
+        printf("lan join: the host's Steam ID %llu is given with the address %s\n", (unsigned long long)id, cut);
+    return orig_LanJoin_ParseAddress(cut, address);
+}
+
+// Steam is asked about the server at the connect's address: (its IPv4 address, its first number high; its port)
+install_hook_name(LanJoin_PingServer, uint64_t, uint64_t ip, uint64_t port) {
+    if (aae_plugin_loaded_lately()) {
+        uint32_t address = (uint32_t)ip;
+        pthread_mutex_lock(&lock);
+        bool ask = aae_lan_ping(&join, address, now_ms());
+        if (ask && !wake_asker())
+            join.requested = 0;
+        bool target = join.matched;
+        uint32_t attempt = join.attempt;
+        pthread_mutex_unlock(&lock);
+        char text[16];
+        if (debug)
+            printf("lan join: connect %u pings %s:%u: %s\n", attempt, address_text(address, text),
+                   (unsigned)(uint16_t)port, !target ? "not its target on a local network"
+                                             : ask   ? "its target; asking the host for its Steam ID"
+                                                     : "its target");
+    }
+    return orig_LanJoin_PingServer(ip, port);
+}
+
+// the lobby VM's Lua call "Join": (controller, Steam ID, join type), which is hooked below
+static uint64_t (*orig_LanJoin_Join)(uint64_t controller, uint64_t server, uint64_t join_type);
+
+// What the Join to the server the ping found becomes. from_ping: the ping's answer is the one asking, the only Join
+// the plugin changes.
+static uint64_t join_server(uint64_t controller, uint64_t server, uint64_t join_type, bool from_ping) {
+    if (!from_ping || !aae_plugin_loaded_lately())
+        return orig_LanJoin_Join(controller, server, join_type);
+    pthread_mutex_lock(&lock);
+    aae_lan_plan_t plan = aae_lan_plan(&join, now_ms(), *lobby_network_mode, server, (int)join_type);
+    uint64_t id = plan.wait ? wait_for_answer(&plan) : plan.id;
+    bool dropped = aae_lan_dropped(&join, &plan);
+    if (!dropped)
+        join.given_id = 0;
+    pthread_mutex_unlock(&lock);
+    char text[16];
+    address_text(plan.target, text);
+    if (dropped) {
+        printf("lan join: another connect began while the host at %s was asked: this one's join is dropped\n", text);
+        return 0;
+    }
+    if (plan.swap && id != 0)
+        printf("lan join: joining the host at %s by its own Steam ID %llu instead of the server's %llu, join type "
+               "%d\n", text, (unsigned long long)id, (unsigned long long)server, plan.join_type);
+    else if (plan.swap)
+        printf("lan join: no Steam ID from the host at %s: joining the server's %llu with join type %d\n", text,
+               (unsigned long long)server, plan.join_type);
+    else if (debug)
+        printf("lan join: the join to %llu goes as the game made it\n", (unsigned long long)server);
+    // what the game gave is handed on as it came where the plugin doesn't change it
+    return orig_LanJoin_Join(controller, id != 0 ? id : server,
+                             plan.join_type != (int)join_type ? (uint64_t)plan.join_type : join_type);
+}
+
+static uint64_t fake_LanJoin_Join(uint64_t controller, uint64_t server, uint64_t join_type) {
+    return join_server(controller, server, join_type, __builtin_return_address(0) == join_from_ping);
+}
 
 void aae_lan_init(uint64_t game_base_address, int enabled) {
     if (!enabled)
@@ -211,6 +609,15 @@ void aae_lan_init(uint64_t game_base_address, int enabled) {
     debug = env != NULL ? atoi(env) : 0;
     aae_plugin_init(game_base_address);
     lobby_network_mode = (const int32_t *)(game_base_address + ADDR_lobbyNetworkMode);
+    join_from_ping = (const void *)(game_base_address + ADDR_LanJoin_JoinFromPing);
+    lobby_ui_screen = (const int32_t *)(game_base_address + ADDR_lobbyUIScreen);
+    PlaylistVersion_Get = (int (*)(void))(game_base_address + ADDR_PlaylistVersion_Get);
+    FFOTDVersion_Get = (int (*)(void))(game_base_address + ADDR_FFOTDVersion_Get);
+    local_users = (const uint64_t *const *)(game_base_address + ADDR_localUsers);
+    install_hook_LanJoin_Connect((void *)(game_base_address + ADDR_LanJoin_Connect));
+    install_hook_LanJoin_ParseAddress((void *)(game_base_address + ADDR_LanJoin_ParseAddress));
+    install_hook_LanJoin_PingServer((void *)(game_base_address + ADDR_LanJoin_PingServer));
+    DobbyHook((void *)(game_base_address + ADDR_LanJoin_Join), (void *)fake_LanJoin_Join, (void **)&orig_LanJoin_Join);
     pthread_t thread;
     if (start_thread(&thread, NULL, listener_main, NULL) == 0)
         pthread_detach(thread);

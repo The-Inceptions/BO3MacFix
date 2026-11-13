@@ -1,6 +1,7 @@
 // aae_lan.c: the plugin's packets and rules for joining a game on the local network, and the host's listener talking
 // to the test over the loopback (nothing here leaves the machine).
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -31,6 +32,55 @@ static uint64_t test_steam_id(void) {
     return game_steam_id;
 }
 
+// ---- the hooks, and the game functions behind them
+static struct {
+    void *address, *replacement, **original;
+} hooked[8];
+static int hooks;
+static struct {
+    int connects, parses, pings, joins;
+    char parsed[128];
+    uint64_t ping_ip, ping_port, controller, xuid, join_type;
+} game;
+static void game_connect(void) {
+    game.connects++;
+}
+static uint64_t game_parse(const char *text, void *address) {
+    game.parses++;
+    snprintf(game.parsed, sizeof(game.parsed), "%s", text);
+    return address != NULL;
+}
+static uint64_t game_ping(uint64_t ip, uint64_t port) {
+    game.pings++;
+    game.ping_ip = ip, game.ping_port = port;
+    return 0x77;
+}
+static uint64_t game_join(uint64_t controller, uint64_t xuid, uint64_t join_type) {
+    game.joins++;
+    game.controller = controller, game.xuid = xuid, game.join_type = join_type;
+    return 0x55;
+}
+int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
+    if (hooks < 8)
+        hooked[hooks] = (typeof(hooked[0])){ address, fake_func, out_origin_func };
+    hooks++;
+    if (out_origin_func == (void **)&orig_LanJoin_Connect)
+        *out_origin_func = (void *)game_connect;
+    else if (out_origin_func == (void **)&orig_LanJoin_ParseAddress)
+        *out_origin_func = (void *)game_parse;
+    else if (out_origin_func == (void **)&orig_LanJoin_PingServer)
+        *out_origin_func = (void *)game_ping;
+    else if (out_origin_func == (void **)&orig_LanJoin_Join)
+        *out_origin_func = (void *)game_join;
+    return 0;
+}
+static bool was_hooked(uint32_t place, void *replacement, void **original) {
+    for (int i = 0; i < hooks && i < 8; i++)
+        if (hooked[i].address == (void *)(0x100000000 + (uint64_t)place))
+            return hooked[i].replacement == replacement && hooked[i].original == original;
+    return false;
+}
+
 // ---- the mod with the plugin
 static char loaded_name[Mod_Name_Size + 8], plugin_file[4096 + 64];
 static uint64_t plugin_time = 5000;
@@ -45,7 +95,19 @@ static void set_mod(bool loaded) {
 }
 
 // ---- the made-up game
-static int32_t game_network_mode = 1;
+static int32_t game_network_mode = 1, game_screen = 410;
+static int game_playlist_version(void) {
+    return 1230005;
+}
+static int game_ffotd_version(void) {
+    return 42;
+}
+static const uint64_t game_user_xuid = A_Person;
+static const uint64_t *game_users[2] = { &game_user_xuid, NULL };
+static uint64_t test_now = 1000000;
+static uint64_t test_clock(void) {
+    return test_now;
+}
 
 static uint32_t ip(unsigned a, unsigned b, unsigned c, unsigned d) {
     return a << 24 | b << 16 | c << 8 | d;
@@ -277,6 +339,546 @@ static void test_turns(void) {
     listen_address = INADDR_ANY;
 }
 
+// ---- the joiner's side: the rules
+static void test_query(void) {
+    uint8_t packet[AAE_LAN_PACKET];
+    memset(packet, 0xcc, sizeof(packet));
+    aae_lan_query(packet, 0x12345678);
+    CHECK(memcmp(packet, a_query, sizeof(a_query)) == 0);
+    // the number: the low half of the time in ms, the connect's count in the upper half, the plugin's constant
+    CHECK(aae_lan_number(0, 0) == 0xaabbef35u);
+    CHECK(aae_lan_number(0x123456789abcdef0ull, 0) == (0x9abcdef0u ^ 0xaabbef35u));
+    CHECK(aae_lan_number(0, 1) == (0x10000u ^ 0xaabbef35u));
+    CHECK(aae_lan_number(0, 0x12345) == (0x23450000u ^ 0xaabbef35u));
+    CHECK(aae_lan_number(0x1000, 3) == (0x31000u ^ 0xaabbef35u));
+}
+
+static void test_reply(void) {
+    const uint32_t host = ip(192, 168, 1, 20), number = 0x12345678;
+    uint8_t reply[AAE_LAN_PACKET];
+    uint64_t id = 0;
+    aae_lan_reply(reply, number, 0x0110000187654321ull);
+    CHECK(aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27018, host, 27018, number, &id) &&
+          id == 0x0110000187654321ull);
+    // from another address or port, of another length or number: not the reply, and nothing is given
+    id = 7;
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, ip(192, 168, 1, 21), 27018, host, 27018, number, &id));
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27019, host, 27018, number, &id));
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27018, host, 27019, number, &id));
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET + 1, host, 27018, host, 27018, number, &id));
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET - 1, host, 27018, host, 27018, number, &id));
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27018, host, 27018, number + 1, &id));
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27018, host, 27018, number ^ 0x10000, &id));
+    CHECK(id == 7);
+    // each byte of the magic, and the kind: a query sent back isn't a reply
+    for (int i = 0; i < 8; i++) {
+        aae_lan_reply(reply, number, A_Person);
+        reply[i] ^= 0x01;
+        CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27018, host, 27018, number, &id));
+    }
+    const uint32_t kinds[] = { 0, 1, 3, 0x102, 0x10002, 0x1000002 };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        aae_lan_reply(reply, number, A_Person);
+        write_u32(reply + 12, kinds[i]);
+        CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27018, host, 27018, number, &id));
+    }
+    // the Steam ID must be a person's
+    aae_lan_reply(reply, number, 0x0140000100000001ull);
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27018, host, 27018, number, &id));
+    aae_lan_reply(reply, number, 0x0110000100000000ull);
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27018, host, 27018, number, &id));
+    aae_lan_reply(reply, number, 0x0210000100000001ull);
+    CHECK(!aae_lan_read_reply(reply, AAE_LAN_PACKET, host, 27018, host, 27018, number, &id) && id == 7);
+}
+
+static void test_split(void) {
+    char address[AAE_LAN_ADDRESS];
+    uint64_t id = 0;
+    // decimal
+    CHECK(aae_lan_split("192.168.1.20:27017@76561197960265729", address, &id) && id == A_Person &&
+          strcmp(address, "192.168.1.20:27017") == 0);
+    // hexadecimal after 0x or 0X, with small and capital letters
+    id = 0;
+    CHECK(aae_lan_split("10.0.0.5@0x0110000100000001", address, &id) && id == A_Person &&
+          strcmp(address, "10.0.0.5") == 0);
+    CHECK(aae_lan_split("10.0.0.5@0X011000010000aBcD", address, &id) && id == 0x011000010000abcdull);
+    CHECK(aae_lan_split("10.0.0.5@0x110000109abcdef", address, &id) && id == 0x0110000109abcdefull);
+    // leading zeros, and nothing before the "@"
+    CHECK(aae_lan_split("h@076561197960265729", address, &id) && id == A_Person && strcmp(address, "h") == 0);
+    CHECK(aae_lan_split("@76561197960265729", address, &id) && address[0] == '\0');
+    // what is no person's Steam ID, or no number: nothing is taken off or given
+    const char *not_ones[] = {
+        "1.2.3.4@1", "1.2.3.4@0x1", "1.2.3.4@0", "1.2.3.4@85568397215006721" /* a game server's */,
+        "1.2.3.4@0x0130000100000001", "1.2.3.4@7656119796026572x", "1.2.3.4@0x011000010000000g",
+        "1.2.3.4@76561197960265729 ", "1.2.3.4@ 76561197960265729", "1.2.3.4@+76561197960265729", "1.2.3.4@-1",
+        "1.2.3.4@", "1.2.3.4@0x", "1.2.3.4@0X", "1.2.3.4", "", "1.2.3.4@76561197960265729@5",
+        "1.2.3.4@x76561197960265729", "1.2.3.4@0b1", "1.2.3.4@7656\xb5", "1.2.3.4@0xffffffffffffffff",
+        // beyond 64 bits, though what would be left of them is a person's
+        "1.2.3.4@18523305271669817345", "1.2.3.4@0x10110000100000001",
+        // hexadecimal digits in a decimal number
+        "1.2.3.4@7656119796026572a",
+    };
+    for (size_t i = 0; i < sizeof(not_ones) / sizeof(not_ones[0]); i++) {
+        id = 9;
+        memset(address, 'z', sizeof(address));
+        CHECK(!aae_lan_split(not_ones[i], address, &id) && id == 9 && address[0] == 'z');
+        if (id != 9 || address[0] != 'z')
+            printf("  (with %s)\n", not_ones[i]);
+    }
+    // the largest number that fits, and one more digit
+    CHECK(!aae_lan_split("a@18446744073709551615", address, &id) && !aae_lan_split("a@184467440737095516150", address, &id));
+    // 95 characters before the "@" at most
+    char long_text[200];
+    memset(long_text, 'a', 95);
+    strcpy(long_text + 95, "@76561197960265729");
+    CHECK(aae_lan_split(long_text, address, &id) && strlen(address) == 95 && id == A_Person);
+    memset(long_text, 'a', 96);
+    strcpy(long_text + 96, "@76561197960265729");
+    CHECK(!aae_lan_split(long_text, address, &id));
+}
+
+static void test_cache(void) {
+    aae_lan_join_t join = { 0 };
+    uint64_t id = 5;
+    CHECK(!aae_lan_cached(&join, ip(10, 0, 0, 1), 1000, &id) && id == 5);
+    // a Steam ID is kept for 5 s, no answer for 0.6 s
+    aae_lan_cache(&join, ip(10, 0, 0, 1), A_Person, 1000);
+    CHECK(join.cached[0].address == ip(10, 0, 0, 1) && join.cached[0].id == A_Person && join.cached[0].expires == 6000);
+    CHECK(aae_lan_cached(&join, ip(10, 0, 0, 1), 5999, &id) && id == A_Person);
+    CHECK(!aae_lan_cached(&join, ip(10, 0, 0, 1), 6000, &id) && !aae_lan_cached(&join, ip(10, 0, 0, 2), 1000, &id));
+    aae_lan_cache(&join, ip(10, 0, 0, 2), 0, 1000);
+    CHECK(join.cached[1].address == ip(10, 0, 0, 2) && join.cached[1].id == 0 && join.cached[1].expires == 1600);
+    id = 5;
+    CHECK(aae_lan_cached(&join, ip(10, 0, 0, 2), 1599, &id) && id == 0);
+    CHECK(!aae_lan_cached(&join, ip(10, 0, 0, 2), 1600, &id));
+    // an address's own entry is taken again
+    aae_lan_cache(&join, ip(10, 0, 0, 2), A_Person, 1100);
+    CHECK(join.cached[1].id == A_Person && join.cached[1].expires == 6100 && join.cached[2].address == 0);
+    // an expired entry ahead of it is taken first, and found first
+    aae_lan_cache(&join, ip(10, 0, 0, 2), 0, 6050);
+    CHECK(join.cached[0].address == ip(10, 0, 0, 2) && join.cached[0].expires == 6650 &&
+          join.cached[1].address == ip(10, 0, 0, 2) && join.cached[1].id == A_Person);
+    id = 5;
+    CHECK(aae_lan_cached(&join, ip(10, 0, 0, 2), 6060, &id) && id == 0);
+    // one that expires right now counts as expired
+    aae_lan_cache(&join, ip(10, 0, 0, 3), A_Person, 6100);
+    CHECK(join.cached[1].address == ip(10, 0, 0, 3));
+    // all eight in use: the first of those that expire first goes
+    aae_lan_join_t full = { 0 };
+    for (int i = 0; i < AAE_LAN_CACHED; i++)
+        aae_lan_cache(&full, ip(10, 1, 0, i + 1), A_Person, i == 3 || i == 5 ? 2000 : 2100);
+    for (int i = 0; i < AAE_LAN_CACHED; i++)
+        CHECK(full.cached[i].address == ip(10, 1, 0, i + 1));
+    aae_lan_cache(&full, ip(10, 2, 0, 1), A_Person, 2500);
+    CHECK(full.cached[3].address == ip(10, 2, 0, 1) && full.cached[5].address == ip(10, 1, 0, 6));
+    aae_lan_cache(&full, ip(10, 2, 0, 2), A_Person, 2500);
+    CHECK(full.cached[5].address == ip(10, 2, 0, 2) && full.cached[3].address == ip(10, 2, 0, 1));
+}
+
+static void test_ping(void) {
+    aae_lan_join_t j = { 0 };
+    const uint32_t home = ip(192, 168, 1, 20);
+    // before any connect: nothing is the target, though the address pinged is kept
+    CHECK(!aae_lan_ping(&j, home, 5000) && !j.matched && j.target == 0 && j.pinged == home);
+    aae_lan_connect(&j, 10000);
+    CHECK(j.attempt == 1 && j.started == 10000 && j.target == 0 && j.pinged == 0 && !j.matched);
+    // the first address of a local network pinged in the first 10 s is the target, and its host is asked
+    CHECK(!aae_lan_ping(&j, ip(8, 8, 8, 8), 10100) && !j.matched && j.target == 0 && j.pinged == ip(8, 8, 8, 8));
+    CHECK(aae_lan_ping(&j, home, 19999) && j.matched && j.target == home && j.requested == home &&
+          j.requested_attempt == 1);
+    // another address of a local network within the 10 s doesn't become the target instead
+    aae_lan_join_t other = j;
+    CHECK(!aae_lan_ping(&other, ip(192, 168, 1, 30), 10500) && !other.matched && other.target == home);
+    // pinged again: still the target, its host asked already
+    CHECK(!aae_lan_ping(&j, home, 20000) && j.matched && j.requested == home);
+    // another address isn't the target
+    CHECK(!aae_lan_ping(&j, ip(192, 168, 1, 21), 20001) && !j.matched && j.pinged == ip(192, 168, 1, 21));
+    // being asked, or asked already: not again; otherwise again
+    j.requested = 0;
+    j.asking = home;
+    CHECK(!aae_lan_ping(&j, home, 99999) && j.matched && j.requested == 0);
+    j.asking = 0;
+    CHECK(aae_lan_ping(&j, home, 99999) && j.matched && j.requested == home);
+    // 90 s after the start it's over
+    j.requested = 0;
+    CHECK(!aae_lan_ping(&j, home, 100000) && !j.matched && j.requested == 0 && j.pinged == home);
+    // no target after 10 s
+    aae_lan_connect(&j, 200000);
+    CHECK(!aae_lan_ping(&j, home, 210000) && !j.matched && j.target == 0);
+    CHECK(aae_lan_ping(&j, ip(10, 0, 0, 1), 209999) && j.target == ip(10, 0, 0, 1));
+    // a clock that went back
+    aae_lan_connect(&j, 300000);
+    j.requested = 0;
+    CHECK(!aae_lan_ping(&j, home, 299999) && !j.matched && j.target == 0);
+    // what the cache keeps, even that the host didn't answer, isn't asked for again until it expires
+    aae_lan_connect(&j, 400000);
+    aae_lan_cache(&j, ip(10, 0, 0, 9), 0, 400000);
+    CHECK(!aae_lan_ping(&j, ip(10, 0, 0, 9), 400100) && j.matched && j.requested == 0);
+    CHECK(aae_lan_ping(&j, ip(10, 0, 0, 9), 400600) && j.requested == ip(10, 0, 0, 9) && j.requested_attempt == 4);
+    // a Steam ID given with the address: the host isn't asked; one of no person isn't one
+    aae_lan_connect(&j, 500000);
+    CHECK(j.given_id == 0);
+    j.requested = 0;
+    j.given_id = A_Person;
+    CHECK(!aae_lan_ping(&j, ip(10, 0, 0, 10), 500100) && j.matched && j.target == ip(10, 0, 0, 10) && j.requested == 0);
+    aae_lan_connect(&j, 600000);
+    j.given_id = 0x0140000100000001ull;
+    CHECK(aae_lan_ping(&j, ip(10, 0, 0, 11), 600100) && j.requested == ip(10, 0, 0, 11));
+    // a count of connects gone round to 0 has no window for the ping
+    j.attempt = 0xffffffff;
+    j.requested = 0;
+    aae_lan_connect(&j, 700000);
+    CHECK(j.attempt == 0 && !aae_lan_ping(&j, ip(10, 0, 0, 12), 700100) && !j.matched && j.target == 0);
+    // the address 0 is nobody's target; a connect begun at time 0 has no window
+    aae_lan_connect(&j, 700200);
+    CHECK(!aae_lan_ping(&j, 0, 700300) && !j.matched && j.target == 0);
+    aae_lan_connect(&j, 0);
+    CHECK(!aae_lan_ping(&j, home, 100) && !j.matched && j.target == 0);
+    // a connect clears what the last one found
+    j.attempt = 5;
+    j.matched = true, j.target = home, j.pinged = home, j.given_id = A_Person;
+    aae_lan_connect(&j, 800000);
+    CHECK(j.attempt == 6 && !j.matched && j.target == 0 && j.pinged == 0 && j.given_id == 0 && j.started == 800000);
+    // what asking needs: an address of a local network
+    CHECK(aae_lan_ask(&j, 0, 1, 800000) == 0 && aae_lan_ask(&j, ip(8, 8, 8, 8), 1, 800000) == 0);
+    CHECK(aae_lan_ask(&j, home, 9, 800000) == 2 && j.requested == home && j.requested_attempt == 9);
+    CHECK(aae_lan_ask(&j, home, 10, 800000) == 1 && j.requested_attempt == 9);
+}
+
+#define A_Server 0x0140000100001234ull // an anonymous game server's Steam ID, as Steam gives a LAN host's
+static aae_lan_plan_t plan_after_ping(aae_lan_join_t *j, uint32_t address, uint64_t now, int mode, uint64_t server,
+                                      int join_type) {
+    aae_lan_ping(j, address, now);
+    return aae_lan_plan(j, now + 100, mode, server, join_type);
+}
+
+static void test_plan(void) {
+    aae_lan_join_t j = { 0 };
+    const uint32_t home = ip(192, 168, 1, 20);
+    aae_lan_connect(&j, 10000);
+    aae_lan_plan_t plan = plan_after_ping(&j, home, 10100, 1, A_Server, 0);
+    CHECK(plan.window && plan.swap && plan.wait && plan.join_type == 4 && plan.id == 0 && plan.attempt == 1 &&
+          plan.target == home && !j.matched);
+    // the match is used up: the next Join is the game's
+    plan = aae_lan_plan(&j, 10300, 1, A_Server, 0);
+    CHECK(!plan.window && !plan.swap && !plan.wait && plan.join_type == 0);
+    // online mode too; in other modes the Join is the game's, but in the window
+    plan = plan_after_ping(&j, home, 10400, 2, A_Server, 0);
+    CHECK(plan.swap && plan.wait && plan.join_type == 4);
+    const int other_modes[] = { 0, 3, -1 };
+    for (int i = 0; i < 3; i++) {
+        plan = plan_after_ping(&j, home, 10400, other_modes[i], A_Server, 0);
+        CHECK(plan.window && !plan.swap && !plan.wait && plan.join_type == 0 && plan.id == 0);
+    }
+    // a join type other than 0 stays
+    plan = plan_after_ping(&j, home, 10400, 1, A_Server, 1);
+    CHECK(plan.swap && plan.join_type == 1);
+    // the host is waited for when the server's Steam ID is a game server's (3) or an anonymous one's (4)
+    plan = plan_after_ping(&j, home, 10400, 1, 0x0130000100001234ull, 0);
+    CHECK(plan.swap && plan.wait);
+    const uint64_t others[] = { A_Person, 0x0120000100001234ull, 0x0150000100001234ull, 0x0170000100001234ull, 0 };
+    for (int i = 0; i < 5; i++) {
+        plan = plan_after_ping(&j, home, 10400, 1, others[i], 0);
+        CHECK(plan.swap && !plan.wait && plan.id == 0 && plan.join_type == 4);
+    }
+    // a Steam ID given with the address is used, not waited for
+    j.given_id = A_Person + 5;
+    plan = plan_after_ping(&j, home, 10400, 1, A_Server, 0);
+    CHECK(plan.swap && !plan.wait && plan.id == A_Person + 5);
+    plan = plan_after_ping(&j, home, 10400, 3, A_Server, 0);
+    CHECK(!plan.swap && plan.id == 0);
+    j.given_id = 0x0110000100000000ull;
+    plan = plan_after_ping(&j, home, 10400, 1, A_Server, 0);
+    CHECK(plan.swap && plan.wait && plan.id == 0);
+    j.given_id = 0;
+    // the window: up to 90 s after the start
+    aae_lan_ping(&j, home, 10400);
+    plan = aae_lan_plan(&j, 99999, 1, A_Server, 0);
+    CHECK(plan.window && plan.swap);
+    aae_lan_ping(&j, home, 10400);
+    plan = aae_lan_plan(&j, 100000, 1, A_Server, 0);
+    CHECK(!plan.window && !plan.swap);
+    aae_lan_ping(&j, home, 10400);
+    plan = aae_lan_plan(&j, 9999, 1, A_Server, 0);
+    CHECK(!plan.window);
+    // the address last pinged has to be the target, which there has to be (made-up states)
+    j.matched = true, j.pinged = ip(192, 168, 1, 21);
+    CHECK(!aae_lan_plan(&j, 10500, 1, A_Server, 0).window);
+    j.matched = true, j.pinged = 0, j.target = 0;
+    CHECK(!aae_lan_plan(&j, 10500, 1, A_Server, 0).window);
+    // a target not of a local network gets no swap
+    j.matched = true, j.pinged = j.target = ip(8, 8, 8, 8);
+    plan = aae_lan_plan(&j, 10500, 1, A_Server, 0);
+    CHECK(plan.window && !plan.swap);
+    // no start, no window; the count of connects doesn't matter to the Join
+    j.matched = true, j.pinged = j.target = home, j.started = 0;
+    CHECK(!aae_lan_plan(&j, 10500, 1, A_Server, 0).window);
+    j.matched = true, j.started = 10000, j.attempt = 0;
+    plan = aae_lan_plan(&j, 10500, 1, A_Server, 0);
+    CHECK(plan.window && plan.swap && plan.attempt == 0);
+}
+
+static void test_waited(void) {
+    aae_lan_join_t j = { 0 };
+    const uint32_t home = ip(192, 168, 1, 20);
+    aae_lan_connect(&j, 10000);
+    aae_lan_plan_t plan = plan_after_ping(&j, home, 10100, 1, A_Server, 0);
+    uint64_t id = 9;
+    CHECK(!aae_lan_waited(&j, &plan, 10300, &id) && id == 9 && !aae_lan_dropped(&j, &plan));
+    aae_lan_cache(&j, home, A_Person, 10300);
+    CHECK(aae_lan_waited(&j, &plan, 10301, &id) && id == A_Person);
+    CHECK(!aae_lan_waited(&j, &plan, 15300, &id));
+    // the host didn't answer: over, with nothing
+    aae_lan_cache(&j, home, 0, 15300);
+    id = 9;
+    CHECK(aae_lan_waited(&j, &plan, 15301, &id) && id == 0);
+    // another connect, or another target: over, and the Join dropped
+    aae_lan_join_t later = j;
+    aae_lan_connect(&later, 16000);
+    CHECK(aae_lan_waited(&later, &plan, 16001, &id) && aae_lan_dropped(&later, &plan));
+    later = j;
+    later.target = ip(192, 168, 1, 21);
+    CHECK(aae_lan_waited(&later, &plan, 15400, &id) && aae_lan_dropped(&later, &plan));
+    // another connect to the same host is another connect
+    later = j;
+    aae_lan_connect(&later, 16000);
+    aae_lan_ping(&later, home, 16001);
+    CHECK(later.target == plan.target && aae_lan_waited(&later, &plan, 16002, &id) && aae_lan_dropped(&later, &plan));
+    // a Join out of the window is never dropped
+    plan.window = false;
+    CHECK(!aae_lan_dropped(&later, &plan));
+}
+
+static uint64_t elapsed_since(uint64_t start) {
+    return uptime_ms() - start;
+}
+
+// ---- when the asking thread can't be started: nothing is left requested, and the Join doesn't wait
+static int no_thread(pthread_t *thread, const pthread_attr_t *attributes, void *(*function)(void *), void *argument) {
+    (void)thread, (void)attributes, (void)function, (void)argument;
+    return EAGAIN;
+}
+static void test_no_thread(void) {
+    start_thread = no_thread;
+    now_ms = uptime_ms;
+    set_mod(true);
+    game_network_mode = 1;
+    memset(&join, 0, sizeof(join));
+    memset(&game, 0, sizeof(game));
+    fake_LanJoin_Connect();
+    fake_LanJoin_PingServer(ip(192, 168, 1, 20), 27017);
+    CHECK(join.matched && join.target == ip(192, 168, 1, 20) && join.requested == 0 && !asker_started);
+    uint64_t start = uptime_ms();
+    CHECK(join_server(0, A_Server, 0, true) == 0x55 && game.xuid == A_Server && game.join_type == 4);
+    CHECK(elapsed_since(start) < 50 && join.requested == 0 && !asker_started);
+    now_ms = test_clock;
+}
+
+// ---- the joiner's side against a host of the test's own on the loopback
+static int test_host = -1;
+static _Atomic bool host_stops;
+static void *host_main(void *unused) {
+    while (!atomic_load(&host_stops))
+        listener_serve(test_host);
+    return unused;
+}
+// a host that answers one query and keeps it; its reply is longer by this many bytes
+static int recording_socket = -1;
+static uint8_t recorded[64];
+static ssize_t recorded_length;
+static size_t reply_extra;
+static void *recording_main(void *unused) {
+    struct sockaddr_in from;
+    socklen_t from_size = sizeof(from);
+    recorded_length = recvfrom(recording_socket, recorded, sizeof(recorded), 0, (struct sockaddr *)&from, &from_size);
+    uint32_t number;
+    uint8_t reply[AAE_LAN_PACKET + 8] = { 0 };
+    if (aae_lan_read_query(recorded, (size_t)recorded_length, &number)) {
+        aae_lan_reply(reply, number, A_Person);
+        sendto(recording_socket, reply, AAE_LAN_PACKET + reply_extra, 0, (struct sockaddr *)&from, from_size);
+    }
+    return unused;
+}
+static void *connect_later(void *unused) {
+    usleep(100000);
+    fake_LanJoin_Connect();
+    return unused;
+}
+static void test_asking(void) {
+    now_ms = uptime_ms;
+    start_thread = pthread_create;
+    game_network_mode = 1;
+    game_steam_id = A_Person;
+    set_mod(true);
+    memset(&join, 0, sizeof(join));
+    memset(&game, 0, sizeof(game));
+    test_host = listener_open(INADDR_LOOPBACK, 0);
+    int silent = listener_open(INADDR_LOOPBACK, 0); // a port where nothing answers
+    query_port = port_of(test_host);
+    pthread_t host;
+    CHECK(pthread_create(&host, NULL, host_main, NULL) == 0);
+    const uint32_t loopback = ip(127, 0, 0, 1);
+    char netadr[32];
+
+    // connect, its address read, its server pinged: the host is asked
+    fake_LanJoin_Connect();
+    CHECK(game.connects == 1 && join.attempt == 1);
+    CHECK(fake_LanJoin_ParseAddress("127.0.0.1:27017", netadr) == 1 && strcmp(game.parsed, "127.0.0.1:27017") == 0);
+    CHECK(fake_LanJoin_PingServer(loopback, 27017) == 0x77 && game.pings == 1 && game.ping_ip == loopback &&
+          game.ping_port == 27017);
+    // the Join from the ping's answer waits for the host's Steam ID and joins it, directly
+    uint64_t start = uptime_ms();
+    CHECK(join_server(0, A_Server, 0, true) == 0x55 && game.joins == 1 && game.controller == 0 &&
+          game.xuid == A_Person && game.join_type == 4);
+    CHECK(elapsed_since(start) < Answer_Wait_Ms);
+    // the answer is kept: the next attempt has it at once
+    fake_LanJoin_Connect();
+    fake_LanJoin_ParseAddress("127.0.0.1:27017", netadr);
+    fake_LanJoin_PingServer(loopback, 27017);
+    pthread_mutex_lock(&lock);
+    CHECK(join.requested == 0 && join.matched && join.attempt == 2);
+    pthread_mutex_unlock(&lock);
+    CHECK(join_server(1, A_Server, 0, true) == 0x55 && game.joins == 2 && game.controller == 1 &&
+          game.xuid == A_Person && game.join_type == 4);
+    // a Join from anywhere else is the game's
+    CHECK(join_server(0, A_Server, 0, false) == 0x55 && game.xuid == A_Server && game.join_type == 0);
+    // also while the ping's own Join is still to come, which then gets the match
+    fake_LanJoin_Connect();
+    fake_LanJoin_PingServer(loopback, 27017);
+    CHECK(join_server(0, A_Server, 0, false) == 0x55 && game.xuid == A_Server && game.join_type == 0 && join.matched);
+    CHECK(join_server(0, A_Server, 0, true) == 0x55 && game.xuid == A_Person && game.join_type == 4);
+    // and so is one while the game is offline; online it's the plugin's
+    game_network_mode = 0;
+    fake_LanJoin_Connect();
+    fake_LanJoin_PingServer(loopback, 27017);
+    CHECK(join_server(0, A_Server, 0, true) == 0x55 && game.xuid == A_Server && game.join_type == 0);
+    game_network_mode = 2;
+    fake_LanJoin_Connect();
+    fake_LanJoin_PingServer(loopback, 27017);
+    CHECK(join_server(0, A_Server, 0, true) == 0x55 && game.xuid == A_Person && game.join_type == 4);
+    game_network_mode = 1;
+
+    // the Steam ID given with the address: nobody is asked, and it is used once
+    fake_LanJoin_Connect();
+    CHECK(fake_LanJoin_ParseAddress("127.0.0.1:27017@0x0110000100000099", netadr) == 1 &&
+          strcmp(game.parsed, "127.0.0.1:27017") == 0 && join.given_id == 0x0110000100000099ull);
+    CHECK(fake_LanJoin_ParseAddress("127.0.0.1:27017@1", netadr) == 1 && strcmp(game.parsed, "127.0.0.1:27017@1") == 0);
+    fake_LanJoin_PingServer(loopback, 27017);
+    CHECK(join.requested == 0 && join.matched);
+    CHECK(join_server(0, A_Server, 0, true) == 0x55 && game.xuid == 0x0110000100000099ull && game.join_type == 4 &&
+          join.given_id == 0);
+
+    // a host that doesn't answer: two queries, then the server's Steam ID is joined, directly
+    query_port = port_of(silent);
+    fake_LanJoin_Connect();
+    fake_LanJoin_ParseAddress("127.0.0.1:27017", netadr);
+    pthread_mutex_lock(&lock);
+    join.cached[0].expires = join.cached[1].expires = 0; // forget the answer of the host before
+    pthread_mutex_unlock(&lock);
+    start = uptime_ms();
+    fake_LanJoin_PingServer(loopback, 27017);
+    CHECK(join_server(0, A_Server, 0, true) == 0x55 && game.xuid == A_Server && game.join_type == 4);
+    uint64_t took = elapsed_since(start);
+    CHECK(took >= 2 * Reply_Wait_Ms - 20 && took < Answer_Wait_Ms + 100);
+    uint64_t id = 9;
+    pthread_mutex_lock(&lock);
+    CHECK(aae_lan_cached(&join, loopback, uptime_ms(), &id) && id == 0);
+    pthread_mutex_unlock(&lock);
+
+    // the questioning itself: two queries, each waiting 140 ms, for a host that doesn't answer; one for one that does
+    int tries = 0;
+    start = uptime_ms();
+    CHECK(ask_host(loopback, 1, &tries) == 0 && tries == 2);
+    took = elapsed_since(start);
+    CHECK(took >= 2 * Reply_Wait_Ms - 10 && took < 2 * Reply_Wait_Ms + 40);
+    query_port = port_of(test_host);
+    tries = 0;
+    CHECK(ask_host(loopback, 1, &tries) == A_Person && tries == 1);
+    // the query's number: the time, and the connect it is for
+    recording_socket = listener_open(INADDR_LOOPBACK, 0);
+    query_port = port_of(recording_socket);
+    pthread_t recorder;
+    CHECK(pthread_create(&recorder, NULL, recording_main, NULL) == 0);
+    now_ms = test_clock;
+    tries = 0;
+    CHECK(ask_host(loopback, 7, &tries) == A_Person && tries == 1);
+    now_ms = uptime_ms;
+    pthread_join(recorder, NULL);
+    uint8_t expected_query[AAE_LAN_PACKET];
+    aae_lan_query(expected_query, aae_lan_number(test_now, 7));
+    CHECK(recorded_length == AAE_LAN_PACKET && memcmp(recorded, expected_query, sizeof(expected_query)) == 0);
+    close(recording_socket);
+    // a reply longer than 24 bytes isn't the plugin's (its Windows fails one), though it begins like one
+    recording_socket = listener_open(INADDR_LOOPBACK, 0);
+    query_port = port_of(recording_socket);
+    reply_extra = 1;
+    CHECK(pthread_create(&recorder, NULL, recording_main, NULL) == 0);
+    tries = 0;
+    CHECK(ask_host(loopback, 7, &tries) == 0 && tries == 2);
+    pthread_join(recorder, NULL);
+    reply_extra = 0;
+    close(recording_socket);
+    query_port = port_of(silent);
+
+    // nothing comes: the Join waits 350 ms (a host made up to be asked by nobody)
+    fake_LanJoin_Connect();
+    fake_LanJoin_ParseAddress("127.0.0.1:27017", netadr);
+    pthread_mutex_lock(&lock);
+    memset(join.cached, 0, sizeof(join.cached));
+    aae_lan_ping(&join, loopback, uptime_ms());
+    join.requested = 0, join.asking = loopback;
+    pthread_mutex_unlock(&lock);
+    start = uptime_ms();
+    CHECK(join_server(0, A_Server, 0, true) == 0x55 && game.xuid == A_Server && game.join_type == 4);
+    took = elapsed_since(start);
+    CHECK(took >= Answer_Wait_Ms && took < Answer_Wait_Ms + 150);
+    // and another connect while it waits drops the Join
+    pthread_mutex_lock(&lock);
+    aae_lan_ping(&join, loopback, uptime_ms());
+    join.matched = true;
+    pthread_mutex_unlock(&lock);
+    fake_LanJoin_Connect();
+    fake_LanJoin_ParseAddress("127.0.0.1:27017", netadr);
+    pthread_mutex_lock(&lock);
+    aae_lan_ping(&join, loopback, uptime_ms());
+    join.requested = 0, join.asking = loopback;
+    pthread_mutex_unlock(&lock);
+    int joins = game.joins;
+    pthread_t later;
+    CHECK(pthread_create(&later, NULL, connect_later, NULL) == 0);
+    start = uptime_ms();
+    CHECK(join_server(0, A_Server, 0, true) == 0 && game.joins == joins);
+    took = elapsed_since(start);
+    pthread_join(later, NULL);
+    CHECK(took >= 80 && took < Answer_Wait_Ms);
+    pthread_mutex_lock(&lock);
+    join.asking = 0;
+    pthread_mutex_unlock(&lock);
+
+    // without the mod everything is the game's
+    query_port = port_of(test_host);
+    set_mod(false);
+    uint32_t attempt = join.attempt;
+    fake_LanJoin_Connect();
+    CHECK(join.attempt == attempt && game.connects == 11);
+    CHECK(fake_LanJoin_ParseAddress("127.0.0.1:27017@76561197960265729", netadr) == 1 &&
+          strcmp(game.parsed, "127.0.0.1:27017@76561197960265729") == 0 && join.given_id == 0);
+    join.matched = false;
+    fake_LanJoin_PingServer(loopback, 27017);
+    CHECK(!join.matched && join.requested == 0);
+    join.matched = true;
+    CHECK(join_server(0, A_Server, 0, true) == 0x55 && game.xuid == A_Server && game.join_type == 0 && join.matched);
+    join.matched = false;
+    set_mod(true);
+
+    atomic_store(&host_stops, true);
+    pthread_join(host, NULL);
+    close(test_host);
+    close(silent);
+    query_port = AAE_LAN_PORT;
+    now_ms = test_clock;
+}
+
 // ---- init
 static void *started;
 static void *nothing(void *unused) {
@@ -291,13 +893,27 @@ static void test_init(void) {
     const uint64_t base = 0x100000000;
     start_thread = test_start;
     aae_lan_init(base, 0);
-    CHECK(started == NULL && lobby_network_mode == NULL);
+    CHECK(started == NULL && lobby_network_mode == NULL && hooks == 0);
     aae_lan_init(base, 1);
     CHECK(started == (void *)listener_main && lobby_network_mode == (const int32_t *)(base + ADDR_lobbyNetworkMode));
+    CHECK(hooks == 4 && was_hooked(ADDR_LanJoin_Connect, (void *)fake_LanJoin_Connect, (void **)&orig_LanJoin_Connect) &&
+          was_hooked(ADDR_LanJoin_ParseAddress, (void *)fake_LanJoin_ParseAddress,
+                     (void **)&orig_LanJoin_ParseAddress) &&
+          was_hooked(ADDR_LanJoin_PingServer, (void *)fake_LanJoin_PingServer, (void **)&orig_LanJoin_PingServer) &&
+          was_hooked(ADDR_LanJoin_Join, (void *)fake_LanJoin_Join, (void **)&orig_LanJoin_Join));
+    CHECK(join_from_ping == (const void *)(base + ADDR_LanJoin_JoinFromPing) && now_ms == uptime_ms &&
+          query_port == 27018);
+    CHECK(lobby_ui_screen == (const int32_t *)(base + ADDR_lobbyUIScreen) &&
+          PlaylistVersion_Get == (void *)(base + ADDR_PlaylistVersion_Get) &&
+          FFOTDVersion_Get == (void *)(base + ADDR_FFOTDVersion_Get) &&
+          local_users == (const uint64_t *const *)(base + ADDR_localUsers));
     CHECK(loaded_mod == (const char *)(base + ADDR_Mods_LoadedName));
     CHECK(listen_address == INADDR_ANY && listen_port == 27018 && local_id == steam_local_id);
     // the plugin's numbers
     CHECK(AAE_LAN_PORT == 27018 && AAE_LAN_PACKET == 24 && Listen_Wait_Ms == 1000 && Logged_Most == 32);
+    CHECK(Tries == 2 && Reply_Wait_Ms == 140 && Answer_Wait_Ms == 350 && Window_Ms == 90000 && Target_Ms == 10000 &&
+          Answer_Kept_Ms == 5000 && No_Answer_Kept_Ms == 600 && Join_Direct == 4 && Address_Most == 95 &&
+          AAE_LAN_CACHED == 8 && AAE_LAN_ADDRESS == 96 && Number_Constant == 0xaabbef35);
 }
 
 int main(void) {
@@ -317,13 +933,27 @@ int main(void) {
     debug = 1;
     loaded_mod = loaded_name;
     lobby_network_mode = &game_network_mode;
+    lobby_ui_screen = &game_screen;
+    PlaylistVersion_Get = game_playlist_version;
+    FFOTDVersion_Get = game_ffotd_version;
+    local_users = game_users;
     local_id = test_steam_id;
+    now_ms = test_clock;
     test_ids();
     test_private();
     test_packets();
     test_answers();
     test_listener();
     test_turns();
+    test_query();
+    test_reply();
+    test_split();
+    test_cache();
+    test_ping();
+    test_plan();
+    test_waited();
+    test_no_thread();
+    test_asking();
 
     snprintf(command, sizeof(command), "rm -rf '%s'", template);
     if (system(command) != 0)

@@ -157,6 +157,10 @@ static const hook_def_t hook_defs[] = {
     { ADDR_PM_WalkMove_StrafeScaled, 5, 0, { 0xF3, 0x0F, 0x59, 0x45, 0xD4 } },        // mulss xmm0, [rbp-0x2c]
     { ADDR_LUI_Startup, Push_R15 },
     { ADDR_Live_SystemInfo, Push_R15 },
+    { ADDR_LanJoin_Connect, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53, 0x50 } }, // ...; push rbx; push rax
+    { ADDR_LanJoin_Join, Push_R15 },
+    { ADDR_LanJoin_ParseAddress, Push_R15 },
+    { ADDR_LanJoin_PingServer, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x89, 0xF8 } }, // ...; mov eax, edi
     { ADDR_load_workshop_texture, Push_R15 },
     { ADDR_LobbyMsgRW_PrepReadMsg, Push_R14 },
     { ADDR_LobbyMsgRW_PrepWriteMsg, Push_R14 },

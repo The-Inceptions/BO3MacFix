@@ -597,6 +597,15 @@
 // -- end client fields
 // joining a game on the local network as All-around Enhancement 4's Windows plugin makes it work (aae_lan.c)
 #define ADDR_lobbyNetworkMode 0x5decd18 // int: the lobby's network mode, 0 offline, 1 LAN (system link), 2 online: what Engine.GetLobbyNetworkMode gives (getter 0x122b963, 28 callers as on Windows); its setter 0x122b91c prints "Network mode changed to '%s'" (Windows 0x1556ce31c, getter 0x141edb7f0)
+#define ADDR_LanJoin_Connect 0xda1538 // func - void (): the connect console command ("Usage: %s ip.ip.ip.ip:port"), which goes on to LobbyJoinSource_IP (0xda1495) with its address (Windows 0x141ed9730)
+#define ADDR_LanJoin_ParseAddress 0x14de680 // func - bool (const char *text, netadr_t *): "ip:port" or a name ("localhost"), port 27017 without one; one caller, LobbyJoinSource_IP, as on Windows (0x142119cc0) - name is a guess
+#define ADDR_LanJoin_PingServer 0xf6ab09 // func - (uint32_t ip with its first number high, uint16_t port): ISteamMatchmakingServers::PingServer (0xf672ee) for the server there; one caller, LobbyJoinSource_IP (Windows 0x141ea9e30)
+#define ADDR_LanJoin_Join 0x11c844a // func - (int controller, uint64_t xuid, int joinType): the lobby VM's Lua call "Join"; two callers, as on Windows (0x141ee2f20)
+#define ADDR_LanJoin_JoinFromPing 0xf6747c // where the ping's ServerResponded (0xf6739c, "STEAM_PING: Server Responded to Ping. Direct joining on %qx") goes on after its Join of the server's Steam ID (gameserveritem_t + 0x16c) with joinType 0 (Windows: the call at 0x141eab3d7)
+#define ADDR_lobbyUIScreen 0xb2ca1b4 // int: the lobby UI screen, LobbyVM UpdateUI's "toTarget": its setter 0x13141d3 prints "Lobby UI Screen change: %d -> %d" (getter 0x1314417); 410 in a game started with devmap (Windows 0x156111f18, getter 0x141ef6260; both setters use "toTarget" and "skipSwitchMode")
+#define ADDR_PlaylistVersion_Get 0x11153ae // func - int (): the playlist version * 10000 + its minor one, which the host's join check compares with the joiner's (Windows 0x142236fb0)
+#define ADDR_FFOTDVersion_Get 0x12307c8 // func - int (): the ffotd version, compared the same way (Windows 0x141eb7680)
+#define ADDR_localUsers 0x20915f0 // two pointers to the local users' structs, each with its xuid first: what IsLocalXuid (0x103a7f6) compares an xuid with (Windows: IsLocalXuid 0x141eba6a0)
 // -- end lan join
 // T7Overcharged's smaller pieces (t7o_small.c); Windows addresses from T7Overcharged's own patterns for its names
 #define ADDR_Sys_QueEvent 0xd62e06 // func - void (int time, int type, int value, int value2, int, int, void *): the window's key and mouse messages into the game's event queue (256 of 32 bytes, critical section 0x31); type 1 is a key, value2 1 down and 0 up; mouse buttons are keys 200-204 (Windows 0x1422882e0, T7Overcharged's OFF_sys_que_event: the same body and callers)
