@@ -203,11 +203,48 @@ local function setup()
     -- only notes the key that came up; these timers, which the game runs on its main thread inside this state, ask
     -- which mapping fired and call the mod's function as T7Overcharged's line does:
     --     EnableGlobals(); if CoD.Mod and CoD.Mod.CallCustomFunction then CoD.Mod.CallCustomFunction('<name>') end;
-    -- One timer on each of the UI's roots, started by the first menu made after this, the loading screen's too (made
-    -- with CoD.Menu.NewFromState, the others with CoD.Menu.NewForUIEditor), and by the first of a root made later.
+    -- One timer on each of the UI's roots (as the game's HUD puts its safe area overlay there), started when
+    -- T7Overcharged starts in this Lua state and again by every menu made after it (CoD.Menu.NewFromState makes the HUD
+    -- and the loading screen, NewForUIEditor the others) for a root that has none: one made later, or one whose timer
+    -- was taken away. In a map's start the game's HUD makes AAE's loading screen right after itself, after
+    -- T7Overcharged has started; a loading screen made before T7Overcharged starts gets the timers at its start.
     if type(nativeTakeCustomKey) == "function" and CoD ~= nil and type(CoD.Menu) == "table" then
-        local takers = {}
-        local function takeCustomKey()
+        -- one record per Lua state, however often T7Overcharged starts in it: the root each timer was put on and when
+        -- it last ticked, and the loading screen that is up
+        local keys = rawget(CoD.Menu, "BO3MacFixCustomKeys")
+        if type(keys) ~= "table" then
+            keys = { timers = {} }
+            rawset(CoD.Menu, "BO3MacFixCustomKeys", keys)
+        end
+        local function now()
+            if Engine ~= nil and type(Engine.milliseconds) == "function" then
+                return Engine.milliseconds()
+            end
+            return nil
+        end
+        -- a timer that hasn't ticked for this long while its root is still there was taken away
+        local timerGone = 5000
+        -- AAE's loading screen plays the map's loading movie, and its skip stops it: when it stopped, counted from the
+        -- loading screen's menu, is logged (once a loading screen is up, until the movie stops or for 60 s)
+        local function watchLoadingMovie(time)
+            local loading = keys.loading
+            if loading == nil or time == nil or type(Engine.IsCinematicPlaying) ~= "function" then
+                return
+            end
+            if Engine.IsCinematicPlaying() then
+                loading.played = true
+            elseif loading.played then
+                keys.loading = nil
+                log("customkeymap: the loading movie stopped " .. tostring(time - loading.since) ..
+                    " ms after the loading screen came up")
+            elseif time - loading.since > 60000 then
+                keys.loading = nil
+            end
+        end
+        local function takeCustomKey(entry)
+            local time = now()
+            entry.ticked = time
+            watchLoadingMovie(time)
             local name = nativeTakeCustomKey()
             if name ~= nil then
                 EnableGlobals()
@@ -216,16 +253,24 @@ local function setup()
                 end
             end
         end
-        local function startTakers(menuName)
+        local function taking(entry, root, time)
+            if entry == nil or entry.root ~= root then
+                return false
+            end
+            return time == nil or entry.ticked == nil or time - entry.ticked <= timerGone
+        end
+        local function startTakers(why)
             if LUI == nil or type(LUI.roots) ~= "table" or LUI.UITimer == nil or LUI.UITimer.newElementTimer == nil then
                 return
             end
+            local time = now()
             local started = {}
             for rootName, root in pairs(LUI.roots) do
-                if takers[rootName] ~= root then
-                    takers[rootName] = root
+                if not taking(keys.timers[rootName], root, time) then
+                    local entry = { root = root, ticked = time }
+                    keys.timers[rootName] = entry
                     root:addElement(LUI.UITimer.newElementTimer(50, false, function()
-                        local ok, err = pcall(takeCustomKey)
+                        local ok, err = pcall(takeCustomKey, entry)
                         if not ok then
                             log("customkeymap: " .. tostring(err))
                         end
@@ -235,9 +280,21 @@ local function setup()
             end
             if #started > 0 then
                 table.sort(started)
-                log("customkeymap: the keys are taken on " .. table.concat(started, ", ") .. " (menu " ..
-                    tostring(menuName) .. ")")
+                log("customkeymap: the keys are taken on " .. table.concat(started, ", ") .. " (" .. why .. ")")
             end
+        end
+        local function loadingScreenUp()
+            local time = now()
+            local roots = {}
+            for rootName, entry in pairs(keys.timers) do
+                if type(LUI.roots) == "table" and taking(entry, LUI.roots[rootName], time) then
+                    roots[#roots + 1] = tostring(rootName)
+                end
+            end
+            table.sort(roots)
+            log("customkeymap: the loading screen is up and the keys are taken on " ..
+                (#roots > 0 and table.concat(roots, ", ") or "no root") .. " (menu Loading)")
+            keys.loading = time ~= nil and { since = time, played = false } or nil
         end
         for _, maker in ipairs({ "NewFromState", "NewForUIEditor" }) do
             local make = CoD.Menu[maker]
@@ -245,13 +302,20 @@ local function setup()
                 rawset(CoD.Menu, "BO3MacFixCustomKeys" .. maker, make)
                 CoD.Menu[maker] = function(menuName, ...)
                     local menu = make(menuName, ...)
-                    local ok, err = pcall(startTakers, menuName)
+                    local ok, err = pcall(startTakers, "menu " .. tostring(menuName))
+                    if ok and menuName == "Loading" then
+                        ok, err = pcall(loadingScreenUp)
+                    end
                     if not ok then
                         log("customkeymap: " .. tostring(err))
                     end
                     return menu
                 end
             end
+        end
+        local ok, err = pcall(startTakers, "when T7Overcharged starts")
+        if not ok then
+            log("customkeymap: " .. tostring(err))
         end
     end
 

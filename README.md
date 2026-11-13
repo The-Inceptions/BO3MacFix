@@ -120,8 +120,9 @@ a bind that comes that soon after the last one (any of them) is dropped, so a ke
 AAE's loading screen lets you skip the map's loading movie with Escape or a left click, through T7Overcharged's
 `customkeymap` command; on the Mac only the controller's A button did that. BO3MacFix adds the command, with
 T7Overcharged's rules: a mapped key counts when it comes up, only when no other key is held with it, not while the
-console is open, and at most once a second for all of them together. `BO3MACFIX_T7ODEBUG=1` in the environment logs
-every key that comes up while the mod has keys mapped.
+console is open, and at most once a second for all of them together. AAE plays the movie, and so maps these keys,
+only in a game without cheats, so not after `devmap`. The log says when the loading screen comes up and when its
+movie stopped. `BO3MACFIX_T7ODEBUG=1` in the environment logs every key that comes up while the mod has keys mapped.
 
 T7Overcharged also changes a few things in the game by itself when the mod loads it, and BO3MacFix does the same
 then: a game this Mac hosts sends up to 125 snapshots a second (`sv_network_fps`; the Mac's default is 100) of up to
