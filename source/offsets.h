@@ -600,5 +600,4 @@
 #define ADDR_playerKeys 0x1a1cd770 // PlayerKeyState[] (0x1940 bytes each): keys[256] of 24 bytes at +0x138, int down first (Key_SetBinding 0x101546a78; Windows 0x14531d850)
 #define ADDR_com_quitInProgress 0x118dfaac // int, Com_Quit (text "quitting...") sets it to 1 (Windows 0x15686e93c)
 #define ADDR_DB_FreeUnusedResources 0x13490b7 // func - void (bool), only the second flag of the Windows one (0x141421590, T7Overcharged's pattern): the same text "unloaded inuse" and the branch on it, 3 callers on both sides
-#define ADDR_UI_luaVM 0x119c6b88 // lua_State *, the UI's Lua VM: the "close_hud" event function reads it (0x100e1c8ce; Windows UI_luaVM 0x159bf7e08)
 // -- END OFFSETS

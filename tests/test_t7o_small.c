@@ -26,35 +26,30 @@ const char *const *t7o_command_args(int *argc) {
     return command_argv;
 }
 
-// the game's Lua: what was compiled and run, and in which state
-static struct {
-    int loads, calls;
-    lua_State *state;
-    char text[Keymap_Lua_Max], chunk[T7o_Keymap_Name_Max];
-    int lock_held; // the VM's critical section was held while it ran
-    bool load_fails, leaves_one; // the call leaves a value on the stack
-} lua;
 static int held_lock = -1; // the critical section the made-up game's lock holds last, -1 for none
 static int held_locks[4], held_count; // all it holds, in the order taken
 
-bool hks_load_source(lua_State *s, const char *source, size_t source_len, const char *chunk_name) {
-    lua.loads++;
-    lua.state = s;
-    snprintf(lua.text, sizeof(lua.text), "%.*s", (int)source_len, source);
-    snprintf(lua.chunk, sizeof(lua.chunk), "%s", chunk_name);
-    lua.lock_held = held_lock;
-    if (lua.load_fails)
-        return false;
-    HKS_TOP(s)->t = 6; // the compiled function
-    HKS_TOP(s)++;
-    return true;
+// the game's Lua: what the take function gave back (T7OTakeCustomKey)
+static struct {
+    int strings, nils;
+    char last[T7o_Keymap_Name_Max];
+} pushed;
+void hks_push_string(lua_State *s, const char *value) {
+    (void)s;
+    pushed.strings++;
+    snprintf(pushed.last, sizeof(pushed.last), "%s", value);
 }
-bool hks_pcall(lua_State *s, int nargs, int nresults) {
-    lua.calls++;
-    HKS_TOP(s) -= nargs + 1;
-    for (int i = 0; i < nresults + (lua.leaves_one ? 1 : 0); i++)
-        HKS_TOP(s)++;
-    return true;
+void hks_push_nil(lua_State *s) {
+    (void)s;
+    pushed.nils++;
+    pushed.last[0] = '\0';
+}
+// T7OTakeCustomKey() as the UI's timer calls it: the name, or NULL for nil
+static const char *take(void) {
+    int strings = pushed.strings, nils = pushed.nils;
+    CHECK(t7o_small_lua_take_custom_key(NULL) == 1);
+    CHECK(pushed.strings + pushed.nils == strings + nils + 1); // one value each time
+    return pushed.strings > strings ? pushed.last : NULL;
 }
 
 // the hooking library: the hook's original
@@ -87,9 +82,6 @@ int DobbyHook(void *address, void *fake_func, void **out_origin_func) {
 static int game_quitting;
 static uint8_t game_client_ui_actives[0x1078 * 2];
 static uint8_t game_player_keys[0x1940 * 2];
-static uint8_t game_lua_state[0x100], game_lua_lock_info[8];
-static HksObject game_lua_stack[16];
-static lua_State *game_ui_vm;
 
 // the game's scoped critical sections: each object goes on a per-thread list, so they're left the other way round
 static void game_critical_section_enter(void *lock, int critical_section, int mode) {
@@ -121,11 +113,6 @@ static void wire_game(void) {
     quit_in_progress = &game_quitting;
     client_ui_actives = game_client_ui_actives;
     player_keys = game_player_keys;
-    game_ui_vm = (lua_State *)game_lua_state;
-    ui_vm = &game_ui_vm;
-    HksObject *stack = game_lua_stack + 2; // the VM's stack, two values in
-    memcpy(game_lua_state + 0x50, &stack, sizeof(stack));
-    memcpy(game_lua_state + 0x48, &stack, sizeof(stack));
     CritSec_ScopedLock = game_critical_section_enter;
     CritSec_ScopedUnlock = game_critical_section_leave;
     orig_Sys_QueEvent = game_queue_event;
@@ -146,7 +133,8 @@ static void queue_key(int key, bool down) {
 static void reset_keymap(void) {
     memset(&keymap, 0, sizeof(keymap));
     atomic_store(&keymap_count, 0);
-    memset(&lua, 0, sizeof(lua));
+    memset(&key_queue, 0, sizeof(key_queue));
+    atomic_store(&key_events_lost, 0);
 }
 
 static void test_stoi(void) {
@@ -361,31 +349,75 @@ static void test_keymap_debounce(void) {
     CHECK(t7o_keymap_debounce_passes(&d, 1, 11 * ms));
 }
 
-static void test_keymap_lua(void) {
-    char text[Keymap_Lua_Max];
-    CHECK(t7o_keymap_lua(text, sizeof(text), "loadingskip1"));
-    CHECK(strcmp(text, " \t\t\t\t\t\t\tEnableGlobals(); \t\t\t\t\t\t\tif CoD.Mod and CoD.Mod.CallCustomFunction then "
-                       "\t\t\t\t\t\t\tCoD.Mod.CallCustomFunction('loadingskip1') end; \t\t\t\t\t\t\t") == 0);
-    // T7Overcharged's text is 131 characters with "{}" (the length it gives its formatter, 0x83)
-    CHECK(strlen(text) == 131 - 2 + strlen("loadingskip1"));
-    char small[40];
-    CHECK(!t7o_keymap_lua(small, sizeof(small), "loadingskip1") && small[0] == '\0');
-    CHECK(!t7o_keymap_lua(text, sizeof(text), NULL) && !t7o_keymap_lua(NULL, 10, "x"));
-    char exact[133];
-    CHECK(t7o_keymap_lua(exact, sizeof(exact), "abc") && strlen(exact) == 132);
-    CHECK(!t7o_keymap_lua(exact, sizeof(exact), "abcd") && exact[0] == '\0');
+// the window thread's queue: in order, full at T7o_Key_Queue_Size, and past the counters' wrap
+static void test_key_queue(void) {
+    t7o_key_queue q;
+    memset(&q, 0, sizeof(q));
+    t7o_key_event e, out;
+    memset(&e, 0, sizeof(e));
+    CHECK(!t7o_key_queue_take(&q, &out));
+    for (int i = 0; i < T7o_Key_Queue_Size; i++) {
+        e.key = i;
+        e.time_ns = 1000 + i;
+        t7o_keyset_add(&e.held, i);
+        CHECK(t7o_key_queue_put(&q, &e));
+    }
+    e.key = 99;
+    CHECK(!t7o_key_queue_put(&q, &e)); // full: lost, the others kept
+    for (int i = 0; i < T7o_Key_Queue_Size; i++) {
+        CHECK(t7o_key_queue_take(&q, &out) && out.key == i && out.time_ns == 1000 + i && t7o_keyset_has(&out.held, i));
+    }
+    CHECK(!t7o_key_queue_take(&q, &out));
+    // the counters wrap: still in order
+    atomic_store(&q.written, UINT_MAX - 1);
+    atomic_store(&q.read, UINT_MAX - 1);
+    for (int i = 0; i < 4; i++) {
+        e.key = 200 + i;
+        CHECK(t7o_key_queue_put(&q, &e));
+    }
+    for (int i = 0; i < 4; i++)
+        CHECK(t7o_key_queue_take(&q, &out) && out.key == 200 + i);
+    CHECK(!t7o_key_queue_take(&q, &out) && atomic_load(&q.read) == 2);
 }
 
-// the console command and the hook, against the made-up game
+// the main thread's rule for one event: not too old, the exact keys, the debounce from the event's time
+static void test_keymap_fire(void) {
+    const int64_t ms = 1000000;
+    t7o_keymap map;
+    memset(&map, 0, sizeof(map));
+    const char *escape[] = { "customkeymap", "loadingskip1", "27" };
+    t7o_keymap_command(&map, ARGC(escape), escape);
+    t7o_key_event e;
+    memset(&e, 0, sizeof(e));
+    e.key = 27;
+    e.time_ns = 5000 * ms;
+    CHECK(t7o_keymap_fire(&map, &e, 6000 * ms) == &map.mappings[0]); // 1000 ms old is still taken
+    CHECK(map.debounce.last_ns == 5000 * ms);                         // counted from the release
+    e.time_ns = 5999 * ms;
+    CHECK(t7o_keymap_fire(&map, &e, 6000 * ms) == NULL);              // 999 ms after the last one
+    e.time_ns = 6000 * ms;
+    CHECK(t7o_keymap_fire(&map, &e, 7001 * ms) == NULL);              // 1001 ms old: dropped
+    CHECK(map.debounce.last_ns == 5000 * ms);                         // and it doesn't count
+    CHECK(t7o_keymap_fire(&map, &e, 7000 * ms) == &map.mappings[0]);
+    e.time_ns = 8000 * ms;
+    t7o_keyset_add(&e.held, 'w');
+    CHECK(t7o_keymap_fire(&map, &e, 8000 * ms) == NULL);              // another key held
+    e.key = 26;
+    memset(&e.held, 0, sizeof(e.held));
+    CHECK(t7o_keymap_fire(&map, &e, 8000 * ms) == NULL);              // no mapping
+    CHECK(t7o_keymap_fire(NULL, &e, 8000 * ms) == NULL && t7o_keymap_fire(&map, NULL, 8000 * ms) == NULL);
+    CHECK(map.debounce.last_ns == 6000 * ms);
+}
+
+// the console command, the hook on the window thread and the take function on the main thread, against the made-up
+// game
 static void test_keymap_game(void) {
     wire_game();
     reset_keymap();
-    // nothing mapped: the hook passes the events on and looks at nothing
-    game_quitting = 1; // would stop a mapping
+    // nothing mapped: the hook passes the events on and notes nothing
     queue_key(27, false);
     CHECK(queued_events == 1 && last_event.type == 1 && last_event.value == 27 && last_event.value2 == 0);
-    CHECK(last_event.time == 0x1234 && lua.loads == 0);
-    game_quitting = 0;
+    CHECK(last_event.time == 0x1234 && take() == NULL);
 
     const char *escape[] = { "customkeymap", "loadingskip1", "27" };
     const char *click[] = { "customkeymap", "loadingskip2", "200" };
@@ -397,46 +429,52 @@ static void test_keymap_game(void) {
     run_command(customkeymap_f, 0, NULL); // arguments that can't be read
     CHECK(keymap.count == 2);
 
-    // Escape goes down: nothing; it comes up while the game holds it as down: loadingskip1's function
-    memcpy(game_lua_lock_info + 4, &(int){ 0x41 }, sizeof(int));
-    uint8_t *info = game_lua_lock_info;
-    memcpy(game_lua_state + 0xa0, &info, sizeof(info)); // the lua_State's pointer to its lock
+    // Escape goes down: nothing; it comes up while the game holds it as down: noted, and taken as loadingskip1
     set_key_down(0, 27, true);
     queue_key(27, true);
-    CHECK(lua.loads == 0 && queued_events == 2 && last_event.value2 == 1);
+    CHECK(queued_events == 2 && last_event.value2 == 1 && atomic_load(&key_queue.written) == 0);
     queue_key(27, false);
     CHECK(queued_events == 3 && last_event.value == 27 && last_event.value2 == 0);
-    CHECK(lua.loads == 1 && lua.calls == 1 && lua.state == game_ui_vm);
-    CHECK(strstr(lua.text, "CoD.Mod.CallCustomFunction('loadingskip1') end;") != NULL);
-    CHECK(strcmp(lua.chunk, "loadingskip1") == 0);
-    CHECK(lua.lock_held == 0x41 && held_lock == -1); // under the VM's own critical section, and left again
-    HksObject *base;
-    memcpy(&base, game_lua_state + 0x50, sizeof(base));
-    HksObject *top;
-    memcpy(&top, game_lua_state + 0x48, sizeof(top));
-    CHECK(top == base); // the stack as it was
+    CHECK(atomic_load(&key_queue.written) == 1);
+    CHECK(t7o_keyset_has(&key_queue.events[0].held, 27) && key_queue.events[0].key == 27);
+    const char *name = take();
+    CHECK(name != NULL && strcmp(name, "loadingskip1") == 0);
+    CHECK(take() == NULL); // taken once
     set_key_down(0, 27, false);
 
     // a click: a second within T7Overcharged's 1000 ms of the last one is dropped, for any mapping
     queue_key(200, false);
-    CHECK(lua.loads == 1);
+    CHECK(take() == NULL);
     keymap.debounce.last_ns -= 1000 * 1000000LL; // a second later
     queue_key(200, false);
-    CHECK(lua.loads == 2 && strcmp(lua.chunk, "loadingskip2") == 0);
-    CHECK(strstr(lua.text, "CallCustomFunction('loadingskip2')") != NULL);
+    name = take();
+    CHECK(name != NULL && strcmp(name, "loadingskip2") == 0);
 
-    // the VM without a lock of its own: the game's critical section 0x3c
+    // two that come up before a timer looks: the first fires, the second stays for the next look (and is too soon)
     keymap.debounce.last_ns -= 1000 * 1000000LL;
-    memset(game_lua_state + 0xa0, 0, sizeof(void *));
     queue_key(27, false);
-    CHECK(lua.loads == 3 && lua.lock_held == 0x3c && held_lock == -1);
+    queue_key(200, false);
+    name = take();
+    CHECK(name != NULL && strcmp(name, "loadingskip1") == 0);
+    CHECK(atomic_load(&key_queue.read) + 1 == atomic_load(&key_queue.written));
+    CHECK(take() == NULL && atomic_load(&key_queue.read) == atomic_load(&key_queue.written));
 
-    // what stops it: another key held, the console open, the game quitting, a key going down, no UI state
+    // one that fires nothing, then one that fires, before a timer looks: the second is still called at that look
+    keymap.debounce.last_ns -= 1000 * 1000000LL;
+    queue_key(13, false); // Enter: no mapping
+    queue_key(200, false);
+    name = take();
+    CHECK(name != NULL && strcmp(name, "loadingskip2") == 0);
+    CHECK(atomic_load(&key_queue.read) == atomic_load(&key_queue.written));
+
+    // what keeps it from being noted: another key held, the console open, the game quitting, a character
     keymap.debounce.last_ns -= 1000 * 1000000LL;
     set_key_down(0, 'w', true);
     queue_key(27, false);
+    CHECK(take() == NULL); // noted, but the keys aren't the mapping's
     set_key_down(0, 'w', false);
     set_key_down(1, 'w', true); // local client 1's keys don't count
+    unsigned written = atomic_load(&key_queue.written);
     set_key_catchers(0, 1);
     queue_key(27, false);
     set_key_catchers(0, 0);
@@ -445,30 +483,30 @@ static void test_keymap_game(void) {
     queue_key(27, false);
     game_quitting = 0;
     fake_Sys_QueEvent(0, 2, 27, 0, 0, 0, 0); // a character, not a key
-    CHECK(lua.loads == 3);
+    CHECK(atomic_load(&key_queue.written) == written);
     queue_key(27, false); // local client 1's console and keys don't stop it
-    CHECK(lua.loads == 4);
+    name = take();
+    CHECK(name != NULL && strcmp(name, "loadingskip1") == 0);
     set_key_down(1, 'w', false);
     set_key_catchers(1, 0);
+
+    // one that waited too long (nothing took it, the UI was being rebuilt): dropped, the debounce untouched
     keymap.debounce.last_ns -= 1000 * 1000000LL;
-    game_ui_vm = NULL;
     queue_key(27, false);
-    CHECK(lua.loads == 4);
-    game_ui_vm = (lua_State *)game_lua_state;
-    keymap.debounce.last_ns -= 1000 * 1000000LL;
-    lua.load_fails = true; // a compile error: nothing is called, the stack is as it was
-    queue_key(27, false);
-    CHECK(lua.loads == 5 && lua.calls == 4 && held_lock == -1);
-    memcpy(&top, game_lua_state + 0x48, sizeof(top));
-    CHECK(top == base);
-    lua.load_fails = false;
-    keymap.debounce.last_ns -= 1000 * 1000000LL;
-    lua.leaves_one = true; // the stack is put back as it was whatever the Lua leaves on it
-    queue_key(27, false);
-    CHECK(lua.loads == 6 && lua.calls == 5);
-    memcpy(&top, game_lua_state + 0x48, sizeof(top));
-    CHECK(top == base);
-    lua.leaves_one = false;
+    key_queue.events[(atomic_load(&key_queue.written) - 1) % T7o_Key_Queue_Size].time_ns -= 1001 * 1000000LL;
+    int64_t last = keymap.debounce.last_ns;
+    debug = true; // its lines
+    CHECK(take() == NULL && keymap.debounce.last_ns == last);
+    // a full queue loses the newest, keeps the rest, and says how many when it's next looked at
+    for (int i = 0; i < T7o_Key_Queue_Size + 3; i++)
+        queue_key(200, false);
+    CHECK(atomic_load(&key_events_lost) == 3);
+    name = take();
+    CHECK(name != NULL && strcmp(name, "loadingskip2") == 0 && atomic_load(&key_events_lost) == 0);
+    while (take() != NULL || atomic_load(&key_queue.read) != atomic_load(&key_queue.written))
+        ;
+    debug = false;
+
     // every event went on to the game, with all its values
     fake_Sys_QueEvent(77, 3, 5, 6, 7, 8, 9);
     CHECK(last_event.time == 77 && last_event.type == 3 && last_event.value == 5 && last_event.value2 == 6 &&
@@ -810,7 +848,8 @@ int main(void) {
     test_keymap_command();
     test_keymap_event_and_find();
     test_keymap_debounce();
-    test_keymap_lua();
+    test_key_queue();
+    test_keymap_fire();
     test_keymap_game();
     test_menuresponse();
     test_session_mode();

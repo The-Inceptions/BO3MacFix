@@ -82,6 +82,79 @@ load(true)
 check(Engine.Gone == nil and count("no Engine.Gone here") == 1 and Engine.Hidden == hidden,
       "a second load doesn't wrap the __index twice")
 
+-- customkeymap: timers on the UI's roots take the keys (T7OTakeCustomKey) and call the mod's function, as
+-- T7Overcharged's line does; started by the first menu made, the loading screen's (NewFromState) too
+local function root(name)
+    local r = { name = name, timers = {} }
+    function r:addElement(element) table.insert(self.timers, element) end
+    return r
+end
+local pending, enabled, called = {}, 0, {}
+local function takeCustomKey() return table.remove(pending, 1) end
+local made = {}
+local function freshUI()
+    fresh()
+    pending, enabled, called, made = {}, 0, {}, {}
+    LUI = { roots = { UIRootFull = root("UIRootFull"), UIRoot0 = root("UIRoot0") },
+            UITimer = { newElementTimer = function(ms, disposable, tick)
+                return { ms = ms, disposable = disposable, tick = tick }
+            end } }
+    CoD.Menu = { NewFromState = function(name) table.insert(made, name) return { menu = name } end,
+                 NewForUIEditor = function(name) table.insert(made, name) return { menu = name } end }
+    EnableGlobals = function() enabled = enabled + 1 end
+    CoD.Mod = { CallCustomFunction = function(name) table.insert(called, name) end }
+end
+local function timers(r) return #r.timers end
+
+freshUI()
+chunk(noop, noop, noop, noop, nativePrint, noop, noop, false, takeCustomKey)
+local full, zero = LUI.roots.UIRootFull, LUI.roots.UIRoot0
+check(timers(full) == 0 and timers(zero) == 0, "no timer before a menu is made")
+local menu = CoD.Menu.NewFromState("Loading", 0)
+check(menu ~= nil and menu.menu == "Loading" and made[1] == "Loading", "the loading screen's menu is still made")
+check(timers(full) == 1 and timers(zero) == 1, "one timer on each root")
+check(full.timers[1].ms == 50 and full.timers[1].disposable == false, "every 50 ms, for good")
+check(count("customkeymap: the keys are taken on UIRoot0, UIRootFull (menu Loading)") == 1, "said once, with the menu")
+-- a tick with nothing that fired: nothing called
+enabled = 0
+full.timers[1].tick()
+check(enabled == 0 and #called == 0, "nothing to take: nothing called")
+-- a key that fired: EnableGlobals, then the mod's function with the mapping's name
+table.insert(pending, "loadingskip1")
+zero.timers[1].tick()
+check(enabled == 1 and called[1] == "loadingskip1" and #called == 1, "the mod's function gets the name")
+full.timers[1].tick()
+check(#called == 1, "taken once")
+-- more menus: no more timers; a root made later gets one
+CoD.Menu.NewForUIEditor("StartMenu_Main")
+check(timers(full) == 1 and timers(zero) == 1 and made[2] == "StartMenu_Main", "no second timer")
+LUI.roots.UIRoot1 = root("UIRoot1")
+CoD.Menu.NewForUIEditor("Hud")
+check(timers(LUI.roots.UIRoot1) == 1 and timers(full) == 1, "a new root gets its own")
+check(count("customkeymap: the keys are taken on UIRoot1 (menu Hud)") == 1, "and says so")
+-- the mod's function failing, or not there: the timer goes on, the error is logged
+CoD.Mod.CallCustomFunction = function() error("broken") end
+table.insert(pending, "loadingskip2")
+full.timers[1].tick()
+local logged = false
+for _, line in ipairs(lines) do
+    if line:find("[T7Overcharged] customkeymap:", 1, true) and line:find("broken", 1, true) then logged = true end
+end
+check(logged, "an error in the mod's function is logged")
+CoD.Mod = nil
+table.insert(pending, "loadingskip1")
+full.timers[1].tick()
+check(#pending == 0 and enabled == 3, "without CoD.Mod it's taken and nothing called")
+-- loaded again in the same state: the makers aren't wrapped twice
+local before = CoD.Menu.NewFromState
+chunk(noop, noop, noop, noop, nativePrint, noop, noop, false, takeCustomKey)
+check(CoD.Menu.NewFromState == before, "a second load leaves the wrapper as it is")
+-- an older caller without the take function: nothing wrapped
+freshUI()
+local plain = CoD.Menu.NewFromState
+chunk(noop, noop, noop, noop, nativePrint, noop, noop, false)
+check(CoD.Menu.NewFromState == plain, "no take function: menus made as they were")
+
 if failures > 0 then
     print(failures .. " t7overcharged.lua test(s) failed")
     os.exit(1)

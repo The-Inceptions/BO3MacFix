@@ -2,7 +2,7 @@
 -- (e.g. All-around Enhancement) load for extra Lua libraries.
 -- BO3MacFix runs this when a mod loads the DLL, passing in a few native helpers.
 local nativeCreateDirectory, nativeDirectoryExists, nativeClipboardGet, nativeClipboardSet, nativePrint,
-    nativeHttpGet, nativeHttpResult, logMissing = ...
+    nativeHttpGet, nativeHttpResult, logMissing, nativeTakeCustomKey = ...
 
 if EnableGlobals then
     EnableGlobals()
@@ -194,6 +194,63 @@ local function setup()
         }) do
             if Engine[name] == nil then
                 Engine[name] = implementation
+            end
+        end
+    end
+
+    -- customkeymap (t7o_small.c): T7Overcharged runs its line of Lua right at the key event, on the game's window
+    -- thread, while the game may be closing or building this very Lua state on its main thread. Here the key event
+    -- only notes the key that came up; these timers, which the game runs on its main thread inside this state, ask
+    -- which mapping fired and call the mod's function as T7Overcharged's line does:
+    --     EnableGlobals(); if CoD.Mod and CoD.Mod.CallCustomFunction then CoD.Mod.CallCustomFunction('<name>') end;
+    -- One timer on each of the UI's roots, started by the first menu made after this, the loading screen's too (made
+    -- with CoD.Menu.NewFromState, the others with CoD.Menu.NewForUIEditor), and by the first of a root made later.
+    if type(nativeTakeCustomKey) == "function" and CoD ~= nil and type(CoD.Menu) == "table" then
+        local takers = {}
+        local function takeCustomKey()
+            local name = nativeTakeCustomKey()
+            if name ~= nil then
+                EnableGlobals()
+                if CoD.Mod and CoD.Mod.CallCustomFunction then
+                    CoD.Mod.CallCustomFunction(name)
+                end
+            end
+        end
+        local function startTakers(menuName)
+            if LUI == nil or type(LUI.roots) ~= "table" or LUI.UITimer == nil or LUI.UITimer.newElementTimer == nil then
+                return
+            end
+            local started = {}
+            for rootName, root in pairs(LUI.roots) do
+                if takers[rootName] ~= root then
+                    takers[rootName] = root
+                    root:addElement(LUI.UITimer.newElementTimer(50, false, function()
+                        local ok, err = pcall(takeCustomKey)
+                        if not ok then
+                            log("customkeymap: " .. tostring(err))
+                        end
+                    end))
+                    started[#started + 1] = tostring(rootName)
+                end
+            end
+            if #started > 0 then
+                table.sort(started)
+                log("customkeymap: the keys are taken on " .. table.concat(started, ", ") .. " (menu " ..
+                    tostring(menuName) .. ")")
+            end
+        end
+        for _, maker in ipairs({ "NewFromState", "NewForUIEditor" }) do
+            local make = CoD.Menu[maker]
+            if type(make) == "function" and rawget(CoD.Menu, "BO3MacFixCustomKeys" .. maker) == nil then
+                rawset(CoD.Menu, "BO3MacFixCustomKeys" .. maker, make)
+                CoD.Menu[maker] = function(menuName, ...)
+                    local menu = make(menuName, ...)
+                    local ok, err = pcall(startTakers, menuName)
+                    if not ok then
+                        log("customkeymap: " .. tostring(err))
+                    end
+                    return menu
+                end
             end
         end
     end

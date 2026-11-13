@@ -3,9 +3,11 @@
 // SendMenuResponse command, the dvars it changes when it starts, and its other commands the mod runs. The rules are
 // plain functions here, so they can be tested without the game; the game's side is at the end.
 #pragma once
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "havok.h"
 
 // ---- numbers as T7Overcharged reads them, with std::stoi: strtol in base 10 (blanks first, a sign, and anything
 // after the digits are allowed), on Windows, where a long is an int
@@ -74,8 +76,25 @@ const t7o_keymapping *t7o_keymap_find(const t7o_keymap *map, const t7o_keyset *h
 // whether a mapping that was found fires now: the debounce is the one of the first mapping that ever fired, and
 // counts from the last time any mapping fired
 bool t7o_keymap_debounce_passes(t7o_debounce *debounce, int mapping_debounce_ms, int64_t now_ns);
-// the Lua T7Overcharged runs for a mapping (its text exactly, with the name); false when it doesn't fit
-bool t7o_keymap_lua(char *buffer, size_t size, const char *name);
+// the keys that came up, from the game's window thread (one writer) to its main thread (one reader), without a lock
+#define T7o_Key_Queue_Size 16
+#define T7o_Key_Event_Stale_Ms 1000 // older when the main thread looks at it: dropped (nothing took it, a UI restart)
+typedef struct {
+    int key;
+    int64_t time_ns;   // when it came up
+    t7o_keyset held;   // the keys the game held as down then
+} t7o_key_event;
+typedef struct {
+    t7o_key_event events[T7o_Key_Queue_Size];
+    _Atomic unsigned written, read;
+} t7o_key_queue;
+// false when the queue is full (the event is lost)
+bool t7o_key_queue_put(t7o_key_queue *queue, const t7o_key_event *event);
+// false when it's empty
+bool t7o_key_queue_take(t7o_key_queue *queue, t7o_key_event *event);
+// the mapping a key that came up fires: not older than T7o_Key_Event_Stale_Ms, a mapping with exactly the held keys
+// and the key, and T7Overcharged's debounce counted from the event's time; NULL for none
+const t7o_keymapping *t7o_keymap_fire(t7o_keymap *map, const t7o_key_event *event, int64_t now_ns);
 
 // ---- SendMenuResponse <menu> <response> [debounce ms]
 
@@ -127,6 +146,8 @@ t7o_number t7o_free_unused_args(int argc, const char *const *argv, bool *first, 
 // at start-up: the console commands (customkeymap, cursoroverride, updateVidConfig, DB_FreeUnusedResources) and the
 // hook on the game's input events
 void t7o_small_install(uint64_t base_address);
+// T7OTakeCustomKey(), for the UI's Lua (t7overcharged.lua): the name of the mapping that fired, or nil
+int t7o_small_lua_take_custom_key(lua_State *s);
 // SendMenuResponse (t7overcharged.c): whether this call goes on, by T7Overcharged's debounce
 bool t7o_small_menuresponse_passes(int argc, const char *const *argv);
 // the mod has loaded T7Overcharged (the stand-in's init, t7overcharged.c): the first time, what T7Overcharged changes

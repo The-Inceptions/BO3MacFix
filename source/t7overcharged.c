@@ -187,7 +187,9 @@ static int t7o_init(lua_State *s) {
         // BO3MACFIX_LUAMISSING=1: log the Engine and CoD functions scripts look for that this game doesn't have
         const char *log_missing = getenv("BO3MACFIX_LUAMISSING");
         hks_push_boolean(s, log_missing != NULL && atoi(log_missing) != 0);
-        hks_pcall(s, 8, 0);
+        // customkeymap's keys, taken by the UI's timers on the game's main thread (t7o_small.c)
+        hks_push_cfunction(s, t7o_small_lua_take_custom_key, "T7OTakeCustomKey");
+        hks_pcall(s, 9, 0);
     }
     // T7Overcharged's movement component starts with it: its dvars, and the switches from now on (aae_movement.c)
     aae_movement_t7o_started();

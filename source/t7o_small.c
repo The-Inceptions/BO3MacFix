@@ -8,9 +8,14 @@
 // The Mac build has no such command, so only the controller's A button skipped. T7Overcharged (its keybind
 // component) hooks the game's Sys_QueEvent, where the window's key and mouse messages become the game's input events,
 // and for each key that comes *up* (not down), with local client 0's console closed, compares the keys the game holds
-// as down plus that key with each mapping's keys; on an exact match it runs the Lua in the UI's Lua VM, under the
-// VM's own critical section, before the game gets the event. This does the same at the Mac's Sys_QueEvent (the same
-// function: the same event queue, the same calls from the window's message handler).
+// as down plus that key with each mapping's keys; on an exact match it runs the Lua right there, in the UI's Lua VM
+// under the VM's own critical section. That is the game's window thread, and the game closes and rebuilds the UI's VM
+// on its main thread without that critical section (around a map's start, a renderer restart, a disconnect), so a
+// release at that moment would run Lua on freed or half-built memory; Windows has the same race. Here the Mac's
+// Sys_QueEvent (the same function: the same event queue, the same calls from the window's message handler) only
+// notes the key and the keys held, lock-free; the UI's own Lua takes it on the game's main thread, in a timer of its
+// roots (t7overcharged.lua), where this file finds the mapping, applies T7Overcharged's debounce and gives the name,
+// and the Lua calls the mod's function as T7Overcharged's line does.
 #include <dispatch/dispatch.h>
 #include <errno.h>
 #include <limits.h>
@@ -157,20 +162,34 @@ bool t7o_keymap_debounce_passes(t7o_debounce *debounce, int mapping_debounce_ms,
     return true;
 }
 
-// T7Overcharged's text (T7Overcharged.dll 0x180555920), tabs and all, around the name
-static const char keymap_lua_before[] = " \t\t\t\t\t\t\tEnableGlobals(); \t\t\t\t\t\t\tif CoD.Mod and "
-                                        "CoD.Mod.CallCustomFunction then \t\t\t\t\t\t\tCoD.Mod.CallCustomFunction('";
-static const char keymap_lua_after[] = "') end; \t\t\t\t\t\t\t";
-
-bool t7o_keymap_lua(char *buffer, size_t size, const char *name) {
-    if (buffer == NULL || size == 0 || name == NULL)
+bool t7o_key_queue_put(t7o_key_queue *queue, const t7o_key_event *event) {
+    unsigned written = atomic_load_explicit(&queue->written, memory_order_relaxed);
+    unsigned read = atomic_load_explicit(&queue->read, memory_order_acquire);
+    if (written - read >= T7o_Key_Queue_Size)
         return false;
-    int length = snprintf(buffer, size, "%s%s%s", keymap_lua_before, name, keymap_lua_after);
-    if (length < 0 || (size_t)length >= size) {
-        buffer[0] = '\0';
-        return false;
-    }
+    queue->events[written % T7o_Key_Queue_Size] = *event;
+    atomic_store_explicit(&queue->written, written + 1, memory_order_release);
     return true;
+}
+
+bool t7o_key_queue_take(t7o_key_queue *queue, t7o_key_event *event) {
+    unsigned read = atomic_load_explicit(&queue->read, memory_order_relaxed);
+    unsigned written = atomic_load_explicit(&queue->written, memory_order_acquire);
+    if (read == written)
+        return false;
+    *event = queue->events[read % T7o_Key_Queue_Size];
+    atomic_store_explicit(&queue->read, read + 1, memory_order_release);
+    return true;
+}
+
+const t7o_keymapping *t7o_keymap_fire(t7o_keymap *map, const t7o_key_event *event, int64_t now_ns) {
+    if (map == NULL || event == NULL || elapsed_ms(now_ns, event->time_ns) > T7o_Key_Event_Stale_Ms)
+        return NULL;
+    const t7o_keymapping *mapping = t7o_keymap_find(map, &event->held, event->key);
+    // the debounce counts from the key's release, as T7Overcharged's does
+    if (mapping == NULL || !t7o_keymap_debounce_passes(&map->debounce, mapping->debounce_ms, event->time_ns))
+        return NULL;
+    return mapping;
 }
 
 #pragma mark - SendMenuResponse's rules
@@ -306,15 +325,11 @@ uint8_t *t7o_mode_dvar(uint8_t *dvar, int mode) {
 #define KeyCatcher_Console 0x1
 #define PlayerKeys_Keys 0x138          // KeyState keys[256] in local client 0's PlayerKeyState (0x1940 bytes each)
 #define KeyState_Size 0x18             // int down at +0
-#define Lua_LockInfo 0xa0              // in the lua_State: a pointer to the VM's lock, whose int at +4 is its index
-#define Lua_Default_Lock 0x3c          // the critical section the game uses without one
-#define Keymap_Lua_Max 512
 
 static bool debug;
 static const int *quit_in_progress;        // the game's com_quitInProgress
 static const uint8_t *client_ui_actives;   // the game's clientUIActives
 static const uint8_t *player_keys;         // the game's playerKeys
-static lua_State *const *ui_vm;            // the game's UI_luaVM
 static void (*CritSec_ScopedLock)(void *lock, int critical_section, int mode);
 static void (*CritSec_ScopedUnlock)(void *lock);
 static void *(*Cmd_FindCommand)(const char *name);
@@ -324,65 +339,29 @@ static int64_t now_ns(void) {
     return (int64_t)clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 }
 
-static t7o_keymap keymap;                  // under keymap_lock
+// the mappings, made and looked up on the game's main thread (the console's commands, the UI's Lua), under keymap_lock
+static t7o_keymap keymap;
 static os_unfair_lock keymap_lock = OS_UNFAIR_LOCK_INIT;
 static atomic_int keymap_count;            // for the input hook, which has nothing to do while there's no mapping
+// the window thread puts the keys that came up in it, the main thread takes them
+static t7o_key_queue key_queue;
+static atomic_uint key_events_lost;
 
-// the critical section the game keeps the VM under (the game's 0x1015288b0 asks the same, and says so when there's no
-// lock: T7Overcharged reads it without that)
-static int lua_lock_index(lua_State *vm) {
-    const uint8_t *info = *(const uint8_t *const *)((const uint8_t *)vm + Lua_LockInfo);
-    return info != NULL ? *(const int *)(info + 4) : Lua_Default_Lock;
-}
-
-// runs the mapping's Lua in the UI's VM, as T7Overcharged does, with the mapping's name as the chunk's
-static void run_custom_function(const char *name) {
-    lua_State *vm = *ui_vm;
-    char text[Keymap_Lua_Max];
-    if (vm == NULL || !t7o_keymap_lua(text, sizeof(text), name)) {
-        printf("T7Overcharged: customkeymap: no UI Lua state for %s\n", name);
-        return;
-    }
-    uint64_t lock[2] = { 0, 0 };
-    CritSec_ScopedLock(lock, lua_lock_index(vm), 0);
-    // the stack can be reallocated while the Lua runs, so the top is remembered as an index
-    ptrdiff_t top = HKS_TOP(vm) - HKS_BASE(vm);
-    if (hks_load_source(vm, text, strlen(text), name))
-        hks_pcall(vm, 0, 0);
-    HKS_TOP(vm) = HKS_BASE(vm) + top;
-    CritSec_ScopedUnlock(lock);
-}
-
-// a key or mouse event on its way into the game's queue
-static void key_event(int type, int key, int value2) {
+// a key or mouse event on its way into the game's queue, on the window thread: the key and the keys held, noted
+static void note_key_event(int type, int key, int value2) {
     if (!t7o_keymap_event_counts(type, value2, key, *quit_in_progress,
                                  *(const int *)(client_ui_actives + ClientUIActive_KeyCatchers)))
         return;
-    t7o_keyset held;
-    memset(&held, 0, sizeof(held));
+    t7o_key_event event;
+    memset(&event, 0, sizeof(event));
+    event.key = key;
+    event.time_ns = now_ns();
     for (int k = 0; k < T7o_Keys; k++) {
         if (*(const int *)(player_keys + PlayerKeys_Keys + (size_t)k * KeyState_Size) != 0)
-            t7o_keyset_add(&held, k);
+            t7o_keyset_add(&event.held, k);
     }
-    char name[T7o_Keymap_Name_Max] = "";
-    bool found = false, fire = false;
-    os_unfair_lock_lock(&keymap_lock);
-    const t7o_keymapping *mapping = t7o_keymap_find(&keymap, &held, key);
-    if (mapping != NULL) {
-        found = true;
-        strcpy(name, mapping->name);
-        fire = t7o_keymap_debounce_passes(&keymap.debounce, mapping->debounce_ms, now_ns());
-    }
-    os_unfair_lock_unlock(&keymap_lock);
-    if (debug || fire) {
-        if (found)
-            printf("T7Overcharged: customkeymap: key %d came up, %s%s\n", key, fire ? "calling " : "too soon for ",
-                   name);
-        else
-            printf("T7Overcharged: customkeymap: key %d came up, no mapping for it with the keys held\n", key);
-    }
-    if (fire)
-        run_custom_function(name);
+    if (!t7o_key_queue_put(&key_queue, &event))
+        atomic_fetch_add_explicit(&key_events_lost, 1, memory_order_relaxed);
 }
 
 // Sys_QueEvent(time, type, value, value2, ...): type 1 is a key, value its number, value2 1 for down and 0 for up.
@@ -390,8 +369,49 @@ static void key_event(int type, int key, int value2) {
 install_hook_name(Sys_QueEvent, void, uint64_t time, int type, int value, int value2, uint64_t length,
                   uint64_t extra, uint64_t pointer) {
     if (atomic_load_explicit(&keymap_count, memory_order_relaxed) > 0)
-        key_event(type, value, value2);
+        note_key_event(type, value, value2);
     orig_Sys_QueEvent(time, type, value, value2, length, extra, pointer);
+}
+
+// T7OTakeCustomKey() -> the name of the mapping a key that came up fires, or nil: the UI's timers ask it on the
+// game's main thread (t7overcharged.lua), where the game runs the UI's Lua itself and closes and builds it
+int t7o_small_lua_take_custom_key(lua_State *s) {
+    int64_t now = now_ns();
+    char name[T7o_Keymap_Name_Max] = "";
+    bool fire = false;
+    t7o_key_event event;
+    while (!fire && t7o_key_queue_take(&key_queue, &event)) {
+        os_unfair_lock_lock(&keymap_lock);
+        int64_t before = keymap.debounce.last_ns;
+        bool was_started = keymap.debounce.started;
+        const t7o_keymapping *mapping = t7o_keymap_find(&keymap, &event.held, event.key);
+        const t7o_keymapping *fired = t7o_keymap_fire(&keymap, &event, now);
+        if (fired != NULL) {
+            strcpy(name, fired->name);
+            fire = true;
+        } else if (debug && mapping != NULL) {
+            strcpy(name, mapping->name);
+        }
+        os_unfair_lock_unlock(&keymap_lock);
+        if (fire)
+            printf("T7Overcharged: customkeymap: key %d came up, calling %s\n", event.key, name);
+        else if (debug && elapsed_ms(now, event.time_ns) > T7o_Key_Event_Stale_Ms)
+            printf("T7Overcharged: customkeymap: key %d came up %lld ms ago, too long ago\n", event.key,
+                   (long long)elapsed_ms(now, event.time_ns));
+        else if (debug && mapping != NULL)
+            printf("T7Overcharged: customkeymap: key %d came up, too soon for %s (%lld ms after the last one)\n",
+                   event.key, name, was_started ? (long long)elapsed_ms(event.time_ns, before) : -1LL);
+        else if (debug)
+            printf("T7Overcharged: customkeymap: key %d came up, no mapping for it with the keys held\n", event.key);
+    }
+    unsigned lost = atomic_exchange_explicit(&key_events_lost, 0, memory_order_relaxed);
+    if (lost != 0 && debug)
+        printf("T7Overcharged: customkeymap: %u keys came up while nothing took them\n", lost);
+    if (fire)
+        hks_push_string(s, name);
+    else
+        hks_push_nil(s);
+    return 1;
 }
 
 static _Alignas(8) uint8_t customkeymap_command[0x30];
@@ -597,7 +617,6 @@ void t7o_small_install(uint64_t base_address) {
     // the game's clientUIActives (0x1078 bytes each): the key catchers at +4, the connection state at +8
     client_ui_actives = (const uint8_t *)(base_address + ADDR_CLIENT_CONNECTIONS);
     player_keys = (const uint8_t *)(base_address + ADDR_playerKeys);
-    ui_vm = (lua_State *const *)(base_address + ADDR_UI_luaVM);
     CritSec_ScopedLock = (void *)(base_address + ADDR_CritSec_ScopedLock);
     CritSec_ScopedUnlock = (void *)(base_address + ADDR_CritSec_ScopedUnlock);
     DB_FreeUnusedResources = (void *)(base_address + ADDR_DB_FreeUnusedResources);
