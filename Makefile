@@ -20,6 +20,9 @@ TEST_TARGETS += tests/test_script_vars
 TEST_TARGETS += tests/test_font_resolution
 # the UI's Lua heap growing past its 60 MB (lua_heap.c)
 TEST_TARGETS += tests/test_lua_heap
+# OfflineMode: which addresses and names are local, the automatic test, the replacements of the network calls
+# (offline_mode.c)
+TEST_TARGETS += tests/test_offline_mode
 # releases of Lua reference 0 (lua_unref.c)
 TEST_TARGETS += tests/test_lua_unref
 # the second address space for loaded files (pmem_spill.c)
@@ -198,6 +201,8 @@ SOURCES += source/settings_menu.c
 
 # quitting without a crash and audio following the default output device (qol.c)
 SOURCES += source/qol.c source/rawmouse.c
+# OfflineMode: the game's process without the internet, always or when it doesn't answer at launch (offline_mode.c)
+SOURCES += source/offline_mode.c
 FRAMEWORKS += -framework AudioToolbox -framework CoreAudio
 FRAMEWORKS += -framework Metal -framework QuartzCore -framework AppKit -weak_framework MetalFX
 
@@ -493,6 +498,12 @@ tests/test_dynres: tests/test_dynres.c source/dynres.c source/dynres.h
 tests/test_launch_args: tests/test_launch_args.c source/launch_args.c source/launch_args.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_launch_args.c \
 		source/launch_args.c
+
+# offline_mode.c against stand-ins for the system's network calls, made-up lookups and connections, and this Mac's
+# loopback (nothing leaves the machine), with the address and undefined behaviour sanitizers
+tests/test_offline_mode: tests/test_offline_mode.c source/offline_mode.c source/offline_mode.h source/dyld-interposing.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_offline_mode.c \
+		source/offline_mode.c
 
 tests/test_quick_save: tests/test_quick_save.c source/quick_save_rules.c source/quick_save_rules.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_quick_save.c source/quick_save_rules.c

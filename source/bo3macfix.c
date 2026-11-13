@@ -64,6 +64,7 @@
 #include "notch.h"
 #include "notices.h"
 #include "offsets.h"
+#include "offline_mode.h"
 #include "players_cfg.h"
 #include "checkpoint.h"
 #include "checkpoint_autosave.h"
@@ -1032,6 +1033,13 @@ __attribute__((constructor)) static void dylib_main() {
     }
     // write the log out line by line, so nothing is lost if the game crashes or is killed
     setvbuf(stdout, NULL, _IOLBF, 0);
+
+    // OfflineMode (offline_mode.c, on its automatic setting by default): the game's process without the internet,
+    // always or when the online service doesn't answer quickly at launch, so a bad connection never holds the player
+    // up. First, so that it's in place before the game makes any network call; it changes no game code.
+    const char *offline_debug = getenv("BO3MACFIX_OFFLINEDEBUG");
+    offline_mode_init(read_int_setting_or_env("OfflineMode", 2), offline_debug != NULL && atoi(offline_debug) != 0,
+                      getenv("BO3MACFIX_OFFLINEPROBE"));
 
     // a checkpoint resume set up last time (checkpoint.c) and not undone: the game quit before getting back to the
     // menus. Put the player's own starting round and points back in AAE's mutations file before AAE loads it.

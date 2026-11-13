@@ -15,6 +15,7 @@
 #include "dobby.h"
 #include "havok.h"
 #include "offsets.h"
+#include "offline_mode.h"
 #include "t7overcharged.h"
 #include "t7overcharged_lua.h"
 #include "t7o_anim_event.h"
@@ -141,10 +142,11 @@ void t7o_set_online(int enabled) {
     aae_online = enabled;
 }
 
-// Axios.GetUpdate(url, key): only with AAEOnline = 1, and only to the hosts http_get_async allows
+// Axios.GetUpdate(url, key): only with AAEOnline = 1, only to the hosts http_get_async allows, and not while
+// OfflineMode keeps the game off the internet
 static int lua_http_get(lua_State *s) {
     const char *url = hks_check_string(s, 1), *key = hks_check_string(s, 2);
-    bool started = aae_online && url != NULL && key != NULL && http_get_async(url, key);
+    bool started = aae_online && !offline_mode_cut() && url != NULL && key != NULL && http_get_async(url, key);
     hks_push_boolean(s, started);
     return 1;
 }
