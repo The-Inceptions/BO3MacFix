@@ -930,6 +930,43 @@ static void test_asking(void) {
     now_ms = test_clock;
 }
 
+// ---- which Join is changed: only the one the ping's answer makes, known by where its call returns to
+// a call of the Join's hook whose return address is the label join_marked_return, as the game's call in
+// ServerResponded returns to its own place
+extern const char join_marked_return[];
+#if defined(__aarch64__)
+__attribute__((naked, noinline)) static uint64_t call_join_marked(uint64_t controller, uint64_t server,
+                                                                  uint64_t join_type) {
+    __asm__("stp x29, x30, [sp, #-16]!\n mov x29, sp\n bl _fake_LanJoin_Join\n"
+            ".globl _join_marked_return\n_join_marked_return:\n ldp x29, x30, [sp], #16\n ret\n");
+}
+#elif defined(__x86_64__)
+__attribute__((naked, noinline)) static uint64_t call_join_marked(uint64_t controller, uint64_t server,
+                                                                  uint64_t join_type) {
+    __asm__("push %rbp\n mov %rsp, %rbp\n call _fake_LanJoin_Join\n"
+            ".globl _join_marked_return\n_join_marked_return:\n pop %rbp\n ret\n");
+}
+#endif
+
+static void test_join_caller(void) {
+    char netadr[32];
+    set_mod(true);
+    game_network_mode = 1;
+    memset(&join, 0, sizeof(join));
+    memset(&game, 0, sizeof(game));
+    join_from_ping = join_marked_return;
+    // a connect to a host of a local network, its Steam ID given, its server pinged: the next Join is to be changed
+    fake_LanJoin_Connect();
+    fake_LanJoin_ParseAddress("192.168.1.20:27017@76561197960265729", netadr);
+    fake_LanJoin_PingServer(ip(192, 168, 1, 20), 27017);
+    // a Join from anywhere else is the game's, and leaves the match alone
+    CHECK(fake_LanJoin_Join(0, A_Server, 0) == 0x55 && game.joins == 1 && game.xuid == A_Server &&
+          game.join_type == 0 && join.matched && join.given_id == A_Person);
+    // the one from the marked place is the plugin's
+    CHECK(call_join_marked(0, A_Server, 0) == 0x55 && game.joins == 2 && game.xuid == A_Person &&
+          game.join_type == 4 && !join.matched && join.given_id == 0);
+}
+
 // ---- lobby messages
 static void test_lobby_message(void) {
     uint8_t packet[0x408] = { 0x28, 0, 0, 0, '1', 5 };
@@ -1162,6 +1199,7 @@ int main(void) {
     test_waited();
     test_no_thread();
     test_asking();
+    test_join_caller();
     test_lobby_message();
     test_lobby_send();
     test_switch();
