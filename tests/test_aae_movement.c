@@ -385,12 +385,10 @@ static void reset(void) {
     memset(fastads_reached, 0, sizeof(fastads_reached));
     memset(&perk_test_said, 0, sizeof(perk_test_said));
     perk_test_said.player_state = UINT64_MAX;
-    unsetenv("BO3MACFIX_MOVEFASTADSPERK");
     unsetenv("BO3MACFIX_MOVEFORCE");
     unsetenv("BO3MACFIX_MOVEDEBUG");
     aae_movement_init(0x100000000, 1);
     seen_count = 0;
-    fastads_perk_forced = false;
 }
 
 // the patches' bits as the commands left them
@@ -1259,16 +1257,11 @@ static void test_fastads_detours(void) {
     CHECK(!handler_FastAds_PerkTest(perk_first(ps, 1), second));
     mod_loaded = true;
     CHECK(handler_FastAds_PerkTest(perk_first(ps, 1), 0));
-    // BO3MACFIX_MOVEFASTADSPERK=1: the player counts as having the perk, while fastads is on
-    fastads_perk_forced = true;
-    CHECK(handler_FastAds_PerkTest(perk_first(ps, 0), second));
-    RUN("movement_patch", "fastads", "0");
-    CHECK(!handler_FastAds_PerkTest(perk_first(ps, 0), second) && !handler_FastAds_PerkTest(perk_first(ps, 1), second));
-    RUN("movement_patch", "fastads", "1");
-    mod_loaded = false;
-    CHECK(!handler_FastAds_PerkTest(perk_first(ps, 0), second));
-    mod_loaded = true;
-    fastads_perk_forced = false;
+    // the test runs' BO3MACFIX_MOVEFASTADSPERK is gone: left in the environment, it changes nothing
+    setenv("BO3MACFIX_MOVEFASTADSPERK", "1", 1);
+    aae_movement_init(0x100000000, 1);
+    CHECK(!handler_FastAds_PerkTest(perk_first(ps, 0), second) && handler_FastAds_PerkTest(perk_first(ps, 1), second));
+    unsetenv("BO3MACFIX_MOVEFASTADSPERK");
     // forced: AAE's state whatever the switches say
     forced = true;
     RUN("movement_patch_all", "0");
@@ -1362,12 +1355,6 @@ static void test_fastads_lines(void) {
     handler_FastAds_PerkTest(perk_first(line_ps, 1), perk_second(line_weapon, true));
     RUN("movement_patch", "fastads", "1");
     set_perks(0, 0);
-    fastads_perk_forced = true;
-    handler_FastAds_PerkTest(perk_first(line_ps, 0), perk_second(line_weapon, true));
-    RUN("movement_patch", "fastads", "0");
-    handler_FastAds_PerkTest(perk_first(line_ps, 0), perk_second(line_weapon, true));
-    RUN("movement_patch", "fastads", "1");
-    fastads_perk_forced = false;
     // the doubling, on and off
     detour_registers_t registers;
     memset(&registers, 0x5a, sizeof(registers));
@@ -1411,21 +1398,6 @@ static void test_fastads_lines(void) {
     ADD("movement: fast ADS: the perk test says yes (thread %u, player state 0x%llx, sights going up, at 0.5, %s "
         "10800000 00000000 00000000 80000001 (specialty_fastads 1, specialty_fastreload 1), given by scripts 10800000 "
         "00000000 00000000 00000000; fastads off: the game's own sniper rifle tests and doubling\n", me, ps, middle);
-    ADD("movement: fastads on, fast ADS multiplier 1.4\n");
-    ADD("movement: after \"movement_patch fastads 1\": on [slide_preserve_momentum jumpslowdown fast_sprintleap "
-        "fast_sprintlerpin slideslowdown canslidethensprint instant_slide fastads fastjump slideangles], off "
-        "[fastswap]; t7o_omnimovement 1, t7o_strafe_speed_scale 0.9 (strafe scale 0.9), fast ADS multiplier 1.4\n");
-    ADD("movement: fast ADS: the perk test says no (BO3MACFIX_MOVEFASTADSPERK: counted as yes) (thread %u, player "
-        "state 0x%llx, sights going up, at 0.5, %s 00000000 00000000 00000000 80000001 (specialty_fastads 0, "
-        "specialty_fastreload 0), given by scripts 00000000 00000000 00000000 00000000; fastads on: past the sniper "
-        "rifle tests to the doubling\n", me, ps, middle);
-    ADD("movement: fastads off\n");
-    ADD("movement: after \"movement_patch fastads 0\": on [slide_preserve_momentum jumpslowdown fast_sprintleap "
-        "fast_sprintlerpin slideslowdown canslidethensprint instant_slide fastjump slideangles], off [fastswap "
-        "fastads]; t7o_omnimovement 1, t7o_strafe_speed_scale 0.9 (strafe scale 0.9), fast ADS multiplier 1.4\n");
-    ADD("movement: fast ADS: the perk test says no (thread %u, player state 0x%llx, sights going up, at 0.5, %s "
-        "00000000 00000000 00000000 80000001 (specialty_fastads 0, specialty_fastreload 0), given by scripts 00000000 "
-        "00000000 00000000 00000000; the game skips the speed-up\n", me, ps, middle);
     ADD("movement: fastads on, fast ADS multiplier 1.4\n");
     ADD("movement: after \"movement_patch fastads 1\": on [slide_preserve_momentum jumpslowdown fast_sprintleap "
         "fast_sprintlerpin slideslowdown canslidethensprint instant_slide fastads fastjump slideangles], off "
@@ -1487,26 +1459,6 @@ static void test_fastads_lines(void) {
     CHECK(sniper_anim_types == game_sniper_anim_types);
 }
 
-// BO3MACFIX_MOVEFASTADSPERK: read at init, only with the setting on, and said
-static void test_fastads_perk_switch(void) {
-    reset();
-    setenv("BO3MACFIX_MOVEFASTADSPERK", "1", 1);
-    printing_begin();
-    aae_movement_init(0x100000000, 1);
-    const char *out = printing_end();
-    CHECK(fastads_perk_forced && strcmp(out, "movement: BO3MACFIX_MOVEFASTADSPERK=1: while fastads is on, the player "
-                                             "counts as having the fast-ADS perk at the game's test for it (for test "
-                                             "runs: no console command gives a perk)\n") == 0);
-    aae_movement_init(0x100000000, 0);
-    CHECK(!fastads_perk_forced);
-    setenv("BO3MACFIX_MOVEFASTADSPERK", "0", 1);
-    aae_movement_init(0x100000000, 1);
-    CHECK(!fastads_perk_forced);
-    unsetenv("BO3MACFIX_MOVEFASTADSPERK");
-    aae_movement_init(0x100000000, 1);
-    CHECK(!fastads_perk_forced);
-}
-
 #if defined(__x86_64__)
 // The perk test's thunk puts its two values together in assembly (Perk_Test_Setup): run that on chosen registers
 // (rbx, r12, r13, r15 in setup_in) and keep what it leaves in rdi and rsi.
@@ -1565,7 +1517,6 @@ int main(void) {
     test_fastads_rule();
     test_fastads_detours();
     test_fastads_lines();
-    test_fastads_perk_switch();
 #if defined(__x86_64__)
     test_perk_setup();
 #endif

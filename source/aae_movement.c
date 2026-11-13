@@ -465,8 +465,7 @@ void aae_movement_t7o_started(void) {
 //   r15, which the anim type tests load, isn't read behind them before the function returns. The caller-saved
 //   registers are dead there on every path, and nothing reads the flags before the compare at 0x100ed5ebe (yes) or
 //   the replaced "test" (no). The place also gives the debug lines: the first time each place is reached on a
-//   thread, and what the perk test said, with the perk bits it looked at. For test runs, where no console command
-//   gives a perk, BO3MACFIX_MOVEFASTADSPERK=1 counts the player as having it here while fastads is on.
+//   thread, and what the perk test said, with the perk bits it looked at.
 // - at the doubling (0x100ed5e5c): with fastads on the rate becomes aae_movement_fastads_halved(rate, multiplier),
 //   so the game's own doubling makes it rate * multiplier. The two replaced instructions set no flags; nothing
 //   reads them before the compare at 0x100ed5ebe.
@@ -484,8 +483,6 @@ static bool fastads_news(_Atomic uint64_t *said, uint64_t now) {
     return debug && atomic_exchange_explicit(said, now, memory_order_relaxed) != now &&
            atomic_fetch_add_explicit(&fastads_lines, 1, memory_order_relaxed) < Fastads_Lines_Max;
 }
-// BO3MACFIX_MOVEFASTADSPERK=1: while fastads is on, the player counts as having the perk at the game's test for it
-static bool fastads_perk_forced;
 
 // the two places, for the lines that say when each is first reached on a thread (the server's and the client's)
 typedef enum { Fastads_Perk_Test, Fastads_Doubling, Fastads_Places } fastads_place;
@@ -514,17 +511,16 @@ typedef struct {
     uint64_t player_state;
     uint32_t perks[4], script_perks[4];
     int anim_type;
-    bool fast, up, forced, on;
+    bool fast, up, on;
 } perk_test_seen;
 static _Thread_local perk_test_seen perk_test_said = { .player_state = UINT64_MAX };
 
-static void print_perk_test(uint64_t player_state_address, uint64_t weapon, bool fast, bool up, bool forced,
-                            bool on) {
+static void print_perk_test(uint64_t player_state_address, uint64_t weapon, bool fast, bool up, bool on) {
     const uint8_t *player_state = (const uint8_t *)player_state_address;
     perk_test_seen now;
     memset(&now, 0, sizeof(now)); // the padding too: the two are compared byte for byte
     now.player_state = player_state_address;
-    now.fast = fast, now.up = up, now.forced = forced, now.on = on;
+    now.fast = fast, now.up = up, now.on = on;
     memcpy(now.perks, player_state + Ps_Perks, sizeof(now.perks));
     memcpy(now.script_perks, player_state + Ps_Script_Perks, sizeof(now.script_perks));
     now.anim_type = weapon != 0 ? *(const int *)(weapon + Weapon_Anim_Type) : -1;
@@ -535,13 +531,13 @@ static void print_perk_test(uint64_t player_state_address, uint64_t weapon, bool
         return;
     float sights;
     memcpy(&sights, player_state + Ps_Sights, sizeof(sights));
-    const char *outcome = (fast || forced) && on ? "fastads on: past the sniper rifle tests to the doubling"
-                          : fast                 ? "fastads off: the game's own sniper rifle tests and doubling"
-                                                 : "the game skips the speed-up";
-    printf("movement: fast ADS: the perk test says %s%s (thread %u, player state 0x%llx, sights going %s, at %g, "
+    const char *outcome = fast && on ? "fastads on: past the sniper rifle tests to the doubling"
+                          : fast       ? "fastads off: the game's own sniper rifle tests and doubling"
+                                       : "the game skips the speed-up";
+    printf("movement: fast ADS: the perk test says %s (thread %u, player state 0x%llx, sights going %s, at %g, "
            "weapon anim type %d, sniper rifles %d and %d): perks %08x %08x %08x %08x (specialty_fastads %u, "
            "specialty_fastreload %u), given by scripts %08x %08x %08x %08x; %s\n",
-           fast ? "yes" : "no", forced ? " (BO3MACFIX_MOVEFASTADSPERK: counted as yes)" : "",
+           fast ? "yes" : "no",
            (unsigned)pthread_mach_thread_np(pthread_self()), (unsigned long long)player_state_address,
            up ? "up" : "down", (double)sights, now.anim_type, sniper_anim_types[0], sniper_anim_types[1],
            now.perks[0], now.perks[1], now.perks[2], now.perks[3], now.perks[0] >> Perk_Fast_Ads & 1,
@@ -559,11 +555,11 @@ detour_choice(FastAds_PerkTest, Perk_Test_Setup) {
     uint64_t player_state = first & Pointer_Bits, weapon = second & Pointer_Bits;
     bool fast = first >> 56 != 0, up = second >> 63 != 0;
     fastads_reach(Fastads_Perk_Test, player_state);
-    bool on = aae_movement_patch_on(Move_FastAds), forced = !fast && on && fastads_perk_forced;
+    bool on = aae_movement_patch_on(Move_FastAds);
     if (debug)
-        print_perk_test(player_state, weapon, fast, up, forced, on);
+        print_perk_test(player_state, weapon, fast, up, on);
     // with fastads on and the perk: past the sniper rifle tests to the doubling, where the multiplier is put in
-    return on && (fast || forced);
+    return on && fast;
 }
 
 // the rate in xmm0, about to be doubled (rbx the player state, r12 the weapon's definition)
@@ -608,11 +604,9 @@ static void (*find_game)(uint64_t game_base_address) = game_functions;
 
 void aae_movement_init(uint64_t game_base_address, int setting) {
     const char *force = getenv("BO3MACFIX_MOVEFORCE"), *debug_env = getenv("BO3MACFIX_MOVEDEBUG");
-    const char *perk = getenv("BO3MACFIX_MOVEFASTADSPERK");
     debug = debug_env != NULL && atoi(debug_env) != 0;
     enabled = setting != 0;
     forced = enabled && force != NULL && atoi(force) != 0;
-    fastads_perk_forced = enabled && perk != NULL && atoi(perk) != 0;
     aae_plugin_init(game_base_address);
     find_game(game_base_address);
     // the commands whatever the setting says, at start-up like the stand-in's other commands
@@ -640,9 +634,6 @@ void aae_movement_init(uint64_t game_base_address, int setting) {
     install_detour_FastAds_PerkTest((void *)(game_base_address + ADDR_ADS_FastAdsPerkTest),
                                     (void *)(game_base_address + ADDR_ADS_FastAdsTestsPassed));
     install_detour_FastAds_Double((void *)(game_base_address + ADDR_ADS_FastAdsDouble));
-    if (fastads_perk_forced)
-        printf("movement: BO3MACFIX_MOVEFASTADSPERK=1: while fastads is on, the player counts as having the fast-ADS "
-               "perk at the game's test for it (for test runs: no console command gives a perk)\n");
     if (debug)
         printf("movement: fast ADS: the two detours are in (the perk test, the doubling)\n");
 }
