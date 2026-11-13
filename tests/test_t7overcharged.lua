@@ -87,8 +87,28 @@ check(Engine.Gone == nil and count("no Engine.Gone here") == 1 and Engine.Hidden
 -- with NewFromState too) for a root without a working timer
 local function root(name)
     local r = { name = name, timers = {} }
-    function r:addElement(element) table.insert(self.timers, element) end
+    function r:addElement(element)
+        element.parent = self
+        table.insert(self.timers, element)
+    end
     return r
+end
+-- an element as LUI's: a child knows its parent until it is closed
+local function element(fields)
+    function fields:getParent() return self.parent end
+    function fields:close()
+        local parent = self.parent
+        if parent ~= nil then
+            for i, child in ipairs(parent.timers) do
+                if child == self then
+                    table.remove(parent.timers, i)
+                    break
+                end
+            end
+        end
+        self.parent, self.closed = nil, true
+    end
+    return fields
 end
 local pending, enabled, called, clock, playing = {}, 0, {}, 0, false
 local function takeCustomKey() return table.remove(pending, 1) end
@@ -100,7 +120,7 @@ local function freshUI()
     Engine.IsCinematicPlaying = function() return playing end
     LUI = { roots = { UIRootFull = root("UIRootFull"), UIRoot0 = root("UIRoot0") },
             UITimer = { newElementTimer = function(ms, disposable, tick)
-                return { ms = ms, disposable = disposable, tick = tick }
+                return element({ ms = ms, disposable = disposable, tick = tick })
             end } }
     CoD.Menu = { NewFromState = function(name) table.insert(made, name) return { menu = name } end,
                  NewForUIEditor = function(name) table.insert(made, name) return { menu = name } end }
@@ -235,31 +255,39 @@ case("no root at the start", function()
     check(count("customkeymap: the keys are taken on UIRoot0, UIRootFull (menu HUD)") == 1, "and says so")
 end)
 
--- a timer taken away (something emptied its root): the next menu puts one back once it hasn't ticked for over 5 s;
--- one that ticks, or has been quiet for less, is left alone
+-- a timer that is no longer its root's child (closed, or the root emptied) is replaced by the next menu; one the game
+-- only doesn't tick (ui_enabled 0, the frontend's mode, a long stall) is kept, however long
 case("a timer taken away", function()
     freshUI()
     start()
     local zero = LUI.roots.UIRoot0
-    clock = clock + 4000
-    zero.timers = {}
+    local first = zero.timers[1]
+    clock = clock + 6000
     CoD.Menu.NewForUIEditor("A")
-    check(timers(zero) == 0, "quiet for 4 s: still counted")
-    LUI.roots.UIRootFull.timers[1].tick()
-    clock = clock + 2000
+    check(timers(zero) == 1 and zero.timers[1] == first and not first.closed,
+          "a root not ticked for 6 s, then a menu: still its one timer")
+    check(lineWith("(menu A)") == nil, "and nothing said")
+    first:close()
     CoD.Menu.NewForUIEditor("B")
-    check(timers(zero) == 1, "quiet for 6 s: a new timer")
-    check(timers(LUI.roots.UIRootFull) == 1, "one that ticked 2 s ago is left alone")
+    check(timers(zero) == 1 and zero.timers[1] ~= first, "a closed timer: a new one at the next menu")
     check(count("customkeymap: the keys are taken on UIRoot0 (menu B)") == 1, "and says which root")
     table.insert(pending, "loadingskip1")
     zero.timers[1].tick()
     check(called[1] == "loadingskip1", "the new one takes the keys")
-    LUI.roots.UIRootFull = root("UIRootFull")
+    local full = LUI.roots.UIRootFull
+    for _, child in ipairs(full.timers) do child.parent = nil end
+    full.timers = {}
     CoD.Menu.NewForUIEditor("C")
+    check(timers(full) == 1, "an emptied root: a new timer")
+    -- a root replaced by a new one of the same name: a timer on the new one, the old root's closed
+    local oldTimer = full.timers[1]
+    LUI.roots.UIRootFull = root("UIRootFull")
+    CoD.Menu.NewForUIEditor("D")
     check(timers(LUI.roots.UIRootFull) == 1, "a new root of the same name gets its own")
+    check(oldTimer.closed == true and timers(full) == 0, "the old root's timer is closed")
     -- a root that is gone isn't named by the loading screen
     LUI.roots.UIRoot1 = root("UIRoot1")
-    CoD.Menu.NewForUIEditor("D")
+    CoD.Menu.NewForUIEditor("E")
     check(timers(LUI.roots.UIRoot1) == 1, "another root, another timer")
     LUI.roots.UIRoot1 = nil
     CoD.Menu.NewFromState("Loading", 0)

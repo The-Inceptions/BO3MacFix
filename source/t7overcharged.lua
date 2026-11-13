@@ -206,11 +206,12 @@ local function setup()
     -- One timer on each of the UI's roots (as the game's HUD puts its safe area overlay there), started when
     -- T7Overcharged starts in this Lua state and again by every menu made after it (CoD.Menu.NewFromState makes the HUD
     -- and the loading screen, NewForUIEditor the others) for a root that has none: one made later, or one whose timer
-    -- was taken away. In a map's start the game's HUD makes AAE's loading screen right after itself, after
-    -- T7Overcharged has started; a loading screen made before T7Overcharged starts gets the timers at its start.
+    -- is no longer its child (closed, or the root emptied). In a map's start the game's HUD makes AAE's loading screen
+    -- right after itself, after T7Overcharged has started; a loading screen made before T7Overcharged starts gets the
+    -- timers at its start.
     if type(nativeTakeCustomKey) == "function" and CoD ~= nil and type(CoD.Menu) == "table" then
-        -- one record per Lua state, however often T7Overcharged starts in it: the root each timer was put on and when
-        -- it last ticked, and the loading screen that is up
+        -- one record per Lua state, however often T7Overcharged starts in it: each root's timer and the root it was put
+        -- on, and the loading screen that is up
         local keys = rawget(CoD.Menu, "BO3MacFixCustomKeys")
         if type(keys) ~= "table" then
             keys = { timers = {} }
@@ -222,8 +223,6 @@ local function setup()
             end
             return nil
         end
-        -- a timer that hasn't ticked for this long while its root is still there was taken away
-        local timerGone = 5000
         -- AAE's loading screen plays the map's loading movie, and its skip stops it: when it stopped, counted from the
         -- loading screen's menu, is logged (once a loading screen is up, until the movie stops or for 60 s)
         local function watchLoadingMovie(time)
@@ -241,10 +240,8 @@ local function setup()
                 keys.loading = nil
             end
         end
-        local function takeCustomKey(entry)
-            local time = now()
-            entry.ticked = time
-            watchLoadingMovie(time)
+        local function takeCustomKey()
+            watchLoadingMovie(now())
             local name = nativeTakeCustomKey()
             if name ~= nil then
                 EnableGlobals()
@@ -253,28 +250,44 @@ local function setup()
                 end
             end
         end
-        local function taking(entry, root, time)
+        -- whether a root's timer still takes the keys: put on that root and still a child of it. A root the game
+        -- doesn't tick for a while (ui_enabled 0, the frontend's mode, a long stall) keeps its timer. (An element
+        -- without getParent, in a game without it, counts as long as its root is the same.)
+        local function taking(entry, root)
             if entry == nil or entry.root ~= root then
                 return false
             end
-            return time == nil or entry.ticked == nil or time - entry.ticked <= timerGone
+            local timer = entry.timer
+            if timer == nil or type(timer.getParent) ~= "function" then
+                return true
+            end
+            return timer:getParent() ~= nil
+        end
+        -- a timer that is replaced but still in the UI (its root was replaced by a new one) is closed, so it stops
+        local function retire(entry)
+            local timer = entry ~= nil and entry.timer or nil
+            if timer ~= nil and type(timer.getParent) == "function" and timer:getParent() ~= nil and
+                type(timer.close) == "function" then
+                timer:close()
+            end
         end
         local function startTakers(why)
             if LUI == nil or type(LUI.roots) ~= "table" or LUI.UITimer == nil or LUI.UITimer.newElementTimer == nil then
                 return
             end
-            local time = now()
             local started = {}
             for rootName, root in pairs(LUI.roots) do
-                if not taking(keys.timers[rootName], root, time) then
-                    local entry = { root = root, ticked = time }
-                    keys.timers[rootName] = entry
-                    root:addElement(LUI.UITimer.newElementTimer(50, false, function()
-                        local ok, err = pcall(takeCustomKey, entry)
+                local entry = keys.timers[rootName]
+                if not taking(entry, root) then
+                    retire(entry)
+                    local timer = LUI.UITimer.newElementTimer(50, false, function()
+                        local ok, err = pcall(takeCustomKey)
                         if not ok then
                             log("customkeymap: " .. tostring(err))
                         end
-                    end))
+                    end)
+                    keys.timers[rootName] = { root = root, timer = timer }
+                    root:addElement(timer)
                     started[#started + 1] = tostring(rootName)
                 end
             end
@@ -287,7 +300,7 @@ local function setup()
             local time = now()
             local roots = {}
             for rootName, entry in pairs(keys.timers) do
-                if type(LUI.roots) == "table" and taking(entry, LUI.roots[rootName], time) then
+                if type(LUI.roots) == "table" and taking(entry, LUI.roots[rootName]) then
                     roots[#roots + 1] = tostring(rootName)
                 end
             end
