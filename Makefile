@@ -65,7 +65,7 @@ TEST_TARGETS += tests/test_t7o_guards
 # the pause for everybody in a co-op game: the plugin's packets and rules, machines playing together (aae_coop_pause.c)
 TEST_TARGETS += tests/test_aae_coop_pause
 # FrameStats' detail: the threads' line and the phases' line, and the process's own threads read by name
-TEST_TARGETS += tests/test_thread_stats
+TEST_TARGETS += tests/test_thread_stats tests/test_thread_stats_x86_64
 # T7Overcharged's aim status where the game draws its hold breath hint (aae_breath.c)
 TEST_TARGETS += tests/test_aae_breath
 # T7Overcharged's moves of the first person gun's bones: the texts, the rules and the hook (aae_viewmodel.c)
@@ -636,3 +636,7 @@ clean:
 tests/test_thread_stats: tests/test_thread_stats.c source/thread_stats.c source/thread_stats_game.c source/thread_stats.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_thread_stats.c source/thread_stats.c
+# the same as x86_64 code under Rosetta, as the library runs in the game: the threads' names, ids and times read there
+tests/test_thread_stats_x86_64: tests/test_thread_stats.c source/thread_stats.c source/thread_stats_game.c \
+		source/thread_stats.h
+	$(CLANG) -arch x86_64 -std=gnu11 -O1 -g -Wall -Wextra -Werror -o $@ tests/test_thread_stats.c source/thread_stats.c

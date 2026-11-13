@@ -80,3 +80,4 @@ tests/test_aae_move_fastjump_tsan
 tests/test_aae_move_jump
 tests/test_offline_mode
 tests/test_thread_stats
+tests/test_thread_stats_x86_64
