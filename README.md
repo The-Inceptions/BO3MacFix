@@ -136,7 +136,9 @@ console without cheats, and `cg_fovscale`, `ui_enabled` and the controller's sti
 
 AAE's UI colour option also picks a mouse cursor, one of the Windows animated cursors in its `T7Overcharged/cursors`
 folder, through T7Overcharged's `cursoroverride` command. The Mac keeps its own cursor: BO3MacFix adds the command only
-so that the console doesn't say "Unknown command" at every start.
+so that the console doesn't say "Unknown command" at every start. The same goes for `updateVidConfig`, which AAE's
+graphics options run for T7Overcharged's own ultrawide settings. `DB_FreeUnusedResources 0 1`, which AAE's lobby
+runs as a match starts from it, frees the game's unused loaded data, as on Windows.
 
 ## Credits
 

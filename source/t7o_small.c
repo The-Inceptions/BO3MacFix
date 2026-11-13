@@ -198,6 +198,26 @@ bool t7o_menuresponse_debounce_passes(t7o_debounce *debounce, int call_debounce_
     return true;
 }
 
+#pragma mark - DB_FreeUnusedResources's rules
+
+t7o_number t7o_free_unused_args(int argc, const char *const *argv, bool *first, bool *second) {
+    if (argc < 3 || argv == NULL) {
+        *first = false;
+        *second = true;
+        return T7o_Number_Ok;
+    }
+    int a = 0, b = 0;
+    t7o_number read = t7o_stoi(argv[1] != NULL ? argv[1] : "", &a);
+    if (read != T7o_Number_Ok)
+        return read;
+    read = t7o_stoi(argv[2] != NULL ? argv[2] : "", &b);
+    if (read != T7o_Number_Ok)
+        return read;
+    *first = a != 0;
+    *second = b != 0;
+    return T7o_Number_Ok;
+}
+
 #pragma mark - dvars
 
 // T7Overcharged's patches component (T7Overcharged.dll 0x1800f5a37): sv_maxRate and sv_network_fps lose all their
@@ -461,6 +481,44 @@ static void cursoroverride_f(void) {
         printf("T7Overcharged: cursoroverride %s: the Mac keeps its own mouse cursor\n", argv[1]);
 }
 
+// updateVidConfig: AAE's graphics options run it after a change. T7Overcharged's ultrawide component then reads its own
+// players\t7.json (vidConfig: allowUltrawide, aspectRatioUI) again for its ultrawide fix of the menus, at the game's
+// next video update. That fix isn't on the Mac (its display handling is Aspyr's and BO3MacFix's), so the command is
+// there so that the console doesn't say "Unknown command", and does nothing.
+static _Alignas(8) uint8_t updatevidconfig_command[0x30];
+static atomic_bool updatevidconfig_logged;
+
+static void updatevidconfig_f(void) {
+    if (!atomic_exchange_explicit(&updatevidconfig_logged, true, memory_order_relaxed))
+        printf("T7Overcharged: updateVidConfig: no ultrawide settings of T7Overcharged's on the Mac, nothing to do\n");
+}
+
+// DB_FreeUnusedResources 0 1: AAE's lobby runs it when a match starts from it (lobbyRoot.hideMenusForGameStart), and
+// T7Overcharged's command (its experimental component) calls the game's DB_FreeUnusedResources(first, second) with
+// it. The Mac's DB_FreeUnusedResources (text "unloaded inuse", the same three callers) takes only the second flag: it
+// branches on its one flag where the Windows one branches on its second, and the part the Windows one skips for a
+// true first flag (the game always passes false) is always done. So the Mac's gets the second flag.
+static void (*DB_FreeUnusedResources)(bool second);
+static _Alignas(8) uint8_t freeunused_command[0x30];
+static atomic_bool freeunused_first_logged;
+
+static void freeunused_f(void) {
+    int argc = 0;
+    const char *const *argv = t7o_command_args(&argc);
+    if (argv == NULL)
+        return;
+    bool first = false, second = true;
+    if (t7o_free_unused_args(argc, argv, &first, &second) != T7o_Number_Ok) {
+        printf("T7Overcharged: DB_FreeUnusedResources: \"%s %s\" aren't two numbers, nothing done\n", argv[1], argv[2]);
+        return;
+    }
+    if (first && !atomic_exchange_explicit(&freeunused_first_logged, true, memory_order_relaxed))
+        printf("T7Overcharged: DB_FreeUnusedResources: the Mac's has no first flag, it does what it does without\n");
+    if (debug)
+        printf("T7Overcharged: DB_FreeUnusedResources(%d, %d)\n", first, second);
+    DB_FreeUnusedResources(second);
+}
+
 // T7Overcharged's changes when it starts: on Windows its components start once, when the mod's Lua loads it
 static void *(*Dvar_FindByHash)(uint32_t hash);
 static void (*Dvar_SetFromStringByName)(const char *name, const char *value, bool create_if_missing);
@@ -528,6 +586,7 @@ void t7o_small_install(uint64_t base_address) {
     ui_vm = (lua_State *const *)(base_address + ADDR_UI_luaVM);
     CritSec_ScopedLock = (void *)(base_address + ADDR_CritSec_ScopedLock);
     CritSec_ScopedUnlock = (void *)(base_address + ADDR_CritSec_ScopedUnlock);
+    DB_FreeUnusedResources = (void *)(base_address + ADDR_DB_FreeUnusedResources);
     Dvar_FindByHash = (void *)(base_address + ADDR_Dvar_FindByHash);
     Dvar_SetFromStringByName = (void *)(base_address + ADDR_Dvar_SetFromStringByName);
     session_mode_state = (const uint32_t *)(base_address + ADDR_sSessionModeState);
@@ -537,5 +596,9 @@ void t7o_small_install(uint64_t base_address) {
         Cmd_AddCommandInternal("customkeymap", customkeymap_f, customkeymap_command);
     if (Cmd_FindCommand("cursoroverride") == NULL)
         Cmd_AddCommandInternal("cursoroverride", cursoroverride_f, cursoroverride_command);
+    if (Cmd_FindCommand("updateVidConfig") == NULL)
+        Cmd_AddCommandInternal("updateVidConfig", updatevidconfig_f, updatevidconfig_command);
+    if (Cmd_FindCommand("DB_FreeUnusedResources") == NULL)
+        Cmd_AddCommandInternal("DB_FreeUnusedResources", freeunused_f, freeunused_command);
     install_hook_Sys_QueEvent((void *)(base_address + ADDR_Sys_QueEvent));
 }

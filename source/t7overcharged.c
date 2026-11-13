@@ -599,6 +599,6 @@ void t7o_install_commands(void) {
         Cmd_AddCommandInternal("printsubtitle", printsubtitle_f, printsubtitle_command);
     if (Cmd_FindCommand("SendMenuResponse") == NULL)
         Cmd_AddCommandInternal("SendMenuResponse", sendmenuresponse_f, sendmenuresponse_command);
-    // and the smaller ones of t7o_small.c: customkeymap, cursoroverride
+    // and the smaller ones of t7o_small.c: customkeymap, cursoroverride, updateVidConfig, DB_FreeUnusedResources
     t7o_small_install(game_base_address);
 }

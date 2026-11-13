@@ -742,6 +742,58 @@ static void test_cursoroverride(void) {
     CHECK(cursoroverride_logged);
 }
 
+// DB_FreeUnusedResources: T7Overcharged's arguments, and the Mac's function with the second flag
+static int freed;
+static bool freed_with;
+static void game_free_unused(bool second) {
+    freed++;
+    freed_with = second;
+}
+
+static void test_free_unused(void) {
+    bool first = true, second = false;
+    const char *lobby[] = { "DB_FreeUnusedResources", "0", "1" }; // AAE's lobby
+    CHECK(t7o_free_unused_args(ARGC(lobby), lobby, &first, &second) == T7o_Number_Ok && !first && second);
+    const char *bare[] = { "DB_FreeUnusedResources" };
+    first = true, second = false;
+    CHECK(t7o_free_unused_args(ARGC(bare), bare, &first, &second) == T7o_Number_Ok && !first && second);
+    const char *one[] = { "DB_FreeUnusedResources", "1" }; // fewer than three words: the one number isn't read
+    first = true, second = false;
+    CHECK(t7o_free_unused_args(ARGC(one), one, &first, &second) == T7o_Number_Ok && !first && second);
+    const char *other[] = { "DB_FreeUnusedResources", "2", "0" };
+    CHECK(t7o_free_unused_args(ARGC(other), other, &first, &second) == T7o_Number_Ok && first && !second);
+    const char *negative[] = { "DB_FreeUnusedResources", "-1", "0x" };
+    CHECK(t7o_free_unused_args(ARGC(negative), negative, &first, &second) == T7o_Number_Ok && first && !second);
+    first = false, second = false;
+    const char *word[] = { "DB_FreeUnusedResources", "0", "yes" };
+    CHECK(t7o_free_unused_args(ARGC(word), word, &first, &second) == T7o_Number_Invalid && !first && !second);
+    const char *word1[] = { "DB_FreeUnusedResources", "x", "1" };
+    CHECK(t7o_free_unused_args(ARGC(word1), word1, &first, &second) == T7o_Number_Invalid && !second);
+    const char *huge[] = { "DB_FreeUnusedResources", "0", "9999999999" };
+    CHECK(t7o_free_unused_args(ARGC(huge), huge, &first, &second) == T7o_Number_Range);
+    CHECK(t7o_free_unused_args(3, NULL, &first, &second) == T7o_Number_Ok && !first && second);
+
+    DB_FreeUnusedResources = game_free_unused;
+    freed = 0;
+    run_command(freeunused_f, ARGC(lobby), lobby);
+    CHECK(freed == 1 && freed_with);
+    run_command(freeunused_f, ARGC(other), other);
+    CHECK(freed == 2 && !freed_with);
+    run_command(freeunused_f, ARGC(word), word);
+    run_command(freeunused_f, 0, NULL);
+    CHECK(freed == 2);
+    debug = true;
+    run_command(freeunused_f, ARGC(bare), bare);
+    debug = false;
+    CHECK(freed == 3 && freed_with);
+
+    // updateVidConfig: there, and nothing else
+    updatevidconfig_logged = false;
+    const char *vid[] = { "updateVidConfig" };
+    run_command(updatevidconfig_f, ARGC(vid), vid);
+    CHECK(updatevidconfig_logged && freed == 3);
+}
+
 int main(void) {
     test_stoi();
     test_keyset();
@@ -755,6 +807,7 @@ int main(void) {
     test_network_defaults();
     test_cursoroverride();
     test_dvar_patches();
+    test_free_unused();
     if (failures == 0)
         printf("test_t7o_small: all passed\n");
     return failures == 0 ? 0 : 1;

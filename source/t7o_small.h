@@ -1,7 +1,7 @@
 // T7Overcharged's smaller pieces that All-around Enhancement uses, done the way T7Overcharged does them (see
 // t7o_small.c): its customkeymap command, keys that call a function of the mod's Lua, the debounce of its
-// SendMenuResponse command, and the dvars it changes when it starts. The rules are plain functions here, so they can
-// be tested without the game; the game's side is at the end.
+// SendMenuResponse command, the dvars it changes when it starts, and its other commands the mod runs. The rules are
+// plain functions here, so they can be tested without the game; the game's side is at the end.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -115,9 +115,17 @@ int t7o_session_mode(uint32_t session_mode_state);
 // the game's function may stop the game with an error
 uint8_t *t7o_mode_dvar(uint8_t *dvar, int mode);
 
+// ---- DB_FreeUnusedResources [first second]
+
+// the game's DB_FreeUnusedResources(first, second) as T7Overcharged's command calls it: the two numbers read with
+// std::stoi, each true when it isn't 0; with fewer than three words (false, true). Not T7o_Number_Ok where
+// T7Overcharged throws (nothing is called then)
+t7o_number t7o_free_unused_args(int argc, const char *const *argv, bool *first, bool *second);
+
 // ---- the game's side
 
-// at start-up: the console commands (customkeymap, cursoroverride) and the hook on the game's input events
+// at start-up: the console commands (customkeymap, cursoroverride, updateVidConfig, DB_FreeUnusedResources) and the
+// hook on the game's input events
 void t7o_small_install(uint64_t base_address);
 // SendMenuResponse (t7overcharged.c): whether this call goes on, by T7Overcharged's debounce
 bool t7o_small_menuresponse_passes(int argc, const char *const *argv);
