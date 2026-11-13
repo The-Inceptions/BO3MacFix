@@ -152,6 +152,14 @@ static const hook_def_t hook_defs[] = {
     { ADDR_TRM_Init, Push_R15 },
     { ADDR_TRM_Scan, Push_R15 },
     { ADDR_TRM_Type, 9, 0, { 0x55, 0x48, 0x89, 0xE5, 0xF3, 0x0F, 0x5C, 0x4F, 0x38 } }, // ...; subss xmm1, [rdi+0x38]
+    // the pause for everybody in a co-op game (aae_coop_pause.c)
+    { ADDR_CanPauseGame_Test, 9, 0, { 0xB0, 0x01, 0x83, 0xB9, 0x90, 0x17, 0x00, 0x00, 0x00 } }, // mov al, 1; cmp dword [rcx+0x1790], 0 (a detour)
+    { ADDR_CL_Frame, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
+    { ADDR_Cmd_TokenizeString, Push_R14 },
+    { ADDR_NET_GetPacket, Push_R15 },
+    { ADDR_Netchan_SendLocalClient, Push_R15 },
+    { ADDR_SV_CheckPaused, Push_R14 },
+    { ADDR_SV_Frame, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
 };
 
 // a "mov r32, imm32" that a setting changes, with the flags dead after it (its stub tests the slot)

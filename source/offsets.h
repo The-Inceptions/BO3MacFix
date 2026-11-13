@@ -423,4 +423,26 @@
 // (Windows 0x1420e31b0, which T7Overcharged's local_client_bounds_fix hooks)
 #define ADDR_Com_LocalClient_GetControllerIndex 0xeae63e
 // -- end T7O crash guards
+// All-around Enhancement 4's pause for everybody in a co-op game (aae_coop_pause.c)
+#define ADDR_SV_CheckPaused 0x11d5ba4 // func - int (void): with cl_paused set and one client, sets sv_paused and gives 1; with more clients puts cl_paused and sv_paused back to 0; 0 not paused. Called by SV_Frame and the game's frame (Windows 0x1421f7080)
+#define ADDR_SV_Frame 0x11d64a6 // func - int (int msec): the server's frame, gives msec back; runs the server through 0x11d652d with the same msec unless SV_CheckPaused says paused (Windows 0x1421f76e0)
+#define ADDR_Com_Frame_SV_FrameReturn 0xe75a3e // where the game's frame's call of SV_Frame with the frame's msec returns to
+#define ADDR_Com_Frame_SV_FrameReturn2 0xe75a54 // and its call with -1 (one call on Windows; 0xe1c63a's call with 0 is another caller)
+#define ADDR_CL_Frame 0xe1a4c3 // func - void (int localClientNum, int msec, float frac in xmm0): the client's frame, called once a frame by the game's frame; hands msec to the add to the client's real time (0x110aa1d) (Windows 0x14135c910) - name is a guess
+#define ADDR_CanPauseGame_Test 0x136b736 // "mov al, 1 ; cmp dword [rcx + 0x1790], 0 ; jne <pop rbp; ret>" at the start of Engine.CanPauseGame's function (0x136b72b, bool (void); rcx = 0x1113b7880 there) (Windows 0x140843bd0)
+#define ADDR_Cmd_TokenizeString 0xf76456 // func - void (const char *text) (Windows 0x1420e2690)
+#define ADDR_CL_ServerCommand_TokenizeReturn 0xe2dfc7 // where CL_CGameNeedsServerCommand's call of it returns to (Windows: the call at 0x14131fd33)
+#define ADDR_NET_GetPacket 0xd6dacf // func - int (netadr_t *from, msg_t *msg): msg's data (+8) is moved past the header byte, its size (+0x1c) is the packet's, +0x34 the socket it came for (Windows 0x1422b9040)
+#define ADDR_Netchan_GetPacketReturn 0x14012ca // where the network thread's (0x1401052) call of it returns to (Windows: the call at 0x14211e083)
+#define ADDR_Netchan_SendLocalClient 0x13ff83e // func - bool (int localClientNum): the network thread's sending for a local client, its one call at 0x1401469 (Windows 0x14211e580) - name is a guess
+#define ADDR_NET_SendPacket 0xd6dc30 // func - bool (int sock, int length, const void *data, netadr_t to by value in rcx:r8); refuses a socket or a local net id above 4 (Windows 0x1422b9240)
+#define ADDR_dvar_cl_paused 0x118df830 // dvar_t * - cl_paused (hash 0x762396d1, an int)
+#define ADDR_dvar_sv_paused 0x118dfa78 // dvar_t * - sv_paused (hash 0x6d2b2caf, an int)
+#define ADDR_dvar_sv_maxclients 0x118df620 // dvar_t * - how many clients the server has room for (hash 0x6373a725, an int 1..18; the game's loops over its client table go that far) - name is a guess
+// the server's clients (ADDR_svs_clients): the netadr at +0x2c, the 8-byte id at +0x55c8, the bot flag at +0xbb460
+// (Windows +0xbb360)
+// local client 0's connection state is the int at ADDR_CLIENT_CONNECTIONS + 8 (0x1078 bytes a local client); its
+// connection data at *ADDR_CLIENT_GLOBALS (0x25780 bytes each): the server's netadr at +0x2455c, its 8-byte id at
+// +0x24b68
+// -- end coop pause
 // -- END OFFSETS

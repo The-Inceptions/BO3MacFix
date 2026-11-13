@@ -30,6 +30,7 @@
 #include "aae_linkcam.h"
 #include "aae_hostmig.h"
 #include "aae_prompt.h"
+#include "aae_coop_pause.h"
 #include "gsc_detours.h"
 #include "script_vars.h"
 #include "font_resolution.h"
@@ -1212,6 +1213,10 @@ __attribute__((constructor)) static void dylib_main() {
     // a host who leaves an online game with All-around Enhancement hands it to another player instead of ending it for
     // everyone, as its Windows plugin makes the game do (AAEHostMigration, on by default), see aae_hostmig.c
     aae_hostmig_init(game_base_address, read_int_setting_or_env("AAEHostMigration", 1));
+
+    // the pause for everybody in a co-op game and for players sharing a Mac, as All-around Enhancement 4's Windows
+    // plugin gives it (AAECoopPause, on by default), see aae_coop_pause.c
+    aae_coop_pause_init(game_base_address, read_int_setting_or_env("AAECoopPause", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);

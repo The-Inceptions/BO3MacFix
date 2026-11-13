@@ -40,6 +40,8 @@ TEST_TARGETS += tests/test_aae_linkcam
 TEST_TARGETS += tests/test_aae_freeaim_net
 # T7Overcharged's weapon attachment and local client guards (t7o_guards.c)
 TEST_TARGETS += tests/test_t7o_guards
+# the pause for everybody in a co-op game: the plugin's packets and rules, machines playing together (aae_coop_pause.c)
+TEST_TARGETS += tests/test_aae_coop_pause
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -110,6 +112,8 @@ SOURCES += source/aae_prompt.c
 SOURCES += source/aae_freeaim.c source/aae_freeaim_net.c
 # AAEGestures: the mod's left-hand gestures put at the camera, as its plugin does (aae_linkcam.c)
 SOURCES += source/aae_linkcam.c
+# AAECoopPause: the pause for everybody in a co-op game, as the mod's plugin does it (aae_coop_pause.c)
+SOURCES += source/aae_coop_pause.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # T7OCrashGuards: two of T7Overcharged's guards against crashes of the game itself (t7o_guards.c)
@@ -267,6 +271,14 @@ tests/test_aae_linkcam: tests/test_aae_linkcam.c tests/linkcam_cases.h tests/lin
 		source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_linkcam.c
+
+# aae_coop_pause.c: the plugin's packets and rules against made-up games, a host and three clients over a made-up
+# network that loses and reorders packets, and the hooks
+tests/test_aae_coop_pause: tests/test_aae_coop_pause.c source/aae_coop_pause.c source/aae_coop_pause.h \
+		source/aae_plugin.c source/aae_plugin.h source/detour.h source/gsc_obj.c source/gsc_obj.h source/offsets.h \
+		source/dobby.h source/prepatch.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_coop_pause.c source/gsc_obj.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h
