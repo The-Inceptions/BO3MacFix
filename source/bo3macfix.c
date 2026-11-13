@@ -29,6 +29,7 @@
 #include "aae_freeaim.h"
 #include "aae_linkcam.h"
 #include "aae_hostmig.h"
+#include "aae_movement.h"
 #include "aae_prompt.h"
 #include "aae_coop_pause.h"
 #include "clientfield_guard.h"
@@ -1223,6 +1224,10 @@ __attribute__((constructor)) static void dylib_main() {
     // a host who leaves an online game with All-around Enhancement hands it to another player instead of ending it for
     // everyone, as its Windows plugin makes the game do (AAEHostMigration, on by default), see aae_hostmig.c
     aae_hostmig_init(game_base_address, read_int_setting_or_env("AAEHostMigration", 1));
+
+    // T7Overcharged's movement changes, which All-around Enhancement switches on for every player (AAEMovement, on by
+    // default), see aae_movement.c; each piece of them installs its own hooks after the switches
+    aae_movement_init(game_base_address, read_int_setting_or_env("AAEMovement", 1));
 
     // the pause for everybody in a co-op game and for players sharing a Mac, as All-around Enhancement 4's Windows
     // plugin gives it (AAECoopPause, on by default), see aae_coop_pause.c

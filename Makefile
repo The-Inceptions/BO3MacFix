@@ -115,6 +115,8 @@ SOURCES += source/pmem_spill.c
 SOURCES += source/aae_mantle.c
 # AAEHostMigration: a host who leaves hands the game on instead of ending it, as the plugin makes it (aae_hostmig.c)
 SOURCES += source/aae_hostmig.c
+# AAEMovement: T7Overcharged's movement changes that the mod switches on; the switches (aae_movement.c)
+SOURCES += source/aae_movement.c
 # whether the mod with that plugin is the one loaded (aae_plugin.c)
 SOURCES += source/aae_plugin.c
 # AAEPrompts: the mod's prompts in the world, kept by distance as the plugin makes the game keep them (aae_prompt.c)
