@@ -638,6 +638,11 @@ static void test_hook(void) {
     text_asks_of_others = 0;
     frame();
     CHECK(tags == 6 && text_asks_of_others == 0);
+    // FrameStats' detail times this work (thread_stats.h): the same bones are set with it on
+    thread_stats_init();
+    frame();
+    CHECK(tags == 6 && text_asks_of_others == 0);
+    thread_stats_phases_on = false;
     remove_dvar("viewmodel_disabled");
 
     // not the main thread, the front end's level, no cg_t or no DObj, the mod without the plugin: only the game's

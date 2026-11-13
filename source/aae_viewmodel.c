@@ -48,6 +48,7 @@
 #include "gsc_obj.h"
 #include "offsets.h"
 #include "t7overcharged.h"
+#include "thread_stats.h"
 
 // T7Overcharged's numbers come from a C locale (its own CRT's), so these do
 #define C_Locale LC_C_LOCALE
@@ -700,7 +701,14 @@ static void after_dynamic_bones(void *cg, void *ps, DObj *obj, uint64_t weapon) 
 // DObj, the weapon, centity_t *)
 install_hook_name(CG_UpdateViewModelDynamicBones, void, void *cg, void *ps, DObj *obj, uint64_t weapon, void *cent) {
     orig_CG_UpdateViewModelDynamicBones(cg, ps, obj, weapon, cent);
+    // FrameStats' detail times this work (thread_stats.h); without it nothing else happens here
+    if (!thread_stats_phases_on) {
+        after_dynamic_bones(cg, ps, obj, weapon);
+        return;
+    }
+    phase_start_t start = thread_stats_phase_begin();
     after_dynamic_bones(cg, ps, obj, weapon);
+    thread_stats_phase_end(Phase_Library, start);
 }
 
 void aae_viewmodel_init(uint64_t game_base_address, int gun_position_on, int bullet_depletion_on) {

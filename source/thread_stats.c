@@ -103,7 +103,8 @@ int thread_stats_format(const thread_sample_t *before, int before_count, const t
 }
 
 int thread_stats_format_phases(const phase_sum_t sums[Phase_Count], int frames, char *out, size_t size) {
-    static const char *const names[Phase_Count] = { "server frame (SV_Frame)", "client frame (CL_Frame)" };
+    static const char *const names[Phase_Count] = { "server frame (SV_Frame)", "client frame (CL_Frame)",
+                                                    "library's view model work" };
     if (size > 0)
         out[0] = '\0';
     int used = 0;

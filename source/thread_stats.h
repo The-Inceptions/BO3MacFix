@@ -6,7 +6,10 @@
 //   mach_task_self(): nothing attaches to anything), once a window, on the render thread.
 // - "frame stats: phases": the time a frame spends in the server's frame (SV_Frame) and the client's frame (CL_Frame),
 //   wall clock and the thread's own CPU time, timed in the co-op pause's hooks on those two functions
-//   (aae_coop_pause.c), which only time anything while the detail is on.
+//   (aae_coop_pause.c), and in the library's own biggest work a frame on the main thread: the view model's (the gun
+//   position's and the bullets' bone lookups behind CG_UpdateViewModelDynamicBones, aae_viewmodel.c; the grenade
+//   line's and the widgets' behind the view model's DObjCalcSkel, aae_skeleton.c). Those hooks only time anything
+//   while the detail is on.
 // The formatting is plain C without the game or macOS (tests/test_thread_stats.c tests it as is).
 #pragma once
 #include <stdbool.h>
@@ -31,13 +34,14 @@ typedef struct {
 // the line's text after "frame stats: threads ": every thread's CPU time between two samples, biggest first, as % of a
 // core over seconds and ms a frame, the first `shown` by name and the rest summed. A thread missing from before
 // started in the window and counts with all its time; one missing from now ended in it and isn't counted (its time
-// is lost). roles_of gives each id's role bits. Returns what snprintf returns.
+// is lost). role_ids[i] is the thread seen in the role of bit i (0: none yet). Returns what snprintf returns.
 int thread_stats_format(const thread_sample_t *before, int before_count, const thread_sample_t *now, int now_count,
                         const uint64_t *role_ids, int role_count, double seconds, int frames, int shown, char *out,
                         size_t size);
 
-// the phases a frame is timed in
-enum { Phase_Server, Phase_Client, Phase_Count };
+// the phases a frame is timed in (the library's view model work runs inside the client's frame or after it: not
+// checked which)
+enum { Phase_Server, Phase_Client, Phase_Library, Phase_Count };
 
 // one phase's sums over a window: calls, wall clock and the calling thread's CPU time (ns)
 typedef struct {

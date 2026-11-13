@@ -53,7 +53,7 @@ void thread_stats_phase_end(int phase, phase_start_t start) {
     atomic_fetch_add_explicit(&phases[phase].wall_ns, wall - start.wall_ns, memory_order_relaxed);
     atomic_fetch_add_explicit(&phases[phase].cpu_ns, cpu - start.cpu_ns, memory_order_relaxed);
     // the first call of a window tells which thread runs the phase (cheap: a compare most of the time)
-    if (atomic_load_explicit(&phases[phase].calls, memory_order_relaxed) == 1)
+    if (phase != Phase_Library && atomic_load_explicit(&phases[phase].calls, memory_order_relaxed) == 1)
         thread_stats_note_role(phase == Phase_Server ? Thread_Role_Server : Thread_Role_Client);
 }
 

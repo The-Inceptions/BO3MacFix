@@ -421,9 +421,9 @@ tests/test_aae_coop_pause: tests/test_aae_coop_pause.c source/aae_coop_pause.c s
 # aae_viewmodel.c: T7Overcharged's reading of the dvars and the file, its rules, and the hook against a made-up game
 tests/test_aae_viewmodel: tests/test_aae_viewmodel.c source/aae_viewmodel.c source/aae_viewmodel.h \
 		source/aae_plugin.c source/aae_plugin.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h \
-		source/t7overcharged.h
+		source/t7overcharged.h source/thread_stats.h source/thread_stats.c source/thread_stats_game.c
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-		-o $@ tests/test_aae_viewmodel.c source/gsc_obj.c
+		-o $@ tests/test_aae_viewmodel.c source/gsc_obj.c source/thread_stats.c source/thread_stats_game.c
 
 # clientfield_guard.c: its rules, and its hook against a made-up lookup, script engine and mod
 tests/test_clientfield_guard: tests/test_clientfield_guard.c source/clientfield_guard.c source/clientfield_guard.h \
@@ -458,9 +458,9 @@ tests/test_aae_vmwidget_tsan: tests/test_aae_vmwidget_tsan.c source/aae_vmwidget
 # aae_skeleton.c: the one hook on DObjCalcSkel, the order of the pieces' work and the two calls, against a made-up
 # game; it finds out where the hook returns to through the frame pointers
 tests/test_aae_skeleton: tests/test_aae_skeleton.c source/aae_skeleton.c source/aae_skeleton.h source/offsets.h \
-		source/dobby.h
+		source/dobby.h source/thread_stats.h source/thread_stats.c source/thread_stats_game.c
 	$(CLANG) -std=gnu11 -O1 -g -fno-omit-frame-pointer -Wall -Wextra -Werror -fsanitize=address,undefined \
-		-fno-sanitize-recover=undefined -o $@ tests/test_aae_skeleton.c
+		-fno-sanitize-recover=undefined -o $@ tests/test_aae_skeleton.c source/thread_stats.c source/thread_stats_game.c
 
 # aae_lan.c: the plugin's packets and rules, and the host's listener talking to the test over the loopback
 tests/test_aae_lan: tests/test_aae_lan.c source/aae_lan.c source/aae_lan.h source/aae_plugin.c source/aae_plugin.h \

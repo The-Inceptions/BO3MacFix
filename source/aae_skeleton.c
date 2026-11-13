@@ -25,6 +25,7 @@
 #include "aae_skeleton.h"
 #include "dobby.h"
 #include "offsets.h"
+#include "thread_stats.h"
 
 static aae_skeleton_work_t works[AAE_SKELETON_PIECES];
 static const void *view_model_returns[2]; // where the two calls return to
@@ -43,9 +44,15 @@ static void after_skeleton(const uint8_t *object, const void *from) {
                    "widgets' is %s\n", call + 1, works[AAE_SKELETON_TAG] != NULL ? "done" : "not asked for",
                    works[AAE_SKELETON_WIDGETS] != NULL ? "done" : "not asked for");
     }
+    // FrameStats' detail times this work (thread_stats.h); without it nothing else happens here
+    phase_start_t start = { 0, 0 };
+    if (thread_stats_phases_on)
+        start = thread_stats_phase_begin();
     for (int piece = 0; piece < AAE_SKELETON_PIECES; piece++)
         if (works[piece] != NULL)
             works[piece](object, call);
+    if (thread_stats_phases_on)
+        thread_stats_phase_end(Phase_Library, start);
 }
 
 install_hook_name(DObjCalcSkel, uint64_t, const uint8_t *object, const uint32_t *parts, const float *origin) {

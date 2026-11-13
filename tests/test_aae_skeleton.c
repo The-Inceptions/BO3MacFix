@@ -235,6 +235,23 @@ static void test_return_address(void) {
     CHECK(tag_piece.calls == 1 && widgets_piece.calls == 1 && tag_piece.call == 1 && widgets_piece.call == 1);
 }
 
+// FrameStats' detail times the pieces' work (thread_stats.h): the same work, in the same order, with it on
+static void test_timed(void) {
+    fresh();
+    aae_skeleton_add(base, AAE_SKELETON_WIDGETS, widgets_work);
+    aae_skeleton_add(base, AAE_SKELETON_TAG, tag_work);
+    thread_stats_init();
+    CHECK(thread_stats_phases_on);
+    forget_calls();
+    game_calls_from(first_return());
+    CHECK(tag_piece.calls == 1 && widgets_piece.calls == 1 && tag_piece.order == 1 && widgets_piece.order == 2 &&
+          tag_piece.call == 0 && widgets_piece.call == 0);
+    forget_calls();
+    game_calls_from(second_return());
+    CHECK(tag_piece.order == 1 && widgets_piece.order == 2 && tag_piece.call == 1 && widgets_piece.call == 1);
+    thread_stats_phases_on = false;
+}
+
 int main(void) {
     test_addresses();
     test_neither();
@@ -242,6 +259,7 @@ int main(void) {
     test_both();
     test_hook();
     test_return_address();
+    test_timed();
     if (failures != 0) {
         printf("test_aae_skeleton: %d failed\n", failures);
         return 1;
