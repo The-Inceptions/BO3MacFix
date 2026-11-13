@@ -375,36 +375,91 @@ int main(void) {
             uint8_t *no_slots = calloc(1, slots_size);
             int32_t far_away = 0x100000;
             // 0: the function doesn't start with a jump; 1: the jump goes somewhere that isn't the stubs' room;
-            // 2: the stub doesn't start with the cmp; 3: nor go on with the je; 4: its slot isn't among the slots
-            uint32_t stub2 = hook_defs[2].function + 5 + rel32(image + hook_defs[2].function + 1);
-            uint32_t stub3 = hook_defs[3].function + 5 + rel32(image + hook_defs[3].function + 1);
-            uint32_t stub4 = hook_defs[4].function + 5 + rel32(image + hook_defs[4].function + 1);
+            // 2: the stub doesn't start with the cmp; 3: nor go on with the je; 4: its slot isn't among the slots;
+            // 6: its jump isn't one through a slot; 7: or goes through another slot than the cmp looks at;
+            // 8: the function's jump goes to just below the image (where nothing is: reading there would end this
+            // test), which a sum that wraps around takes for the room's end
+            const int damaged[] = { 0, 1, 2, 3, 4, 6, 7, 8 };
+            uint32_t stub_of[9];
+            for (int i = 0; i < 9; i++)
+                stub_of[i] = hook_defs[i].function + 5 + rel32(image + hook_defs[i].function + 1);
             image[hook_defs[0].function] = 0xE8;
             // (what the jump goes to there looks like a stub, with the first slot as its own)
             uint32_t elsewhere = hook_defs[1].function + 5 + (uint32_t)far_away;
             const uint8_t like_a_stub[16] = { 0x48, 0x83, 0x3D, 0, 0, 0, 0, 0x00, 0x74, 0x06, 0xFF, 0x25 };
             int32_t to_a_slot = (int32_t)(ADDR_Prepatch_Slots - (elsewhere + 8));
+            int32_t to_the_slot_again = (int32_t)(ADDR_Prepatch_Slots - (elsewhere + 16));
             memcpy(image + elsewhere, like_a_stub, sizeof(like_a_stub));
             memcpy(image + elsewhere + 3, &to_a_slot, sizeof(to_a_slot));
+            memcpy(image + elsewhere + 12, &to_the_slot_again, sizeof(to_the_slot_again));
             memcpy(image + hook_defs[1].function + 1, &far_away, sizeof(far_away));
-            image[stub2 + 2] = 0x3C;
-            image[stub3 + 9] = 0x07;
-            memcpy(image + stub4 + 3, &far_away, sizeof(far_away));
+            image[stub_of[2] + 2] = 0x3C;
+            image[stub_of[3] + 9] = 0x07;
+            int32_t far_away_too = far_away - 8; // (the same far place for the stub's jump)
+            memcpy(image + stub_of[4] + 3, &far_away, sizeof(far_away));
+            memcpy(image + stub_of[4] + 12, &far_away_too, sizeof(far_away_too));
+            image[stub_of[6] + 11] = 0x15;
+            int32_t next_slot = rel32(image + stub_of[7] + 12) + 8;
+            memcpy(image + stub_of[7] + 12, &next_slot, sizeof(next_slot));
+            int32_t below_the_image = (int32_t)(0xfffffff0u - (hook_defs[8].function + 5));
+            memcpy(image + hook_defs[8].function + 1, &below_the_image, sizeof(below_the_image));
             dobby_hooks = 0;
             int refused_before = refused;
-            for (int i = 0; i < 5; i++) {
+            for (size_t i = 0; i < sizeof(damaged) / sizeof(damaged[0]); i++) {
                 void *orig = (void *)&failures;
-                CHECK(BO3MacFix_Hook(image + hook_defs[i].function, (void *)fake_function, &orig) == -1 &&
-                          orig == (void *)&failures, "hook %i of a damaged copy isn't refused", i);
+                CHECK(BO3MacFix_Hook(image + hook_defs[damaged[i]].function, (void *)fake_function, &orig) == -1 &&
+                          orig == (void *)&failures, "hook %i of a damaged copy isn't refused", damaged[i]);
             }
-            CHECK(refused == refused_before + 5 && dobby_hooks == 0, "%i refused, %i hooked in memory",
+            CHECK(refused == refused_before + 8 && dobby_hooks == 0, "%i refused, %i hooked in memory",
                   refused - refused_before, dobby_hooks);
             CHECK(memcmp(image + ADDR_Prepatch_Slots, no_slots, slots_size) == 0, "a refused hook set a slot");
             void *orig = NULL;
             CHECK(BO3MacFix_Hook(image + hook_defs[5].function, (void *)fake_function, &orig) == 0 && orig != NULL,
                   "the hook after the damaged ones");
+            // a room's very last bytes are in it, the byte behind them isn't, and nothing wraps around
+            CHECK(in_stub_room(ADDR_Prepatch_CodeEnd - 16, 16) && !in_stub_room(ADDR_Prepatch_CodeEnd - 15, 16) &&
+                      in_stub_room(ADDR_Prepatch_Stubs2, 16) && in_stub_room(ADDR_Prepatch_Stubs2End - 16, 16) &&
+                      !in_stub_room(ADDR_Prepatch_Stubs2End - 15, 16) && !in_stub_room(ADDR_Prepatch_Stubs2 - 1, 16) &&
+                      !in_stub_room(ADDR_Prepatch_Header - 1, 16) && !in_stub_room(0xfffffff8u, 16) &&
+                      !in_stub_room(0xfffffff0u, 16), "the stubs' room");
             free(no_slots);
             munmap(image, ADDR_Prepatch_SlotsEnd);
+        }
+        // A copy of another format (its header says so; what it lists can't be read): the functions it hooked are
+        // still hooked through their stubs, because a stub says everything about itself, and nothing is written
+        // over the copy's jumps. What it doesn't hook is hooked in memory.
+        image = map_image(copy);
+        if (image != NULL) {
+            ((prepatch_header_t *)(image + ADDR_Prepatch_Header))->version = Prepatch_Version - 1;
+            CHECK(!prepatch_init((uint64_t)image) && !prepatch_active(), "a copy of another format counts as this one's");
+            dobby_hooks = 0;
+            uint32_t slot = ADDR_Prepatch_Slots;
+            for (size_t i = 0; i < sizeof(hook_defs) / sizeof(hook_defs[0]); i++, slot += 8) {
+                void *orig = NULL;
+                uint32_t stub = hook_defs[i].function + 5 + rel32(image + hook_defs[i].function + 1);
+                CHECK(BO3MacFix_Hook(image + hook_defs[i].function, (void *)fake_function, &orig) == 0 &&
+                          *(void **)(image + slot) == (void *)fake_function && orig == image + stub + 16,
+                      "hook %08x of a copy of another format", hook_defs[i].function);
+            }
+            CHECK(dobby_hooks == 0, "%i hooks of a copy of another format were made in memory", dobby_hooks);
+            void *orig = NULL;
+            CHECK(BO3MacFix_Hook(image + 0x3000, (void *)fake_function, &orig) == 0 && dobby_hooks == 1,
+                  "a hook such a copy doesn't have");
+            CHECK(!prepatch_has_hook(hook_defs[0].function), "a copy of another format has detours");
+            // something that isn't the game's is hooked in memory as ever, also when it is as far behind the image's
+            // start as a function the copy hooked
+            CHECK(BO3MacFix_Hook((void *)fake_function, (void *)fake_function, &orig) == 0 && dobby_hooks == 2,
+                  "a hook outside the game");
+            CHECK(BO3MacFix_Hook(image + 0x100000000ull + hook_defs[1].function, (void *)fake_function, &orig) == 0 &&
+                      dobby_hooks == 3, "a hook 4 GB behind a hooked function");
+            munmap(image, ADDR_Prepatch_SlotsEnd);
+            // and the next copy that is this format's is read as such again
+            image = map_image(copy);
+            if (image != NULL) {
+                dobby_hooks = 0;
+                CHECK(prepatch_init((uint64_t)image) && prepatch_active() && !other_format, "after a copy of another format");
+                munmap(image, ADDR_Prepatch_SlotsEnd);
+            }
         }
     }
 

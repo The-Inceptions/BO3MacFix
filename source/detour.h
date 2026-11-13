@@ -9,6 +9,12 @@
 // instructions the stub's jump replaced and from there back into the game, or to another place in the game.
 // Three kinds: detour_with_registers for anywhere, detour_before_test and detour_choice for places around a call.
 //
+// One thing a place has to allow: the flags are lost there. The stub begins with a compare of its slot, set or not,
+// so the instructions the jump replaced, a handler and the game behind them all get the stub's flags, not the ones
+// the game had. A place is only good where nothing behind it reads flags that were set before it: where the
+// replaced instructions set them anew (a "cmp", a "test"), or the code that follows sets them before it reads them.
+// Right behind a compare whose jump comes later is no such place.
+//
 // Only x86_64 has the thunks. On anything else (the unit tests are built for the Mac's own CPU) the macros leave the
 // C functions, which the tests call themselves.
 //
@@ -18,7 +24,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// what the game's registers held at the detoured place. The handler may change them.
+// what the game's registers held at the detoured place. The handler may change them. (rflags is what the stub's
+// compare left, see above: nothing to go by.)
 typedef struct {
     uint8_t xmm[16][16];
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8, rdi, rsi, rbp, rbx, rdx, rcx, rax, rflags;

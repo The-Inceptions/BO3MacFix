@@ -13,6 +13,10 @@
 // rest for its stub), so the stubs that don't fit there go into __TEXT's other padding: the 2 KB between the Mach-O
 // header's load commands and the first section, which is mapped and executable like the rest of the segment.
 // Both together are all the room there is: about 120 hooks.
+//
+// The flags don't come through a stub: its compare runs first, set or not. At a function's start nobody minds. A
+// place in the middle of a function (a detour, see detour.h, or a setting's "mov") may only be one where nothing
+// behind it reads flags that were set before it.
 // With every slot left at 0 the copy runs exactly like the original.
 #include <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
@@ -203,7 +207,7 @@ typedef struct {
 } prepatch_header_t;
 
 // A hooked function: where it is and the bytes the jump to its stub replaced. Where the stub is isn't kept: the jump
-// says, and the stub begins with "cmp qword [rip + slot], 0" and has its trampoline 16 bytes in (hook_stub below).
+// says, and the stub begins with "cmp qword [rip + slot], 0" and has its trampoline 16 bytes in (stub_at below).
 typedef struct {
     uint32_t function;
     uint8_t length;
@@ -248,6 +252,7 @@ static uint32_t table_id(void) {
 
 static uint64_t base = 0;
 static uint64_t text_end = 0, image_end = 0;
+static bool other_format = false; // the game runs from a copy, but one of another format than this BO3MacFix makes
 static const prepatch_header_t *header = NULL;
 static const prepatch_hook_t *hooks = NULL;
 static const prepatch_site_t *values = NULL, *calls = NULL;
@@ -277,12 +282,16 @@ static void find_image_bounds(uint64_t base_address) {
 
 bool prepatch_init(uint64_t base_address) {
     base = base_address;
+    header = NULL;
+    other_format = false;
     find_image_bounds(base_address);
     const prepatch_header_t *h = (const prepatch_header_t *)(base + ADDR_Prepatch_Header);
     if (memcmp(h->magic, Prepatch_Magic, sizeof(h->magic)) != 0)
         return false;
     if (h->version != Prepatch_Version) {
-        printf("BO3MacFix: the pre-patched executable has format %u, this BO3MacFix needs %u\n", h->version, Prepatch_Version);
+        printf("BO3MacFix: the pre-patched executable has format %u, this BO3MacFix needs %u: start the game through "
+               "Steam to remake it\n", h->version, Prepatch_Version);
+        other_format = true;
         return false;
     }
     header = h;
@@ -371,50 +380,72 @@ static bool in_game_image(const void *address) {
     return (uint64_t)address >= base && (uint64_t)address < image_end;
 }
 
+// whether these bytes lie in one of the two pieces of room the stubs are in (offsets can be anything a damaged copy
+// makes them, so nothing here may wrap around)
 static bool in_stub_room(uint32_t offset, uint32_t length) {
-    return (offset >= ADDR_Prepatch_Header && offset + length <= ADDR_Prepatch_CodeEnd) ||
-           (offset >= ADDR_Prepatch_Stubs2 && offset + length <= ADDR_Prepatch_Stubs2End);
+    return (offset >= ADDR_Prepatch_Header && offset <= ADDR_Prepatch_CodeEnd &&
+            length <= ADDR_Prepatch_CodeEnd - offset) ||
+           (offset >= ADDR_Prepatch_Stubs2 && offset <= ADDR_Prepatch_Stubs2End &&
+            length <= ADDR_Prepatch_Stubs2End - offset);
 }
 
 // The slot and the trampoline of a hooked function's stub (offsets from the base), read from the copy's own code:
-// the function begins with a jump to the stub, the stub with "cmp qword [rip + slot], 0 ; je ; jmp [rip + slot]", and
-// the trampoline follows those 16 bytes. False when the copy doesn't have that there.
-static bool hook_stub(const prepatch_hook_t *hook, uint32_t *slot, uint32_t *trampoline) {
-    const uint8_t *entry = (const uint8_t *)(base + hook->function);
-    int32_t relative;
+// the function begins with a jump to the stub, the stub with "cmp qword [rip + slot], 0 ; je ; jmp [rip + slot]"
+// (both for the same slot), and the trampoline follows those 16 bytes. False when the copy doesn't have that there.
+static bool stub_at(uint32_t function, uint32_t *slot, uint32_t *trampoline) {
+    const uint8_t *entry = (const uint8_t *)(base + function);
+    int32_t relative, relative_of_jump;
     if (entry[0] != 0xE9)
         return false;
     memcpy(&relative, entry + 1, sizeof(relative));
-    uint32_t stub = hook->function + 5 + (uint32_t)relative;
+    uint32_t stub = function + 5 + (uint32_t)relative;
     if (!in_stub_room(stub, 16))
         return false;
     const uint8_t *code = (const uint8_t *)(base + stub);
-    if (code[0] != 0x48 || code[1] != 0x83 || code[2] != 0x3D || code[7] != 0x00 || code[8] != 0x74 || code[9] != 0x06)
+    if (code[0] != 0x48 || code[1] != 0x83 || code[2] != 0x3D || code[7] != 0x00 || code[8] != 0x74 ||
+        code[9] != 0x06 || code[10] != 0xFF || code[11] != 0x25)
         return false;
     memcpy(&relative, code + 3, sizeof(relative));
+    memcpy(&relative_of_jump, code + 12, sizeof(relative_of_jump));
     *slot = stub + 8 + (uint32_t)relative;
     *trampoline = stub + 16;
-    return *slot >= ADDR_Prepatch_Slots && *slot + 8 <= ADDR_Prepatch_SlotsEnd;
+    return stub + 16 + (uint32_t)relative_of_jump == *slot && *slot >= ADDR_Prepatch_Slots &&
+           *slot <= ADDR_Prepatch_SlotsEnd - 8;
+}
+
+// stores a hook in its stub's slot. The original first: a hook installed while the game runs can be called as soon as
+// its slot is set. The stub reads the slot twice (cmp, then jmp), so a slot must never go back to 0 once it's set.
+static void set_slot(uint32_t slot, uint32_t trampoline, void *fake_func, void **out_origin_func) {
+    *out_origin_func = (void *)(base + trampoline);
+    __atomic_store_n((void **)(base + slot), fake_func, __ATOMIC_RELEASE);
+    hooks_set++;
 }
 
 // replaces DobbyHook (see dobby.h): in the pre-patched copy, hooking a function only stores its slot
 int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
+    uint32_t slot, trampoline;
+    if (other_format && in_game_image(address)) {
+        // A copy of another format: its header can't be read, but a function it hooked still begins with a jump to
+        // a stub, and a stub says everything about itself. Hooking such a function in memory instead would put a
+        // jump over the copy's own, and where that is longer than what the copy replaced, the stub's way back would
+        // land inside it.
+        if (stub_at((uint32_t)((uint64_t)address - base), &slot, &trampoline)) {
+            set_slot(slot, trampoline, fake_func, out_origin_func);
+            return 0;
+        }
+        return DobbyHook(address, fake_func, out_origin_func);
+    }
     if (!prepatch_active() || !in_game_image(address))
         return DobbyHook(address, fake_func, out_origin_func);
     uint32_t offset = (uint32_t)((uint64_t)address - base);
     for (uint32_t i = 0; i < header->hook_count; i++) {
         if (hooks[i].function == offset) {
-            uint32_t slot, trampoline;
-            if (!hook_stub(&hooks[i], &slot, &trampoline)) {
+            if (!stub_at(offset, &slot, &trampoline)) {
                 refused++;
                 printf("BO3MacFix: can't hook %08x, the pre-patched executable's stub for it isn't as expected\n", offset);
                 return -1;
             }
-            // the original first: a hook installed while the game runs can be called as soon as its slot is set.
-            // The stub reads the slot twice (cmp, then jmp), so a slot must never go back to 0 once it's set.
-            *out_origin_func = (void *)(base + trampoline);
-            __atomic_store_n((void **)(base + slot), fake_func, __ATOMIC_RELEASE);
-            hooks_set++;
+            set_slot(slot, trampoline, fake_func, out_origin_func);
             return 0;
         }
     }
@@ -891,7 +922,7 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
             goto done;
         }
         if (f + 16 > ADDR_Prepatch_Header || f < ADDR_Prepatch_Stubs2End || memcmp(b->data + f, def->stolen, def->length) != 0 ||
-            def->length < 5 || def->length > sizeof(hook_records[i].original)) {
+            def->length < 5 || def->length > sizeof(def->stolen) || def->length > sizeof(hook_records[i].original)) {
             fail(message, message_size, "unexpected code at %08x", f);
             goto done;
         }

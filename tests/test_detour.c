@@ -1,8 +1,9 @@
 // detour.h's thunks, against two made-up game functions written in assembly. Built for x86_64 only (the thunks are
 // x86_64 code), so this one runs under Rosetta on an Apple CPU.
 //
-// What stands in for the pre-patched executable: each made-up function has, at its detoured place, the jump through
-// a slot that a stub would do, and a label with the instructions that jump replaced followed by the jump back.
+// What stands in for the pre-patched executable: each made-up function has, at its detoured place, what a stub
+// does (the compare of its slot, the jump through it when it is set), and a label with the instructions the jump
+// to the stub replaced, followed by the jump back.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,9 +66,9 @@ __asm__(".globl _game_registers, _site_registers, _moved_registers\n"
         "  mov $0xa1, %rax\n mov $0xc1, %rcx\n mov $0xd1, %rdx\n mov $0xb1, %rbx\n mov $0x51, %rsi\n mov $0xd2, %rdi\n"
         "  mov $0x08, %r8\n mov $0x09, %r9\n mov $0x10, %r10\n mov $0x11, %r11\n mov $0x12, %r12\n mov $0x13, %r13\n"
         "  mov $0x14, %r14\n mov $0x15, %r15\n"
-        "  stc\n"                          // a flag that has to come through
+        "  stc\n"                          // a flag the game set: the stub's compare takes it away
         "_site_registers:\n"
-        "  jmp *_slot_registers(%rip)\n"
+        "  cmpq $0, _slot_registers(%rip)\n je _moved_registers\n jmp *_slot_registers(%rip)\n"
         "back_registers:\n"
         "  mov %rax, _seen+0(%rip)\n mov %rcx, _seen+8(%rip)\n mov %rdx, _seen+16(%rip)\n mov %rbx, _seen+24(%rip)\n"
         "  mov %rsi, _seen+32(%rip)\n mov %rdi, _seen+40(%rip)\n mov %r8, _seen+48(%rip)\n mov %r9, _seen+56(%rip)\n"
@@ -110,7 +111,7 @@ detour_with_registers(Registers) {
         registers->rbx = 0xbbbb;
         memset(registers->xmm[7], 0x77, 16);
         memset(registers->xmm[13], 0x13, 16);
-        registers->rflags &= ~(uint64_t)1; // the carry flag
+        registers->rflags |= 1; // the carry flag
     }
 }
 
@@ -118,6 +119,15 @@ static void test_registers(void) {
     for (int i = 0; i < 16; i++)
         for (int k = 0; k < 16; k++)
             xmm_values[i][k] = (uint8_t)(0x10 * i + k + 1);
+    // no detour installed: the function goes on as it always did (its moved instruction runs once), but for the
+    // flags: the stub's compare has replaced the carry the function had set
+    memset(&seen, 0, sizeof(seen));
+    handled.calls = 0;
+    game_registers(0);
+    CHECK(handled.calls == 0 && seen.rax == 0xa1 && seen.r11 == 0x111 && seen.r15 == 0x15 &&
+          seen.below_stack == 0x1122334455667788 && seen.rsp_after == seen.rsp_before &&
+          memcmp(seen.xmm, xmm_values, sizeof(xmm_values)) == 0);
+    CHECK((seen.rflags & 1) == 0);
     install_detour_Registers(site_registers);
     CHECK(slot_registers != NULL && orig_Registers == (void *)moved_registers);
     for (int crooked = 0; crooked <= 1; crooked++) {
@@ -131,7 +141,8 @@ static void test_registers(void) {
             CHECK(r->rax == 0xa1 && r->rcx == 0xc1 && r->rdx == 0xd1 && r->rbx == 0xb1 && r->rsi == 0x51 &&
                   r->rdi == 0xd2 && r->r8 == 0x08 && r->r9 == 0x09 && r->r10 == 0x10 && r->r11 == 0x11 &&
                   r->r12 == 0x12 && r->r13 == 0x13 && r->r14 == 0x14 && r->r15 == 0x15);
-            CHECK(r->rbp == seen.rbp && (r->rflags & 1) == 1);
+            // (not its flags: the carry it had set is gone before the handler is called)
+            CHECK(r->rbp == seen.rbp && (r->rflags & 1) == 0);
             CHECK(memcmp(r->xmm, xmm_values, sizeof(xmm_values)) == 0);
             CHECK(handled.stack == seen.rsp_before && seen.rsp_after == seen.rsp_before);
             CHECK((seen.rsp_before % 16 != 0) == (crooked != 0));
@@ -151,7 +162,8 @@ static void test_registers(void) {
             CHECK(memcmp(seen.xmm, expected, sizeof(expected)) == 0);
             CHECK(seen.rax == (change ? 0x7777 : 0xa1) && seen.r9 == (change ? 0x9999 : 0x09) &&
                   seen.r14 == (change ? 0x1414 : 0x14) && seen.rbx == (change ? 0xbbbb : 0xb1));
-            CHECK((seen.rflags & 1) == (change ? 0 : 1));
+            // the flags go on as the handler left them
+            CHECK((seen.rflags & 1) == (change ? 1 : 0));
         }
     }
 }
@@ -177,7 +189,7 @@ __asm__(".globl _game_test_user, _site_test, _moved_test, _yes_of_test\n"
         "  push %rbp\n mov %rsp, %rbp\n push %rbx\n sub $8, %rsp\n"
         "  mov $7, %ebx\n"
         "_site_test:\n"
-        "  jmp *_slot_test(%rip)\n"
+        "  cmpq $0, _slot_test(%rip)\n je _moved_test\n jmp *_slot_test(%rip)\n"
         "back_test:\n"
         "  call _game_test\n"
         "  test %al, %al\n"
@@ -206,6 +218,11 @@ detour_before_test(Test) {
 }
 
 static void test_before_test(void) {
+    // no detour installed: the game's test decides
+    the_test.calls = 0, the_test.answer = false;
+    CHECK(game_test_user() == 207 && the_test.calls == 1 && the_test.argument == 2 && the_test.frame % 16 == 0);
+    the_test.answer = true;
+    CHECK(game_test_user() == 107 && the_test.calls == 2);
     install_detour_Test(site_test, yes_of_test);
     CHECK(slot_test != NULL && orig_Test == (void *)moved_test && yes_Test == (void *)yes_of_test);
     // the handler says yes: the game's test isn't asked, and the game goes on where a yes takes it
@@ -237,7 +254,7 @@ __asm__(".globl _game_choice_user, _site_choice, _moved_choice, _other_of_choice
         "  movabs $0x1313131313131313, %r13\n"
         "  call _game_before_choice\n"
         "_site_choice:\n"
-        "  jmp *_slot_choice(%rip)\n"
+        "  cmpq $0, _slot_choice(%rip)\n je _moved_choice\n jmp *_slot_choice(%rip)\n"
         "back_choice:\n"                   // behind the moved "cmp ; jne"
         "  lea 400(%r13d), %eax\n"
         "  jmp 3f\n"
@@ -269,6 +286,10 @@ detour_choice(Choice, "mov %r13, %rdi\n mov %rbp, %rsi\n") {
 }
 
 static void test_choice(void) {
+    // no detour installed: the game's own test decides (its compare is among the moved instructions, so the stub's
+    // flags don't matter to it)
+    called_before = 0;
+    CHECK(game_choice_user(0) == 400 + 0x13131313 && game_choice_user(1) == 300 + 0x13131313 && called_before == 2);
     install_detour_Choice(site_choice, other_of_choice);
     CHECK(slot_choice != NULL && orig_Choice == (void *)moved_choice && other_Choice == (void *)other_of_choice);
     const int kept = 0x13131313;
