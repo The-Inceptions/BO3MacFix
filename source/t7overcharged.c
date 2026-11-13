@@ -19,6 +19,7 @@
 #include "t7o_subtitle.h"
 #include "weapon_anim.h"
 #include "utilities.h"
+#include "aae_movement.h"
 
 // defined in bo3macfix.c
 extern uint64_t game_base_address;
@@ -182,6 +183,8 @@ static int t7o_init(lua_State *s) {
         hks_push_boolean(s, log_missing != NULL && atoi(log_missing) != 0);
         hks_pcall(s, 8, 0);
     }
+    // T7Overcharged's movement component starts with it: its dvars, and the switches from now on (aae_movement.c)
+    aae_movement_t7o_started();
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;
 }

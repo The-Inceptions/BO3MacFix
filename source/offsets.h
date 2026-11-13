@@ -285,6 +285,12 @@
 #define ADDR_Dvar_GetString 0xfa0474 // func
 #define ADDR_Dvar_SetFromString 0xfa2ef7 // func - (dvar, value, source), sources 1 and 2 only set a latched dvar's latched value
 #define ADDR_Dvar_SetInt 0xfa2d59 // func - (dvar, value)
+// the game's dvar registration, which T7Overcharged's movement component registers its dvars with (aae_movement.c):
+// each gives the dvar back; an existing one that was set before as text ("External Dvar", flag 0x400) gets the type,
+// its text turned into a value and put inside the domain (0xfa4dc5, 0xfa30ff, 0xfa00b5)
+#define ADDR_Dvar_RegisterBool 0xfa1328 // func - dvar_t *(uint32_t hash, const char *name, bool value, uint32_t flags, const char *description) (Windows 0x142273de0)
+#define ADDR_Dvar_RegisterInt 0xfa149e // func - dvar_t *(uint32_t hash, const char *name, int value, int min, int max, uint32_t flags, const char *description) (Windows 0x142273fc0)
+#define ADDR_Dvar_RegisterFloat 0xfa1614 // func - dvar_t *(uint32_t hash, const char *name, float value, float min, float max, uint32_t flags, const char *description) (Windows 0x142273f40)
 #define ADDR_CritSec_ScopedLock 0xd14710 // func - (lock *, critical section, 0), r_mode's critical section is 0x33 - name is a guess
 #define ADDR_CritSec_ScopedUnlock 0xd7da30 // func - (lock *) - name is a guess
 #define ADDR_ASL_Window_UpdateLetterbox 0xee14c // func - void (Window *), Window_SetMode calls it last, with ASL's window mutex held

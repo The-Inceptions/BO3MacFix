@@ -26,6 +26,8 @@ TEST_TARGETS += tests/test_pmem_spill
 TEST_TARGETS += tests/test_aae_mantle
 # the plugin's rules for a host who leaves, and the handlers of its detour and hooks (aae_hostmig.c)
 TEST_TARGETS += tests/test_aae_hostmig
+# T7Overcharged's movement switches: its commands, its start and its dvars (aae_movement.c)
+TEST_TARGETS += tests/test_aae_movement
 # startweaponanim's weapAnim value (weapon_anim.h)
 TEST_TARGETS += tests/test_weapon_anim
 # the thunks for detours inside the game's functions (detour.h); x86_64 code, so this test is built for x86_64
@@ -260,6 +262,12 @@ tests/test_aae_hostmig: tests/test_aae_hostmig.c source/aae_hostmig.c source/aae
 		source/aae_plugin.h source/detour.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_hostmig.c
+
+# aae_movement.c: T7Overcharged's movement switches against a made-up game (the test includes the source)
+tests/test_aae_movement: tests/test_aae_movement.c source/aae_movement.c source/aae_movement.h source/aae_plugin.h \
+		source/gsc_obj.c source/gsc_obj.h source/offsets.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_movement.c source/gsc_obj.c
 
 # aae_prompt.c and aae_plugin.c: the handlers against a made-up prompt element and made-up models
 tests/test_aae_prompt: tests/test_aae_prompt.c tests/prompt_glide_frames.h source/aae_prompt.c source/aae_prompt.h \

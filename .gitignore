@@ -35,6 +35,7 @@ tests/test_checkpoint
 tests/test_checkpoint_autosave
 tests/test_checkpoint_autosave_tsan
 tests/test_aae_cheats
+tests/test_aae_movement
 tests/test_script_errors
 tests/test_quick_save
 tests/test_dynres
