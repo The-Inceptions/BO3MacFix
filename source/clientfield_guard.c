@@ -50,7 +50,8 @@
 #define Message_Size 0x200
 
 static const clientfield_site_t sites[] = {
-    // the server's builtins (their table is built at 0x1299bbd), each matched to its Windows function by a text both use
+    // the server's builtins (their table is built at 0x1299bbd), each matched to its Windows function by a text both
+    // use
     { ADDR_GScr_CodeGetClientField_Read, Clientfield_Script_Error, 0, "GetClientField",
       "ScriptError_GscClientFieldFault1" },
     { ADDR_GScr_CodeGetPlayerStateClientField_Read, Clientfield_Script_Error, 0, "GetPlayerStateClientField",
@@ -100,6 +101,7 @@ static uint8_t standin_field[Field_Size] = { [Field_Bits] = 1 };
 static os_unfair_lock seen_lock = OS_UNFAIR_LOCK_INIT;
 static uint64_t seen[Seen_Size];
 static uint32_t seen_times[Seen_Size];
+static bool seen_full; // the line that says so has been printed
 
 const clientfield_site_t *clientfield_guard_site(uint64_t return_offset) {
     for (size_t i = 0; i < Site_Count; i++)
@@ -167,17 +169,32 @@ void clientfield_guard_set_fields(const uint8_t *set, const char *(*name_of)(uin
         memcpy(out + size - 4, "...", 4);
 }
 
-static uint64_t key_of(const clientfield_site_t *site, int set, uint32_t name) {
-    return ((uint64_t)(site - sites) << 40) ^ ((uint64_t)(uint32_t)set << 32) ^ name;
+uint64_t clientfield_guard_key(size_t place, int set, const char *field) {
+    // FNV-1a, as QuietScriptErrors keys its messages
+    uint64_t hash = (0xcbf29ce484222325ULL ^ (uint64_t)place) * 0x100000001b3ULL;
+    hash = (hash ^ (uint32_t)set) * 0x100000001b3ULL;
+    for (; *field != '\0'; field++)
+        hash = (hash ^ (uint8_t)*field) * 0x100000001b3ULL;
+    return hash;
 }
 
 // a line in log.txt the first time each place meets each missing field (with BO3MACFIX_CLIENTFIELDDEBUG=1 also up to
-// the 10th time and then each power of two, with T7O's name for the place)
-static void log_guarded(const clientfield_site_t *site, int set, uint32_t name, const char *field) {
+// the 10th time and then each power of two, with T7O's name for the place). A field is told by its text, key as
+// clientfield_guard_key makes it, not by its script string id: a script that builds the name anew gets a new id for
+// the same text whenever the old string has gone (DEIMOS 935's HUD appends ".time" to a power-up's name each time it
+// asks: sixteen different ids for one name in two minutes). Once Seen_Size different ones have been named, one line
+// says so and no other gets a line: a table that let the oldest go would name the same fields again and again whenever
+// a script asks for more of them in turn than it holds.
+static void log_guarded(const clientfield_site_t *site, int set, const char *field, uint64_t key) {
     uint32_t times;
     os_unfair_lock_lock(&seen_lock);
-    bool first = clientfield_guard_first_time(seen, seen_times, Seen_Size, key_of(site, set, name), &times);
+    bool first = clientfield_guard_first_time(seen, seen_times, Seen_Size, key, &times);
+    bool say_full = times == 0 && !seen_full;
+    seen_full = seen_full || times == 0;
     os_unfair_lock_unlock(&seen_lock);
+    if (say_full)
+        printf("clientfield: %d different missing fields have been named here; any further one is guarded the same "
+               "way, without a line\n", Seen_Size);
     if (!first && !(debug && times != 0 && (times <= Debug_Lines || (times & (times - 1)) == 0)))
         return;
     const char *set_name = clientfield_guard_set_name(set_names, Set_Count, set);
@@ -221,7 +238,7 @@ static void *guarded_find(uint64_t set, uint64_t name, uint64_t error_if_missing
         return found;
     const char *field = SL_ConvertToString((uint32_t)name);
     field = field != NULL ? field : "?";
-    log_guarded(site, (int)set, (uint32_t)name, field);
+    log_guarded(site, (int)set, field, clientfield_guard_key((size_t)(site - sites), (int)set, field));
     if (action == Clientfield_Zero)
         return standin_field;
     char message[Message_Size];

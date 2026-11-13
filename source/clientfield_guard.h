@@ -34,8 +34,11 @@ bool clientfield_guard_t7o_loaded(const char *t7o_folder, const char *loaded_mod
 // the name of client field set number set from the game's table of count names, "unknown" for any other number as
 // the game's own message has it
 const char *clientfield_guard_set_name(const char *const *names, int count, int set);
-// whether a guarded lookup with this key (place, set, field) gets a line in the log: the first time for each of up to
-// count keys kept in seen (zeroed at first), then none; returns the times key was asked about with *times
+// the log's key for a missing field: the place (its index in the table), the set and the field's text, so that the
+// same text under another script string id is the same field
+uint64_t clientfield_guard_key(size_t place, int set, const char *field);
+// whether a guarded lookup with this key gets a line in the log: the first time for each of up to count keys kept in
+// seen (zeroed at first), then none; returns the times key was asked about with *times, 0 when there was no room for it
 bool clientfield_guard_first_time(uint64_t *seen, uint32_t *counts, size_t count, uint64_t key, uint32_t *times);
 // the names of the fields a set holds, as the lookup walks them (set: the game's 0x4018 bytes of it, count at +8,
 // fields from +0x10, a field's name at +0x120), written to out as "<count> fields: a, b, ...", cut to its size; for

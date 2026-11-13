@@ -36,10 +36,22 @@ static char game_loaded_mod[Mod_Name_Size];
 static const char *const game_set_names[Set_Count] = { "world", "actor", "vehicle", "allplayers", "allplayers",
     "toplayer", "playercorpse", "clientuimodel", "scriptmover", "helicopter", "plane", "missile", "zbarrier", "item" };
 
-// the script strings: 0x10 + i is the i-th of these
+// the script strings: 0x10 + i is the i-th of these; 0x20 and 0x21 are two ids of one text, each with its own copy of
+// it as the game's string table keeps them (DEIMOS's HUD made its name anew each time); 0x100 + i is "field_<i>"
 static const char *const strings[] = { "hudItems.perks.additional_primary_weapon", "powerup_mini_gun.time",
                                        "t10_mule_kick" };
+static char purifier_first[] = "powerup_purifier.time", purifier_again[] = "powerup_purifier.time";
+#define Many_Fields 0x80
+static char many_fields[Many_Fields][16];
 static const char *game_string(uint32_t name) {
+    if (name == 0x20)
+        return purifier_first;
+    if (name == 0x21)
+        return purifier_again;
+    if (name >= 0x100 && name < 0x100 + Many_Fields) {
+        snprintf(many_fields[name - 0x100], sizeof(many_fields[0]), "field_%u", name - 0x100);
+        return many_fields[name - 0x100];
+    }
     return name >= 0x10 && name < 0x10 + sizeof(strings) / sizeof(strings[0]) ? strings[name - 0x10] : NULL;
 }
 
@@ -129,7 +141,7 @@ static void *find_from(uint32_t offset, uint64_t set, uint64_t name, uint64_t er
 }
 
 // what was printed while the block ran
-static char printed[4096];
+static char printed[32768];
 static int saved_stdout = -1;
 static FILE *capture;
 static void capture_start(void) {
@@ -157,6 +169,13 @@ static int lines_in(const char *text) {
 static void forget_seen(void) {
     memset(seen, 0, sizeof(seen));
     memset(seen_times, 0, sizeof(seen_times));
+    seen_full = false;
+}
+static int count_in(const char *text, const char *what) {
+    int n = 0;
+    for (const char *p = text; (p = strstr(p, what)) != NULL; p++)
+        n++;
+    return n;
 }
 
 // --- the tests ---------------------------------------------------------------------------------------------------
@@ -195,8 +214,8 @@ static void test_sites(void) {
         CHECK((site->t7o_name == NULL) == (expected[i].t7o == NULL));
         CHECK(site->t7o_name == NULL || strcmp(site->t7o_name, expected[i].t7o) == 0);
         // only the place itself, not the call before it or the instruction after
-        CHECK(clientfield_guard_site(expected[i].offset - 5) == NULL && clientfield_guard_site(expected[i].offset + 1) ==
-              NULL);
+        CHECK(clientfield_guard_site(expected[i].offset - 5) == NULL &&
+              clientfield_guard_site(expected[i].offset + 1) == NULL);
     }
     // the builtins that check for NULL themselves: SetClientField, IncrementClientField, SetUIModelClientField; the
     // registration's own lookup; any other caller
@@ -304,6 +323,38 @@ static void test_set_fields(void) {
     free(set);
 }
 
+static void test_key(void) {
+    // the same place, set and text: the same key, whatever copy of the text it is
+    CHECK(purifier_first != purifier_again);
+    CHECK(clientfield_guard_key(2, 7, purifier_first) == clientfield_guard_key(2, 7, purifier_again));
+    // another place, set or text: another key
+    uint64_t key = clientfield_guard_key(2, 7, "powerup_purifier.time");
+    CHECK(key != clientfield_guard_key(3, 7, "powerup_purifier.time"));
+    CHECK(key != clientfield_guard_key(2, 6, "powerup_purifier.time"));
+    CHECK(key != clientfield_guard_key(2, 7, "powerup_purifier.timf"));
+    CHECK(key != clientfield_guard_key(2, 7, "powerup_purifier.tim"));
+    CHECK(key != clientfield_guard_key(2, 7, ""));
+    // every place with every set of the game, and the set past its table: all different
+    uint64_t keys[16 * 15];
+    int n = 0;
+    for (size_t place = 0; place < 16; place++)
+        for (int set = 0; set < 15; set++)
+            keys[n++] = clientfield_guard_key(place, set, "t10_mule_kick");
+    int same = 0;
+    for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++)
+            same += keys[i] == keys[j];
+    CHECK(same == 0);
+    // FNV-1a's first steps, as written: the place, then the set, then each byte
+    uint64_t expected = (0xcbf29ce484222325ULL ^ 1) * 0x100000001b3ULL;
+    expected = (expected ^ 2) * 0x100000001b3ULL;
+    expected = (expected ^ 'a') * 0x100000001b3ULL;
+    CHECK(clientfield_guard_key(1, 2, "a") == expected);
+    // a negative set is its 32 bits
+    CHECK(clientfield_guard_key(1, -1, "a") == (((((0xcbf29ce484222325ULL ^ 1) * 0x100000001b3ULL) ^ 0xffffffffULL) *
+                                                  0x100000001b3ULL) ^ 'a') * 0x100000001b3ULL);
+}
+
 static void test_first_time(void) {
     uint64_t keys[3] = { 0 };
     uint32_t counts[3] = { 7, 7, 7 }, times = 99;
@@ -355,6 +406,24 @@ static void test_guarded_find(void) {
     capture_end();
     CHECK(result == Thrown && second == Thrown && errors == 4 && lines_in(printed) == 2);
     CHECK(strstr(printed, "SetWorldClientField asked for 'hudItems") != NULL && strstr(printed, "'t10_mule_kick'"));
+
+    // one text under two script string ids, as DEIMOS's HUD asks for it: one line, and the count goes on
+    capture_start();
+    find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x20, 1);
+    find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x21, 1);
+    find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x20, 1);
+    capture_end();
+    CHECK(errors == 7 && lines_in(printed) == 1 && count_in(printed, "'powerup_purifier.time'") == 1);
+    forget_seen();
+    debug = true;
+    capture_start();
+    find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x20, 1);
+    find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x21, 1);
+    capture_end();
+    debug = false;
+    CHECK(count_in(printed, ", 1 times)") == 1 && count_in(printed, ", 2 times)") == 1 &&
+          count_in(printed, "holds 1 fields:") == 1);
+    errors = 4;
 
     // GetClientField's set depends on the entity: the same field of two sets from one place, a line each
     capture_start();
@@ -458,6 +527,38 @@ static void test_guarded_find(void) {
     CHECK(strstr(printed, "(T7Overcharged's -, game 0xef0719, 1 times)") != NULL);
 }
 
+// more different missing fields than the table holds: one line says so, once; the fields named before go on counting
+static void test_full_table(void) {
+    set_game();
+    mod_loaded(true);
+    forget_seen();
+    errors = 0;
+    capture_start();
+    for (uint32_t i = 0; i < Seen_Size; i++)
+        find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x100 + i, 1);
+    capture_end();
+    CHECK(errors == Seen_Size && lines_in(printed) == Seen_Size && count_in(printed, "different missing") == 0);
+    CHECK(strstr(printed, "'field_0'") != NULL && strstr(printed, "'field_63'") != NULL);
+    capture_start();
+    find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x100 + Seen_Size, 1);
+    find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x100 + Seen_Size + 1, 1);
+    find_from(ADDR_ClientField_GetInt_Read, 7, 0x100 + Seen_Size + 2, 1);
+    capture_end();
+    CHECK(errors == Seen_Size + 2 && lines_in(printed) == 1 &&
+          strcmp(printed, "clientfield: 64 different missing fields have been named here; any further one is guarded "
+                          "the same way, without a line\n") == 0);
+    // nor again later, and a field named before goes on being counted (its debug lines come)
+    debug = true;
+    capture_start();
+    find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x100 + Seen_Size + 3, 1);
+    find_from(ADDR_GScr_CodeGetUIModelClientField_Read, 7, 0x100, 1);
+    capture_end();
+    debug = false;
+    CHECK(lines_in(printed) == 1 && strstr(printed, "asked for 'field_0'") != NULL &&
+          strstr(printed, ", 2 times)") != NULL);
+    forget_seen();
+}
+
 static void test_hook(void) {
     set_game();
     mod_loaded(true);
@@ -502,9 +603,11 @@ int main(void) {
     test_action();
     test_t7o_loaded();
     test_set_name();
+    test_key();
     test_first_time();
     test_set_fields();
     test_guarded_find();
+    test_full_table();
     test_hook();
     test_init();
     if (failures != 0) {
