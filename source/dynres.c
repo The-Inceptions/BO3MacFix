@@ -10,7 +10,10 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
     d->windows_since_change = 0;
     d->headroom_windows = 0;
     d->trial_from = 0;
+    d->trial_windows = 0;
     d->failed_trials = 0;
+    d->limit = Dynres_No_Limit;
+    d->event = Dynres_Event_None;
 }
 
 int dynres_lowest_for(int base, int setting) {
@@ -43,18 +46,29 @@ static int trial_hold(const dynres_t *d, double target_fps) {
 }
 
 int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps) {
-    return dynres_window_limited(d, fps, gpu_busy, target_fps, false);
+    return dynres_window_limited(d, fps, gpu_busy, target_fps, Dynres_No_Limit);
 }
 
-int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double target_fps, bool limited) {
+int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double target_fps, dynres_limit_t limit) {
     d->windows_since_change++;
+    d->event = Dynres_Event_None;
+    // another kind of limit: the count of windows with room starts again; back to none, a trial is kept as it is
+    if ((int)limit != d->limit) {
+        d->headroom_windows = 0;
+        if (limit == Dynres_No_Limit) {
+            d->trial_from = 0;
+            d->failed_trials = 0;
+        }
+        d->limit = limit;
+    }
     if (target_fps <= 0 || fps <= 0)
         return d->percent;
     bool settled = d->windows_since_change > Dynres_Hold_Down;
     bool behind = fps < target_fps * Dynres_Missed;
 
-    // a trial step up under a limit: taken back at once if the GPU falls behind within its windows, kept after them
-    if (d->trial_from != 0 && d->windows_since_change > Dynres_Trial_Windows) {
+    // a trial step up under a limit: taken back at once if the GPU falls behind within its windows, kept after them.
+    // Its windows count in the match only: a pause or the background holds any size and says nothing about it.
+    if (d->trial_from != 0 && limit == Dynres_Match_Limit && ++d->trial_windows > Dynres_Trial_Windows) {
         d->trial_from = 0;
         d->failed_trials = 0;
     }
@@ -63,6 +77,7 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
         d->trial_from = 0;
         if (d->failed_trials < Dynres_Max_Backoff)
             d->failed_trials++;
+        d->event = Dynres_Event_Taken_Back;
         return change(d, back);
     }
 
@@ -78,9 +93,12 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
 
     if (d->percent >= d->base)
         return d->percent;
+    // in a pause, the menus or the background: no step up of any kind (see dynres_window_limited)
+    if (limit == Dynres_Situation_Limit)
+        return d->percent;
     int up = d->percent + Dynres_Step < d->base ? d->percent + Dynres_Step : d->base;
     // under a limit: room is the limit held, for the trial's hold in a row (the busy share is the slowed clock's)
-    if (limited) {
+    if (limit == Dynres_Match_Limit) {
         if (behind) {
             d->headroom_windows = 0;
             return d->percent;
@@ -91,6 +109,8 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
         int from = d->percent;
         change(d, up);
         d->trial_from = from;
+        d->trial_windows = 0;
+        d->event = Dynres_Event_Trial;
         return up;
     }
 

@@ -31,12 +31,18 @@
 // heavy moment left the resolution at the floor for good. There the way up is a trial instead: after the frame rate has
 // held the limit for Dynres_Hold_Up_Seconds in a row, one step up; if a window behind with the GPU busy comes within
 // Dynres_Trial_Windows after it (the holds after the change first, as for any step down), straight back to the size
-// before, and the next trial waits twice as long (up to 16 times). A trial that held clears that, and its windows count
-// toward the next one's hold. Shorter than the 8 s without a limit because a wrong trial is taken back: it costs a few
-// windows a little under the limit, and the doubling makes it rare. 60% -> 100% at 40 fps: 8 steps, about a minute.
+// before, and the next trial waits twice as long (up to 256 times, Dynres_Max_Backoff). A trial that held clears that,
+// and its windows count toward the next one's hold. Shorter than the 8 s without a limit because a wrong trial is taken
+// back: it costs a few windows a little under the limit, and the doubling makes it rare. 60% -> 100% at 40 fps: 8
+// steps, about a minute.
 #define Dynres_Hold_Up_Seconds 6 // the trial's hold (8 windows at 40 fps)
 #define Dynres_Trial_Windows 8   // windows after a trial in which falling behind takes it back (6 s at 40 fps)
-#define Dynres_Max_Backoff 4     // the hold at most doubles 4 times (96 s at 40 fps)
+// The hold at most doubles 8 times: 256 times the hold, 26 minutes at 40 fps. Where the next size can't hold the limit,
+// each trial costs about 2 s a little under it; with 4 that came every 98 s for good, with 6 every 6.4 minutes, with 8
+// four or five times in the first half hour and then about every 26 minutes. A steady picture matters more than the
+// last 5% of resolution, and a trial that holds still clears the doubling, so the climb after a heavy moment in a
+// lighter part of the map stays as quick.
+#define Dynres_Max_Backoff 8
 
 typedef struct {
     int base;     // the user's ResolutionPercent, the most it goes up to
@@ -45,8 +51,17 @@ typedef struct {
     int windows_since_change;
     int headroom_windows; // windows in a row in which a step up would have fit (under a limit: held the limit)
     int trial_from;       // under a limit: the size before a step up still on trial, 0 for none
+    int trial_windows;    // the trial's windows so far, counted in the match only (not in a pause or the background)
     int failed_trials;    // under a limit: trials taken back in a row (each doubles the next one's hold)
+    int limit;            // the last window's kind of limit (dynres_limit_t)
+    int event;            // what the last window did (Dynres_Event_*), for the log
 } dynres_t;
+
+// the kind of limit a window ran under: none (the display's rate), one of the match itself (BatteryFPS, LowPowerFPS,
+// FramePacingFPS, the game's com_maxfps), or one of a situation outside the play (the pause menu's, the menus', the
+// background's: frame_limit_for_frame's Limit_* bits)
+typedef enum { Dynres_No_Limit = 0, Dynres_Match_Limit = 1, Dynres_Situation_Limit = 2 } dynres_limit_t;
+enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back };
 
 // starts (again) at base, with lowest as the floor (both ResolutionPercent values, 50 to 200)
 void dynres_reset(dynres_t *d, int base, int lowest);
@@ -59,12 +74,16 @@ int dynres_lowest_for(int base, int setting);
 // ResolutionPercent to render the next frames at.
 int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps);
 
-// the same, saying whether the target is a frame limit below the display's rate (ours or the game's com_maxfps): then
-// the way up is the trial described at Dynres_Hold_Up_Seconds. With limited false it is dynres_window.
-int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double target_fps, bool limited);
+// the same, saying what kind of limit the target is. Under a limit of the match below the display's rate the way up is
+// the trial described at Dynres_Hold_Up_Seconds. Under a situation's limit (a pause, the menus, the background) there
+// is no step up of any kind, so a match comes back at the size it left with; a trial in progress waits (its windows
+// count in the match only) and is still taken back if a window there falls behind with the GPU busy. The count of
+// windows with room starts again whenever the kind of limit changes (it means another thing in each); back to no limit,
+// a trial in progress is kept as it is and the doubling forgotten. With Dynres_No_Limit it is dynres_window.
+int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double target_fps, dynres_limit_t limit);
 
-// BO3MACFIX_DYNRESSTARTLOW (a test switch, off by default): puts the resolution at the floor now, as a change, so that a
-// game check can watch the way back up at a limit without a heavy moment to bring it down. Returns the new value.
+// BO3MACFIX_DYNRESSTARTLOW (a test switch, off by default): puts the resolution at the floor now, as a change, so that
+// a game check can watch the way back up at a limit without a heavy moment to bring it down. Returns the new value.
 int dynres_start_at_floor(dynres_t *d);
 
 // The frame rate to reach (dynres_window's target): the display's refresh rate, our frame limit for the frame as the
