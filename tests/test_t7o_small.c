@@ -666,6 +666,22 @@ static void test_network_defaults(void) {
     debug = false;
 }
 
+// cursoroverride: there, says its usage without a file, logs the first file once and changes nothing else
+static void test_cursoroverride(void) {
+    cursoroverride_logged = false;
+    const char *bare[] = { "cursoroverride" };
+    run_command(cursoroverride_f, ARGC(bare), bare);
+    CHECK(!cursoroverride_logged);
+    run_command(cursoroverride_f, 0, NULL);
+    CHECK(!cursoroverride_logged);
+    const char *nine[] = { "cursoroverride", "9.ani" };
+    run_command(cursoroverride_f, ARGC(nine), nine);
+    CHECK(cursoroverride_logged);
+    const char *other[] = { "cursoroverride", "12.ani" };
+    run_command(cursoroverride_f, ARGC(other), other);
+    CHECK(cursoroverride_logged);
+}
+
 int main(void) {
     test_stoi();
     test_keyset();
@@ -677,6 +693,7 @@ int main(void) {
     test_menuresponse();
     test_session_mode();
     test_network_defaults();
+    test_cursoroverride();
     if (failures == 0)
         printf("test_t7o_small: all passed\n");
     return failures == 0 ? 0 : 1;

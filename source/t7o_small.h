@@ -111,7 +111,7 @@ uint8_t *t7o_mode_dvar(uint8_t *dvar, int mode);
 
 // ---- the game's side
 
-// at start-up: the console command and the hook on the game's input events
+// at start-up: the console commands (customkeymap, cursoroverride) and the hook on the game's input events
 void t7o_small_install(uint64_t base_address);
 // SendMenuResponse (t7overcharged.c): whether this call goes on, by T7Overcharged's debounce
 bool t7o_small_menuresponse_passes(int argc, const char *const *argv);

@@ -128,6 +128,10 @@ then: a game this Mac hosts sends up to 125 snapshots a second (`sv_network_fps`
 50000 bytes a second per player (`sv_maxRate`; 20000), and votes, map switching and voice packets are off
 (`g_allowvote`, `sv_mapswitch` and `maxvoicepacketsperframe` at 0). They stay so until the game quits, as on Windows.
 
+AAE's UI colour option also picks a mouse cursor, one of the Windows animated cursors in its `T7Overcharged/cursors`
+folder, through T7Overcharged's `cursoroverride` command. The Mac keeps its own cursor: BO3MacFix adds the command only
+so that the console doesn't say "Unknown command" at every start.
+
 ## Credits
 
 - [Alyssa / alltheamps](https://github.com/shiversoftdev) - guidance, help, t7patch and the cod2map64 patch DLL.

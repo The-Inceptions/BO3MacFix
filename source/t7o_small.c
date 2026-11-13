@@ -392,6 +392,28 @@ bool t7o_small_menuresponse_passes(int argc, const char *const *argv) {
     return passes;
 }
 
+// cursoroverride <file>: All-around Enhancement's conditions.lua runs "cursoroverride 9.ani", or the file its UI colour
+// option picks, at every UI start. T7Overcharged (its cursor component) loads that Windows animated cursor from its
+// cursors folder (LoadCursorFromFileA), puts it in the two places the window's WM_SETCURSOR takes its cursor from and
+// sets it. The Mac's game takes its cursor from the same two places and Aspyr's layer reads .ani files for its own,
+// but setting one would mean calling into that layer's cursor objects, from a command the mod runs at every start, for
+// a cosmetic option. So the command is here so that the console doesn't say "Unknown command", and does nothing.
+static _Alignas(8) uint8_t cursoroverride_command[0x30];
+static atomic_bool cursoroverride_logged;
+
+static void cursoroverride_f(void) {
+    int argc = 0;
+    const char *const *argv = t7o_command_args(&argc);
+    if (argv == NULL)
+        return;
+    if (argc < 2) {
+        printf("usage: cursoroverride <cursorfile>\n");
+        return;
+    }
+    if (!atomic_exchange_explicit(&cursoroverride_logged, true, memory_order_relaxed))
+        printf("T7Overcharged: cursoroverride %s: the Mac keeps its own mouse cursor\n", argv[1]);
+}
+
 // T7Overcharged's changes when it starts: on Windows its components start once, when the mod's Lua loads it
 static void *(*Dvar_FindByHash)(uint32_t hash);
 static void (*Dvar_SetFromStringByName)(const char *name, const char *value, bool create_if_missing);
@@ -452,5 +474,7 @@ void t7o_small_install(uint64_t base_address) {
     Cmd_AddCommandInternal = (void *)(base_address + ADDR_Cmd_AddCommandInternal);
     if (Cmd_FindCommand("customkeymap") == NULL)
         Cmd_AddCommandInternal("customkeymap", customkeymap_f, customkeymap_command);
+    if (Cmd_FindCommand("cursoroverride") == NULL)
+        Cmd_AddCommandInternal("cursoroverride", cursoroverride_f, cursoroverride_command);
     install_hook_Sys_QueEvent((void *)(base_address + ADDR_Sys_QueEvent));
 }
