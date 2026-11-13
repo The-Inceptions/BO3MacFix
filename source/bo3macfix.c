@@ -23,6 +23,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDDevice.h>
 
+#include "aae_breath.h"
 #include "aae_build.h"
 #include "aae_cheats.h"
 #include "aae_mantle.h"
@@ -1241,6 +1242,9 @@ __attribute__((constructor)) static void dylib_main() {
     // the pause for everybody in a co-op game and for players sharing a Mac, as All-around Enhancement 4's Windows
     // plugin gives it (AAECoopPause, on by default), see aae_coop_pause.c
     aae_coop_pause_init(game_base_address, read_int_setting_or_env("AAECoopPause", 1));
+    // the aim status All-around Enhancement 4's T7Overcharged works out where the game draws its hold breath hint
+    // (AAEHoldBreath, on by default), see aae_breath.c
+    aae_breath_init(game_base_address, read_int_setting_or_env("AAEHoldBreath", 1));
 
     // All-around Enhancement 4's gun position and its other moves of the first person gun's bones, and the bullets
     // that leave a belt-fed gun's belt, as the mod's T7Overcharged makes them (AAEGunPosition and AAEBulletDepletion,

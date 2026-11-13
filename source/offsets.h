@@ -190,6 +190,20 @@
 #define ADDR_HostMigration_PickNewHost 0xe07413 // func - void (void): picks the new host, the best rating above 1, or ends the match (Windows 0x1421f9530, jumped to by the migration's frame at 0x1421f9853, here 0xe071e7)
 #define ADDR_HostMigration_SendToNewHost 0x123297b // func - bool (int controller, uint64_t new host's xuid, int lobby type, uint64_t xuids[], int count): the "migrate to" message to those players, through that lobby if the new host is a member of it (Windows 0x141ed50b0, its one call at 0x1421fa299, here 0xe076b9)
 #define ADDR_LobbySessions 0x101c8760 // the lobby sessions, 0x66828 bytes each: 0 the private (party) one, 1 the game's; state at +0x40 (2 when it can migrate), 18 members of 0x30 bytes at +0xf8, their xuid first (Windows 0x1555fd410)
+// T7Overcharged's breath component: the game's hold breath hint, and the aim status T7Overcharged works out there
+// (aae_breath.c). Windows addresses are of the build ours is (PE checksum 0x6531394, T7Overcharged's third); names
+// are T7Overcharged's where it has one (its build-two addresses are these + 0x6c0)
+#define ADDR_UIElement_RenderHoldBreathHint 0x1130467 // func - void (int localClientNum, the element, the renderer's context, four floats, lua_State *): the render function setupHoldBreathHint (0x112faf0) gives an element, which draws "Hold [key] to steady" (PLATFORM_HOLD_BREATH) unless cg_drawBreathHint is 0 or the client is in a killcam, flashbanged, spectating ... (Windows 0x142074e10; T7Overcharged's game::OFF_UIElement_RenderHoldBreathHint)
+#define ADDR_BG_GetViewmodelWeapon 0xed3bf3 // func - Weapon (const playerState_s *) (Windows 0x142657770)
+#define ADDR_BG_GetWeaponDef 0x12362cd // func - const WeaponDef *(Weapon) (Windows 0x142670e50)
+#define ADDR_BG_WeaponOverlayReticle 0x138606c // func - int (Weapon): the definition's overlayReticle (+0xdb0), or an attachment's (+0x390); the first test of the game's "Hold [key] to zoom" hint (0x10113069a) (Windows 0x142677de0; T7Overcharged's game::OFF_BG_IsWeaponZoomed) - name is a guess
+#define ADDR_BG_WeaponHasZoomLevels 0x138337e // func - int (Weapon): 1 when its three ADS zoom focal lengths (variant +0x22c, +0x234, +0x23c, or an attachment's) differ, the second test of that hint (Windows 0x14267a5e0; T7Overcharged's game::OFF_BG_IsWeaponScoped) - name is a guess
+#define ADDR_Com_LocalClient_GetControllerIndex 0xeae63e // func - int (int localClientNum): its controller, -1 for none (Windows 0x1420e31b0)
+#define ADDR_UIModel_ForController 0x1036404 // func - uint16_t (int controller): the controller's root model, from a table of two (Lua's GetModelForController; Windows 0x14200cee0)
+#define ADDR_UIModel_SetInt 0x1036905 // func - bool (uint16_t model, int value) (Lua's SetModelValue for a whole number; Windows 0x14200d590)
+#define ADDR_UIModel_SetString 0x103698e // func - bool (uint16_t model, const char *value) (SetModelValue for text; Windows 0x14200d630)
+#define ADDR_UIModel_ForceNotify 0x1036af8 // func - bool (uint16_t model) (Lua's ForceNotifyModelSubscriptions; Windows 0x14200c9c0)
+#define ADDR_Dvar_RegisterInt 0xfa149e // func - dvar_t *(uint32_t hash, const char *name, int value, int min, int max, uint32_t flags, const char *description) (Windows 0x142273fc0)
 
 // T7Overcharged's slide changes (aae_move_slide.c): the player state (ps) and the move (pml_t) are at the same places as
 // in the Windows game; T7O's names for the places (wip/night/agent-t7o-movement.md, sections 3, 4, 6)

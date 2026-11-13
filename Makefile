@@ -55,6 +55,8 @@ TEST_TARGETS += tests/test_aae_clientfx
 TEST_TARGETS += tests/test_t7o_guards
 # the pause for everybody in a co-op game: the plugin's packets and rules, machines playing together (aae_coop_pause.c)
 TEST_TARGETS += tests/test_aae_coop_pause
+# T7Overcharged's aim status where the game draws its hold breath hint (aae_breath.c)
+TEST_TARGETS += tests/test_aae_breath
 # T7Overcharged's moves of the first person gun's bones: the texts, the rules and the hook (aae_viewmodel.c)
 TEST_TARGETS += tests/test_aae_viewmodel
 # a client field nobody registered: which places get a script error or a field that reads as 0 (clientfield_guard.c)
@@ -151,6 +153,9 @@ SOURCES += source/aae_clientfx.c
 SOURCES += source/aae_linkcam.c
 # AAECoopPause: the pause for everybody in a co-op game, as the mod's plugin does it (aae_coop_pause.c)
 SOURCES += source/aae_coop_pause.c
+# AAEHoldBreath: the aim status the mod's T7Overcharged works out where the game draws its hold breath hint
+# (aae_breath.c)
+SOURCES += source/aae_breath.c
 # AAEGunPosition: the mod's moves of the first person gun's bones, as its T7Overcharged makes them (aae_viewmodel.c)
 SOURCES += source/aae_viewmodel.c
 # AAEGrenadeArc: the line that shows where a held grenade will fly (aae_arc.c)
@@ -331,6 +336,12 @@ tests/test_aae_freeaim: tests/test_aae_freeaim.c tests/freeaim_cases.h tests/fre
 		source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_freeaim.c source/gsc_obj.c source/aae_freeaim_net.c
+
+# aae_breath.c: T7Overcharged's aim status and the hint's hook against a made-up game
+tests/test_aae_breath: tests/test_aae_breath.c source/aae_breath.c source/aae_breath.h source/aae_plugin.c \
+		source/aae_plugin.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_breath.c source/gsc_obj.c
 
 # aae_move_sprint.c: T7Overcharged's rules for sprinting against its own (the numbers in tests/move_sprint_cases.h),
 # and the handlers against a made-up game, through every value a compared register can hold

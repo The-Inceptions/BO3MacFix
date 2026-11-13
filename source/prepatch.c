@@ -207,6 +207,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Netchan_SendLocalClient, Push_R15 },
     { ADDR_SV_CheckPaused, Push_R14 },
     { ADDR_SV_Frame, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
+    { ADDR_UIElement_RenderHoldBreathHint, Push_R15 },
 };
 
 // a "mov r32, imm32" that a setting changes, with the flags dead after it (its stub tests the slot)
