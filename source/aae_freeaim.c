@@ -2,9 +2,10 @@
 //
 // The game has no crosshair in third person: its test for drawing one says no while the view is a third person one
 // (unless the weapon wants one anyway). The mod has a third person view of its own, and its plugin gives it a
-// crosshair and makes shots go to what is under it. This file is that, piece by piece.
+// crosshair and makes shots go to what is under it. This file is that, piece by piece: the crosshair, the crosshair
+// while aiming, and bullets ("where the shots go" further down).
 //
-// So far: the crosshair test says yes while free aim is on. Free aim is on, by the plugin's rule, for a local client
+// The crosshair: the game's test for drawing one says yes while free aim is on. Free aim is on, by the plugin's rule, for a local client
 // whose crosshair code was at work within the last 250 ms (the plugin notes that at a place of its own right before
 // the test; here the test's hook does it), whose view has been third person for 250 ms, who isn't a spectator, in a
 // map whose name begins with "zm_", unless the dvar aae_freeaim_enabled is 0 (the plugin makes it with 1; without the
@@ -28,6 +29,8 @@
 //   0x50) is set to 0 and the function goes on where it draws, past its tests;
 // - where the gap is the larger one of the spread's and the weapon's least, in xmm1: changed as above.
 // Both only from the pre-patched executable (detour.h).
+#include <math.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -94,6 +97,188 @@ float aae_freeaim_gap(float gap, float least, float sights) {
     return (least - gap) * sights + gap;
 }
 
+// ---- where the shots go: what the plugin works out
+
+// a char as the plugin's compiler has it: with a sign
+typedef signed char plugin_char;
+static bool is_space(plugin_char c) {
+    return c == ' ' || (unsigned char)(c - 9) < 5;
+}
+
+bool aae_freeaim_number(const char **text, float *value) {
+    const plugin_char *p = (const plugin_char *)*text;
+    double number = 0.0;
+    int sign = 1;
+    bool any = false;
+    while (is_space(*p))
+        p++;
+    plugin_char c = *p;
+    if (c == '+' || c == '-') {
+        p++;
+        if (c == '-')
+            sign = -1;
+    }
+    c = *p;
+    while (c > '/') {
+        c = *p;
+        if (c > '9')
+            break;
+        p++;
+        any = true;
+        number = number * 10.0 + (double)(c - '0');
+        c = *p;
+    }
+    if (c == '.') {
+        p++;
+        if (*p > '/') {
+            double place = 1.0;
+            do {
+                c = *p;
+                if (c > '9')
+                    break;
+                place = place * 0.1;
+                p++;
+                any = true;
+                number = number + (double)(c - '0') * place;
+            } while (*p > '/');
+        }
+    }
+    if (!any)
+        return false;
+    if (((unsigned char)((unsigned char)*p + 0xbb) & 0xdf) == 0) { // e or E
+        plugin_char mark = p[1];
+        const plugin_char *q = p + 1;
+        int exponent_sign = 1;
+        if (mark == '+' || mark == '-') {
+            q = p + 2;
+            if (mark == '-')
+                exponent_sign = -1;
+        }
+        if ((unsigned char)(*q - '0') < 10) {
+            int exponent = 0;
+            do {
+                if (*q > '9')
+                    break;
+                if (exponent < 100)
+                    exponent = exponent * 10 + (*q - '0');
+                q++;
+            } while (*q > '/');
+            exponent *= exponent_sign;
+            if ((unsigned)(exponent + 38) > 76)
+                return false;
+            for (; exponent > 0; exponent--)
+                number = number * 10.0;
+            for (; exponent < 0; exponent++)
+                number = number * 0.1;
+            p = q;
+        }
+    }
+    number = (double)sign * number;
+    if (!isfinite(number) || !(fabs(number) <= 16777216.0))
+        return false;
+    *text = (const char *)p;
+    *value = (float)number;
+    return true;
+}
+
+bool aae_freeaim_target(const char *text, float target[3]) {
+    float numbers[3];
+    if (strnlen(text, 192) > 191)
+        return false;
+    for (int i = 0; i < 3; i++) {
+        if (!aae_freeaim_number(&text, &numbers[i]) || (i < 2 && !is_space((plugin_char)*text)))
+            return false;
+    }
+    while (is_space((plugin_char)*text))
+        text++;
+    if (*text != '\0')
+        return false;
+    memcpy(target, numbers, sizeof(numbers));
+    return true;
+}
+
+float aae_freeaim_switch(const char *text, float otherwise) {
+    float number;
+    if (strnlen(text, 64) > 63 || !aae_freeaim_number(&text, &number))
+        return otherwise;
+    while (is_space((plugin_char)*text))
+        text++;
+    return *text == '\0' ? number : otherwise;
+}
+
+#define Turn_Tolerance 0.05f   // how far from length 1 and from a right angle the directions may be
+#define Turn_Least 0.000001f   // a length below this is none
+#define Turn_Farthest 16777216.0f
+
+// the plugin's square root: of what a sum of squares came to
+static float root(float sum) {
+    return sqrtf(sum);
+}
+// to length 1, in the plugin's order of sums; false for a length that isn't a number or is none
+static bool to_length_one(float v[3]) {
+    float length = root(v[1] * v[1] + v[0] * v[0] + v[2] * v[2]);
+    if (!is_number(length) || Turn_Least > length)
+        return false;
+    float scale = 1.0f / length;
+    v[0] = v[0] * scale;
+    v[1] = v[1] * scale;
+    v[2] = v[2] * scale;
+    return true;
+}
+
+bool aae_freeaim_turn(const float muzzle[3], const float directions[9], const float target[3], float turned[9]) {
+    for (int i = 0; i < 3; i++) {
+        const float *d = directions + 3 * i;
+        if (!is_number(muzzle[i]) || fabsf(muzzle[i]) > Turn_Farthest)
+            return false;
+        float square = d[1] * d[1] + d[0] * d[0] + d[2] * d[2];
+        if (!is_number(square) || fabsf(square - 1.0f) > Turn_Tolerance)
+            return false;
+    }
+    const float *a = directions, *b = directions + 3, *c = directions + 6;
+    if (fabsf(a[1] * b[1] + a[0] * b[0] + a[2] * b[2]) > Turn_Tolerance ||
+        fabsf(a[1] * c[1] + a[0] * c[0] + a[2] * c[2]) > Turn_Tolerance ||
+        fabsf(b[1] * c[1] + b[0] * c[0] + b[2] * c[2]) > Turn_Tolerance)
+        return false;
+    float forward[3] = { a[0], a[1], a[2] };
+    float to[3] = { target[0] - muzzle[0], target[1] - muzzle[1], target[2] - muzzle[2] };
+    if (!to_length_one(forward) || !to_length_one(to))
+        return false;
+    // the turn from forward to "to" as a quaternion: their cross product, and 1 + their dot product
+    float x = forward[1] * to[2] - to[1] * forward[2];
+    float y = to[0] * forward[2] - forward[0] * to[2];
+    float z = forward[0] * to[1] - to[0] * forward[1];
+    float w = forward[0] * to[0] + to[1] * forward[1] + forward[2] * to[2] + 1.0f;
+    float length = root(x * x + y * y + z * z + w * w);
+    if (!is_number(length))
+        return false;
+    if (Turn_Least > length) {
+        // straight back: half a turn about something at a right angle to forward
+        float side_x = fabsf(forward[2]) > 0.9f ? 1.0f : 0.0f, side_z = fabsf(forward[2]) > 0.9f ? 0.0f : 1.0f;
+        x = forward[1] * side_z - forward[2] * 0.0f;
+        y = forward[2] * side_x - forward[0] * side_z;
+        z = forward[0] * 0.0f - forward[1] * side_x;
+        w = 0.0f;
+        length = root(y * y + x * x + z * z);
+        if (Turn_Least > length)
+            return false;
+    }
+    float scale = 1.0f / length;
+    x = x * scale, y = y * scale, z = z * scale, w = w * scale;
+    for (int i = 0; i < 3; i++) {
+        const float *v = directions + 3 * i;
+        float *out = turned + 3 * i;
+        float tx = v[2] * y - v[1] * z, ty = v[0] * z - v[2] * x, tz = v[1] * x - v[0] * y;
+        tx = tx + tx, ty = ty + ty, tz = tz + tz;
+        out[0] = w * tx + v[0] + y * tz - z * ty;
+        out[1] = w * ty + v[1] + z * tx - x * tz;
+        out[2] = w * tz + v[2] + x * ty - y * tx;
+        if (!is_number(out[0]) || !is_number(out[1]) || !is_number(out[2]))
+            return false;
+    }
+    return true;
+}
+
 // ---- the game's side
 #define Cg_Size 0x342a80
 #define Cg_ThirdPerson 0x11a8c9  // a byte: the view is a third person one
@@ -102,11 +287,16 @@ float aae_freeaim_gap(float gap, float least, float sights) {
 #define Ps_Sights 0x2fc          // how far the sights are up, 0 to 1
 #define Frame_Sights (-0x50)     // the crosshair function's own copy of that, from its frame pointer
 #define Weapon_LeastGap 0x6f0    // the weapon's definition: the least gap of its crosshair, an int
+#define Dvar_Type 0x1c
+#define Dvar_Type_String 8
+#define Entity_Client 0x250      // gentity_s: the player's state on the server (gclient_s), or NULL
+#define Ps_ThirdPerson 0xbc      // a byte of the player state: the player's view is a third person one
+#define Shot_Muzzle 0x24         // a shot's parameters: forward, right and up (three floats each), then the muzzle
+#define Max_Players 64
 
 static uint64_t base_address;
 static int debug;
 static void *(*Dvar_FindByHash)(uint32_t hash);
-static float (*Dvar_GetFloat)(void *dvar);
 static const char *(*Dvar_GetString)(void *dvar);
 static uint8_t *const *cg_clients;
 static const void *crosshair_asks_from; // where the crosshair code's own call of the test returns to
@@ -117,21 +307,44 @@ static uint64_t uptime_ms(void) {
 }
 static uint64_t (*now_ms)(void) = uptime_ms;
 
-// a dvar's value as a number, or the fallback when there is no such dvar
-static float number_dvar(const char *name, float fallback) {
-    void *dvar = Dvar_FindByHash(gsc_hash(name));
-    return dvar != NULL ? Dvar_GetFloat(dvar) : fallback;
+// A dvar's text, when it is one that has text (the plugin only ever reads those): NULL for anything else and for
+// no dvar. *there says whether the dvar exists.
+static const char *dvar_text(const char *name, bool *there) {
+    const uint8_t *dvar = Dvar_FindByHash(gsc_hash(name));
+    int type = -1;
+    if (dvar != NULL)
+        memcpy(&type, dvar + Dvar_Type, sizeof(type));
+    if (there != NULL)
+        *there = dvar != NULL;
+    return type == Dvar_Type_String ? Dvar_GetString((void *)dvar) : NULL;
 }
+
+// One of the two switches. The plugin makes them with "1" when it starts; here there is none until somebody sets
+// one, and none counts as that 1. One that can't be read as a number counts as "otherwise".
+static float switch_dvar(const char *name, float otherwise) {
+    bool there;
+    const char *text = dvar_text(name, &there);
+    if (!there)
+        return 1.0f;
+    return text != NULL ? aae_freeaim_switch(text, otherwise) : otherwise;
+}
+
+// The crosshair code runs on the client's thread and shots are fired on the server's: what is kept for the local
+// clients is only looked at and changed under this.
+static pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static bool on_for(int which, const uint8_t *cg) {
     uint32_t number;
     int kind;
     memcpy(&number, cg, sizeof(number));
     memcpy(&kind, cg + Cg_PlayerState + Ps_Kind, sizeof(kind));
-    void *map = Dvar_FindByHash(gsc_hash("mapname"));
-    return aae_freeaim_on(&clients[which], now_ms(), number, cg[Cg_ThirdPerson] != 0, kind,
-                          map != NULL ? Dvar_GetString(map) : NULL, number_dvar("aae_freeaim_enabled", 1.0f),
-                          number_dvar(which == 0 ? "aae_freeaim_enabled" : "aae_freeaim_enabled_1", 1.0f));
+    const char *map = dvar_text("mapname", NULL);
+    float enabled = switch_dvar("aae_freeaim_enabled", 0.0f);
+    float own = switch_dvar(which == 0 ? "aae_freeaim_enabled" : "aae_freeaim_enabled_1", 1.0f);
+    pthread_mutex_lock(&clients_lock);
+    bool on = aae_freeaim_on(&clients[which], now_ms(), number, cg[Cg_ThirdPerson] != 0, kind, map, enabled, own);
+    pthread_mutex_unlock(&clients_lock);
+    return on;
 }
 
 // which local client's cg_t this is, -1 for anything else (counted like this, something from before them is far
@@ -146,9 +359,15 @@ static int local_client_of(const uint8_t *cg) {
 
 // whether free aim is on for the local client this cg_t is of, for the places behind the crosshair's test: the
 // client has been seen there with this cg_t
+static const void *seen_cg(int which) {
+    pthread_mutex_lock(&clients_lock);
+    const void *cg = clients[which].cg;
+    pthread_mutex_unlock(&clients_lock);
+    return cg;
+}
 static bool on_now(const uint8_t *cg) {
     int which = local_client_of(cg);
-    if (which < 0 || clients[which].cg != cg || !aae_plugin_loaded_lately())
+    if (which < 0 || seen_cg(which) != cg || !aae_plugin_loaded_lately())
         return false;
     return on_for(which, cg);
 }
@@ -200,7 +419,9 @@ static bool crosshair_test(uint8_t *cg, uint8_t *ps, bool from_the_crosshair) {
     int which = local_client_of(cg);
     if (which < 0)
         return draw;
+    pthread_mutex_lock(&clients_lock);
     aae_freeaim_seen(&clients[which], cg, now_ms());
+    pthread_mutex_unlock(&clients_lock);
     bool on = on_for(which, cg);
     if (debug) {
         static _Atomic int said = -1;
@@ -215,6 +436,78 @@ static bool fake_CG_DrawCrosshairTest(uint8_t *cg, uint8_t *ps) {
     return crosshair_test(cg, ps, __builtin_return_address(0) == crosshair_asks_from);
 }
 
+// ---- where the shots go: the server's side
+//
+// The mod's script on the client works out the point in the world that is under the crosshair and leaves it in a
+// dvar, as "x y z": aae_freeaim_target (aae_freeaim_target_1 for the second local client). The server fires a bullet
+// with three directions (forward, right, up) from a muzzle. For a player whose view is third person, the plugin
+// turns those so that forward points from the muzzle at that point, fires, and puts them back.
+// For a player on this machine the point is read straight from the dvar. (A player on another machine sends theirs
+// to the server; that part isn't here yet.)
+
+// the point under the crosshair of a local client, as the mod's script left it
+static bool local_target(int which, float target[3]) {
+    const char *text = dvar_text(which == 0 ? "aae_freeaim_target" : "aae_freeaim_target_1", NULL);
+    return text != NULL && aae_freeaim_target(text, target);
+}
+
+// The directions a shot of this player is to be fired with instead of its own, if any.
+static bool turned_shot(const uint8_t *attacker, const uint8_t *shot, float turned[9]) {
+    if (attacker == NULL || shot == NULL || !aae_plugin_loaded_lately())
+        return false;
+    uint32_t number;
+    const uint8_t *player;
+    memcpy(&number, attacker, sizeof(number));
+    memcpy(&player, attacker + Entity_Client, sizeof(player));
+    if (player == NULL || player[Ps_ThirdPerson] == 0 || number >= Max_Players)
+        return false;
+    for (int which = 0; which < Local_Clients; which++) {
+        const uint8_t *cg = seen_cg(which);
+        uint32_t cg_number;
+        if (cg == NULL)
+            continue;
+        memcpy(&cg_number, cg, sizeof(cg_number));
+        if (cg_number != number)
+            continue;
+        float target[3], directions[9], muzzle[3];
+        if (!on_for(which, cg) || !local_target(which, target))
+            return false;
+        memcpy(directions, shot, sizeof(directions));
+        memcpy(muzzle, shot + Shot_Muzzle, sizeof(muzzle));
+        if (!aae_freeaim_turn(muzzle, directions, target, turned))
+            return false;
+        if (debug) {
+            // a line for a shot at another point than the last one's (only the server's thread comes here)
+            static unsigned count;
+            static float last[3];
+            count++;
+            bool elsewhere = fabsf(target[0] - last[0]) + fabsf(target[1] - last[1]) + fabsf(target[2] - last[2]) > 1.0f;
+            memcpy(last, target, sizeof(last));
+            if (count == 1 || elsewhere)
+                printf("free aim: shot %u of player %u goes to %.1f %.1f %.1f: from %.1f %.1f %.1f, forward %.3f %.3f "
+                       "%.3f instead of %.3f %.3f %.3f\n", count, number, target[0], target[1], target[2], muzzle[0],
+                       muzzle[1], muzzle[2], turned[0], turned[1], turned[2], directions[0], directions[1],
+                       directions[2]);
+        }
+        return true;
+    }
+    return false;
+}
+
+// the server fires a bullet: (the player's entity, the shot's parameters, ...), with the spread as a float
+install_hook_name(Bullet_Fire, void, uint8_t *attacker, uint8_t *shot, uint64_t third, uint64_t fourth, uint64_t fifth,
+                  uint64_t sixth, float spread) {
+    float turned[9], own[9];
+    if (!turned_shot(attacker, shot, turned)) {
+        orig_Bullet_Fire(attacker, shot, third, fourth, fifth, sixth, spread);
+        return;
+    }
+    memcpy(own, shot, sizeof(own));
+    memcpy(shot, turned, sizeof(turned));
+    orig_Bullet_Fire(attacker, shot, third, fourth, fifth, sixth, spread);
+    memcpy(shot, own, sizeof(own));
+}
+
 void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     if (!enabled)
         return;
@@ -223,12 +516,12 @@ void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     debug = env != NULL ? atoi(env) : 0;
     aae_plugin_init(game_base_address);
     Dvar_FindByHash = (void *)(base_address + ADDR_Dvar_FindByHash);
-    Dvar_GetFloat = (void *)(base_address + ADDR_Dvar_GetFloat);
     Dvar_GetString = (void *)(base_address + ADDR_Dvar_GetString);
     cg_clients = (uint8_t *const *)(base_address + ADDR_cgArray);
     crosshair_asks_from = (const void *)(base_address + ADDR_CG_DrawCrosshair_TestReturn);
     DobbyHook((void *)(base_address + ADDR_CG_DrawCrosshairTest), (void *)fake_CG_DrawCrosshairTest,
               (void **)&orig_CG_DrawCrosshairTest);
+    install_hook_Bullet_Fire((void *)(base_address + ADDR_Bullet_Fire));
     if (!prepatch_has_hook(ADDR_CG_DrawCrosshair_Tests) || !prepatch_has_hook(ADDR_CG_DrawCrosshair_Gap)) {
         printf("free aim: not running from the pre-patched executable: the third person crosshair goes away while "
                "aiming down the sights, as the game's own does\n");

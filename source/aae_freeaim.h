@@ -22,3 +22,19 @@ bool aae_freeaim_on(aae_freeaim_client_t *client, uint64_t now, uint32_t client_
 // sights come up (sights: 0 down, 1 all the way up).
 float aae_freeaim_gap(float gap, float least, float sights);
 
+// ---- where the shots go
+
+// The plugin's way of reading a number: white space, a sign, digits, a point and more digits, an exponent of at most
+// 38 either way; worked out in doubles as it goes, and not beyond 16777216. On success *text is behind the number.
+bool aae_freeaim_number(const char **text, float *value);
+// The point in the world under the crosshair as the mod's script leaves it in a dvar: three such numbers with white
+// space between them and nothing else, in fewer than 192 characters.
+bool aae_freeaim_target(const char *text, float target[3]);
+// A switch dvar's text as a number (fewer than 64 characters, nothing but white space behind the number), or
+// otherwise.
+float aae_freeaim_switch(const char *text, float otherwise);
+// Turns a shot's three directions (forward, right, up, each of length 1 and at right angles to the others, give or
+// take 0.05) by the shortest turn that makes forward point from the muzzle at the target. False when the directions
+// aren't such ones, the muzzle is beyond 16777216 or the target is at the muzzle.
+bool aae_freeaim_turn(const float muzzle[3], const float directions[9], const float target[3], float turned[9]);
+

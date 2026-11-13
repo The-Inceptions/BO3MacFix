@@ -112,7 +112,8 @@
 #define ADDR_Prepatch_Slots 0x1a268710 // pre-patched executable: slots, in __DATA's zero-filled tail after __common
 #define ADDR_Prepatch_SlotsEnd 0x1a269000 // end of __DATA
 
-// the crosshair (aae_freeaim.c) - names are guesses
+// the crosshair and where shots go (aae_freeaim.c) - names are guesses
+#define ADDR_Bullet_Fire 0xe285ad // func - void (gentity_s *attacker, float spread, the shot's parameters, gentity_s *weapon?, int): the server fires a bullet. The parameters begin with the shot's forward, right and up (3 floats each) and its muzzle (Windows 0x141580000)
 #define ADDR_CG_DrawCrosshairTest 0xd54e99 // func - bool (cg_t *, playerState_s *): whether a crosshair is drawn at all; no while the view is third person (cg + 0x11a8c9), unless the weapon has flag 0x4000 (Windows 0x1406e9c90)
 #define ADDR_CG_DrawCrosshair_TestReturn 0xd54fac // where the crosshair function (it starts at 0xd54f45, (int localClientNum)) goes on after asking that (Windows 0x1406d062f)
 #define ADDR_CG_DrawCrosshair_Tests 0xd555d7 // "cmp bl, 0 ; jne" in the crosshair function: behind the crosshair's colour and the test of its alpha, where the tests for the sights being up (the function's copy of the player state's +0x2fc is at rbp - 0x50) and for what the weapon is doing begin; cg_t in r13 (Windows: 0x1406d5911 and the call at 0x1406d595c, where that row of tests is a function of its own, 0x1406c5aa0)
