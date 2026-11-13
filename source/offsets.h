@@ -217,7 +217,6 @@
 #define ADDR_GameTypeSettings_GetFloat 0xd973da // func - float (const char *name, bool)
 
 // T7Overcharged's movement patch fastjump (aae_move_fastjump.c)
-#define ADDR_PM_Accelerate 0x1147ed9 // func - void (playerState_s *, pml_t *, const vec3 wishdir, float wishspeed, float accel): adds to the velocity towards wishdir, at most up to wishspeed (Windows 0x14260ecd0, wishspeed in xmm3 and accel on the stack)
 #define ADDR_PM_AirMove_AccelerateReturn 0x1147411 // where PM_AirMove (0x1147137) goes on after the first of its two calls of it (Windows 0x14260f320)
 #define ADDR_PM_WalkMove_AccelerateReturn 0x1147096 // where PM_WalkMove (0x1146cf7) goes on after the first of its two (Windows 0x14261a6d5)
 #define ADDR_PM_CheckJump_DelayCmp 0x14dd451 // "cmp ecx, 500 ; jl <no jump>" in PM_CheckJump (0x14dd41e), ecx the command's time minus the player state's jump time (+0x110) (Windows 0x1425fce51)

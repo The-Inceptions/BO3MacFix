@@ -20,7 +20,8 @@
 // T7Overcharged changes those three tests by writing other constants into the game's compare instructions, or nops
 // over a jump. The Mac's instructions are laid out differently (the speed's "elapsed >= 350" is "elapsed > 349" here),
 // so here each compare is detoured instead: the register it compares is changed so that the Mac's own compare comes
-// to T7Overcharged's answer, and where the answer is the game's own the register stays as it is.
+// to T7Overcharged's answer. Where a sprint is already past the game's own limit the register is rewritten too (to
+// 350 or 1501): the game takes the same jump either way, and nothing behind the compare reads the register.
 // tests/test_aae_move_sprint.c goes through the values the register can hold.
 //
 // Each change acts only while T7Overcharged's movement component has started and its own switch is on
