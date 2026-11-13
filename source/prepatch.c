@@ -8,11 +8,17 @@
 //   so hooking it only means storing a pointer in its slot, in __DATA's zero-filled tail
 // - each "mov r32, imm32" a setting changes jumps to a stub that loads the value from a slot when it's set
 // - each call through objc_msgSend's pointer a setting redirects calls a stub that jumps through a slot when it's set
-// - a header at the start of the padding after __TEXT's last section lists all of it, with the original bytes
-// The stubs follow the header. That padding is 3968 bytes, and a hook takes 42 to 51 of them (16 in the header, the
-// rest for its stub), so the stubs that don't fit there go into __TEXT's other padding: the 2 KB between the Mach-O
-// header's load commands and the first section, which is mapped and executable like the rest of the segment.
-// Both together are all the room there is: about 120 hooks.
+// - a header at the start of the padding after __TEXT's last section says which BO3MacFix made the copy, from what
+// The stubs follow the header. That padding is 3968 bytes, and a hook's stub takes 26 to 35 of them, so the stubs that
+// don't fit there go into __TEXT's other padding: the 2 KB between the Mach-O header's load commands and the first
+// section, which is mapped and executable like the rest of the segment. Both together are all the room there is:
+// about 190 hooks.
+//
+// The copy doesn't list what it changed. It doesn't have to: a copy only counts as ours when the tables it was made
+// from are the tables below (table_id), and then they say where every change is and what was there before. Where a
+// stub is and which slot is its own, the copy's code says itself (stub_at). A copy made from other tables, or in
+// another format, is one whose changes can't be known: its hooks still work through its stubs, everything else is
+// done as if there were no copy.
 //
 // The flags don't come through a stub: its compare runs first, set or not. At a function's start nobody minds. A
 // place in the middle of a function (a detour, see detour.h, or a setting's "mov") may only be one where nothing
@@ -41,8 +47,9 @@
 
 #define Prepatch_Magic "BO3MFPP1"
 // table_id only covers the tables below, so bump this whenever BO3MacFix_BuildPrepatched writes anything differently
-// (the stubs, the header or the records): a copy with the same version and table_id counts as up to date
-#define Prepatch_Version 4
+// (the stubs, the header, the order the slots are given out in): a copy with the same version and table_id counts as
+// up to date, and everything about it is then taken from the tables
+#define Prepatch_Version 5
 #define Stub_Max 48 // more than any stub takes: a hook's is 16 bytes, its instructions (10 at most, 14 with a short jump made near) and a 5-byte jmp
 #define Game_Base 0x100000000ULL
 
@@ -194,39 +201,22 @@ static const char tuver_original[4] = { 't', 'u', '3', '0' }, tuver_patched[4] =
 
 #pragma mark - the copy's header
 
+#define Hook_Count (sizeof(hook_defs) / sizeof(hook_defs[0]))
+#define Value_Count (sizeof(value_defs) / sizeof(value_defs[0]))
+#define Call_Count (sizeof(call_defs) / sizeof(call_defs[0]))
+#define Patch_Count (sizeof(patch_defs) / sizeof(patch_defs[0]))
+#define Netver_Count (sizeof(netver_addresses) / sizeof(netver_addresses[0]))
+#define Tuver_Count (sizeof(tuver_addresses) / sizeof(tuver_addresses[0]))
+
+// Who made the copy, and from what. The one thing about the copy's changes that the tables don't say is kept here
+// too: how far behind its address each version patch was found (patch_near).
 typedef struct {
     char magic[8];
     uint32_t version;
-    uint32_t table_id;     // table_id() of the BO3MacFix that made it
-    uint32_t hook_count;
-    uint32_t value_count;
-    uint32_t call_count;
-    uint32_t patch_count;
-    uint32_t hooks_offset; // the records, as offsets from the game's base address
-    uint32_t values_offset;
-    uint32_t calls_offset;
-    uint32_t patches_offset;
-    uint8_t source_sha256[CC_SHA256_DIGEST_LENGTH]; // the original it was made from
+    uint32_t table_id;                               // table_id() of the BO3MacFix that made it
+    uint8_t source_sha256[CC_SHA256_DIGEST_LENGTH];  // the original it was made from
+    uint8_t version_patch_at[Netver_Count + Tuver_Count];
 } prepatch_header_t;
-
-// A hooked function: where it is and the bytes the jump to its stub replaced. Where the stub is isn't kept: the jump
-// says, and the stub begins with "cmp qword [rip + slot], 0" and has its trampoline 16 bytes in (stub_at below).
-typedef struct {
-    uint32_t function;
-    uint8_t length;
-    uint8_t original[11];
-} prepatch_hook_t;
-
-// a value or call site
-typedef struct {
-    uint32_t site;
-    uint32_t slot;
-    uint8_t length;
-    uint8_t pad[3];
-    uint8_t original[8];
-} prepatch_site_t;
-
-// byte patch records follow as { uint32_t offset; uint8_t length; uint8_t original[length]; }
 
 static uint32_t fnv1a(uint32_t hash, const void *data, size_t size) {
     for (size_t i = 0; i < size; i++)
@@ -240,7 +230,7 @@ static uint32_t table_id(void) {
     hash = fnv1a(hash, hook_defs, sizeof(hook_defs));
     hash = fnv1a(hash, value_defs, sizeof(value_defs));
     hash = fnv1a(hash, call_defs, sizeof(call_defs));
-    for (size_t i = 0; i < sizeof(patch_defs) / sizeof(patch_defs[0]); i++) {
+    for (size_t i = 0; i < Patch_Count; i++) {
         hash = fnv1a(hash, &patch_defs[i].offset, sizeof(uint32_t));
         hash = fnv1a(hash, patch_defs[i].original, patch_defs[i].length);
         hash = fnv1a(hash, patch_defs[i].patched ? patch_defs[i].patched : "\x90", patch_defs[i].patched ? patch_defs[i].length : 1);
@@ -255,10 +245,9 @@ static uint32_t table_id(void) {
 
 static uint64_t base = 0;
 static uint64_t text_end = 0, image_end = 0;
-static bool other_format = false; // the game runs from a copy, but one of another format than this BO3MacFix makes
+// the game runs from a copy, but not one made from this BO3MacFix's tables in this format: what it changed isn't known
+static bool foreign = false;
 static const prepatch_header_t *header = NULL;
-static const prepatch_hook_t *hooks = NULL;
-static const prepatch_site_t *values = NULL, *calls = NULL;
 static int hooks_set = 0, values_set = 0, calls_set = 0, patches_in_place = 0, in_memory = 0, refused = 0;
 
 bool prepatch_active(void) {
@@ -286,7 +275,7 @@ static void find_image_bounds(uint64_t base_address) {
 bool prepatch_init(uint64_t base_address) {
     base = base_address;
     header = NULL;
-    other_format = false;
+    foreign = false;
     find_image_bounds(base_address);
     const prepatch_header_t *h = (const prepatch_header_t *)(base + ADDR_Prepatch_Header);
     if (memcmp(h->magic, Prepatch_Magic, sizeof(h->magic)) != 0)
@@ -294,19 +283,66 @@ bool prepatch_init(uint64_t base_address) {
     if (h->version != Prepatch_Version) {
         printf("BO3MacFix: the pre-patched executable has format %u, this BO3MacFix needs %u: start the game through "
                "Steam to remake it\n", h->version, Prepatch_Version);
-        other_format = true;
+        foreign = true;
+        return false;
+    }
+    if (h->table_id != table_id()) {
+        printf("BO3MacFix: the pre-patched executable was made by a different BO3MacFix: start the game through "
+               "Steam to remake it\n");
+        foreign = true;
         return false;
     }
     header = h;
-    hooks = (const prepatch_hook_t *)(base + h->hooks_offset);
-    values = (const prepatch_site_t *)(base + h->values_offset);
-    calls = (const prepatch_site_t *)(base + h->calls_offset);
-    printf("BO3MacFix: running from the pre-patched executable (%u hooks, %u settings, %u calls, %u byte patches)\n",
-           h->hook_count, h->value_count, h->call_count, h->patch_count);
-    if (h->table_id != table_id())
-        printf("BO3MacFix: the pre-patched executable was made by a different BO3MacFix, start the game through "
-               "Steam to remake it\n");
+    printf("BO3MacFix: running from the pre-patched executable (%zu hooks, %zu settings, %zu calls, %zu byte patches)\n",
+           Hook_Count, Value_Count, Call_Count, Patch_Count + Netver_Count + Tuver_Count);
     return true;
+}
+
+// One of the places the copy changed, and the bytes the game has there: every hook, setting, call and byte patch in
+// turn. False behind the last one. All of it comes from the tables, which are the copy's own (prepatch_init).
+static bool change_at(size_t index, uint32_t *at, uint32_t *length, const uint8_t **original) {
+    if (index < Hook_Count) {
+        *at = hook_defs[index].function;
+        *length = hook_defs[index].length;
+        *original = hook_defs[index].stolen;
+        return true;
+    }
+    index -= Hook_Count;
+    if (index < Value_Count) {
+        *at = value_defs[index].site;
+        *length = sizeof(value_defs[index].original);
+        *original = value_defs[index].original;
+        return true;
+    }
+    index -= Value_Count;
+    if (index < Call_Count) {
+        *at = call_defs[index].site;
+        *length = sizeof(call_defs[index].original);
+        *original = call_defs[index].original;
+        return true;
+    }
+    index -= Call_Count;
+    if (index < Patch_Count) {
+        *at = patch_defs[index].offset;
+        *length = patch_defs[index].length;
+        *original = (const uint8_t *)patch_defs[index].original;
+        return true;
+    }
+    index -= Patch_Count;
+    if (index < Netver_Count) {
+        *at = netver_addresses[index] + header->version_patch_at[index];
+        *length = sizeof(netver_original);
+        *original = (const uint8_t *)&netver_original;
+        return true;
+    }
+    index -= Netver_Count;
+    if (index < Tuver_Count) {
+        *at = tuver_addresses[index] + header->version_patch_at[Netver_Count + index];
+        *length = sizeof(tuver_original);
+        *original = (const uint8_t *)tuver_original;
+        return true;
+    }
+    return false;
 }
 
 typedef struct {
@@ -331,47 +367,22 @@ const void *prepatch_original_code(const void *address, size_t size) {
         return address;
     overlay_t o = { (uint64_t)address, (uint64_t)address + size, buffer, false };
     memcpy(buffer, address, size);
-    for (uint32_t i = 0; i < header->hook_count; i++)
-        overlay(base + hooks[i].function, hooks[i].original, hooks[i].length, &o);
-    for (uint32_t i = 0; i < header->value_count; i++)
-        overlay(base + values[i].site, values[i].original, values[i].length, &o);
-    for (uint32_t i = 0; i < header->call_count; i++)
-        overlay(base + calls[i].site, calls[i].original, calls[i].length, &o);
-    const uint8_t *p = (const uint8_t *)(base + header->patches_offset);
-    for (uint32_t i = 0; i < header->patch_count; i++) {
-        uint32_t offset;
-        memcpy(&offset, p, sizeof(offset));
-        overlay(base + offset, p + 5, p[4], &o);
-        p += 5 + p[4];
-    }
+    uint32_t at, length;
+    const uint8_t *original;
+    for (size_t i = 0; change_at(i, &at, &length, &original); i++)
+        overlay(base + at, original, length, &o);
     return o.changed ? buffer : address;
 }
 
 // whether the copy changed any of these bytes (of any size, unlike prepatch_original_code)
 static bool copy_changed(const void *address, size_t size) {
     uint64_t start = (uint64_t)address, end = start + size;
-#define Overlaps(at, length) ((at) < end && start < (at) + (length))
-    for (uint32_t i = 0; i < header->hook_count; i++) {
-        if (Overlaps(base + hooks[i].function, hooks[i].length))
+    uint32_t at, length;
+    const uint8_t *original;
+    for (size_t i = 0; change_at(i, &at, &length, &original); i++) {
+        if (base + at < end && start < base + at + length)
             return true;
     }
-    for (uint32_t i = 0; i < header->value_count; i++) {
-        if (Overlaps(base + values[i].site, values[i].length))
-            return true;
-    }
-    for (uint32_t i = 0; i < header->call_count; i++) {
-        if (Overlaps(base + calls[i].site, calls[i].length))
-            return true;
-    }
-    const uint8_t *p = (const uint8_t *)(base + header->patches_offset);
-    for (uint32_t i = 0; i < header->patch_count; i++) {
-        uint32_t offset;
-        memcpy(&offset, p, sizeof(offset));
-        if (Overlaps(base + offset, p[4]))
-            return true;
-        p += 5 + p[4];
-    }
-#undef Overlaps
     return false;
 }
 
@@ -392,17 +403,30 @@ static bool in_stub_room(uint32_t offset, uint32_t length) {
             length <= ADDR_Prepatch_Stubs2End - offset);
 }
 
-// The slot and the trampoline of a hooked function's stub (offsets from the base), read from the copy's own code:
-// the function begins with a jump to the stub, the stub with "cmp qword [rip + slot], 0 ; je ; jmp [rip + slot]"
-// (both for the same slot), and the trampoline follows those 16 bytes. False when the copy doesn't have that there.
-static bool stub_at(uint32_t function, uint32_t *slot, uint32_t *trampoline) {
-    const uint8_t *entry = (const uint8_t *)(base + function);
-    int32_t relative, relative_of_jump;
-    if (entry[0] != 0xE9)
-        return false;
+static bool is_slot(uint32_t offset) {
+    return offset >= ADDR_Prepatch_Slots && offset <= ADDR_Prepatch_SlotsEnd - 8;
+}
+
+// where the jump or call (opcode) at a place the copy changed goes, when that is into the stubs' room with at least
+// length bytes left there. 0 when it isn't such a jump.
+static uint32_t stub_of(uint32_t site, uint8_t opcode, uint32_t length) {
+    const uint8_t *entry = (const uint8_t *)(base + site);
+    int32_t relative;
+    if (entry[0] != opcode)
+        return 0;
     memcpy(&relative, entry + 1, sizeof(relative));
-    uint32_t stub = function + 5 + (uint32_t)relative;
-    if (!in_stub_room(stub, 16))
+    uint32_t stub = site + 5 + (uint32_t)relative;
+    return in_stub_room(stub, length) ? stub : 0;
+}
+
+// The slot and the trampoline of a stub that begins "cmp qword [rip + slot], 0 ; je ; jmp [rip + slot]" (both for the
+// same slot), read from the copy's own code: a hooked function begins with a jump (0xE9) to such a stub, a redirected
+// call is a call (0xE8) to one. What follows those 16 bytes is the trampoline (offsets from the base). False when the
+// copy doesn't have that there.
+static bool stub_at(uint32_t site, uint8_t opcode, uint32_t *slot, uint32_t *trampoline) {
+    int32_t relative, relative_of_jump;
+    uint32_t stub = stub_of(site, opcode, 16);
+    if (stub == 0)
         return false;
     const uint8_t *code = (const uint8_t *)(base + stub);
     if (code[0] != 0x48 || code[1] != 0x83 || code[2] != 0x3D || code[7] != 0x00 || code[8] != 0x74 ||
@@ -412,8 +436,31 @@ static bool stub_at(uint32_t function, uint32_t *slot, uint32_t *trampoline) {
     memcpy(&relative_of_jump, code + 12, sizeof(relative_of_jump));
     *slot = stub + 8 + (uint32_t)relative;
     *trampoline = stub + 16;
-    return stub + 16 + (uint32_t)relative_of_jump == *slot && *slot >= ADDR_Prepatch_Slots &&
-           *slot <= ADDR_Prepatch_SlotsEnd - 8;
+    return stub + 16 + (uint32_t)relative_of_jump == *slot && is_slot(*slot);
+}
+
+// The slot of a setting's stub, read from the copy's code like a hook's: the "mov r32, imm32" became a jump to a stub
+// that begins "mov r32, [rip + slot]" for the same register.
+static bool value_stub_at(const value_def_t *def, uint32_t *slot) {
+    uint8_t reg = def->original[0] - 0xB8;
+    int32_t relative;
+    uint32_t stub = stub_of(def->site, 0xE9, 6);
+    if (stub == 0)
+        return false;
+    const uint8_t *code = (const uint8_t *)(base + stub);
+    if (code[0] != 0x8B || code[1] != (0x05 | reg << 3))
+        return false;
+    memcpy(&relative, code + 2, sizeof(relative));
+    *slot = stub + 6 + (uint32_t)relative;
+    return is_slot(*slot);
+}
+
+static const value_def_t *value_def_at(uint32_t site) {
+    for (size_t i = 0; i < Value_Count; i++) {
+        if (value_defs[i].site == site)
+            return &value_defs[i];
+    }
+    return NULL;
 }
 
 // stores a hook in its stub's slot. The original first: a hook installed while the game runs can be called as soon as
@@ -424,15 +471,21 @@ static void set_slot(uint32_t slot, uint32_t trampoline, void *fake_func, void *
     hooks_set++;
 }
 
+bool prepatch_has_hook(uint32_t offset) {
+    for (size_t i = 0; prepatch_active() && i < Hook_Count; i++)
+        if (hook_defs[i].function == offset)
+            return true;
+    return false;
+}
+
 // replaces DobbyHook (see dobby.h): in the pre-patched copy, hooking a function only stores its slot
 int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     uint32_t slot, trampoline;
-    if (other_format && in_game_image(address)) {
-        // A copy of another format: its header can't be read, but a function it hooked still begins with a jump to
-        // a stub, and a stub says everything about itself. Hooking such a function in memory instead would put a
-        // jump over the copy's own, and where that is longer than what the copy replaced, the stub's way back would
-        // land inside it.
-        if (stub_at((uint32_t)((uint64_t)address - base), &slot, &trampoline)) {
+    if (foreign && in_game_image(address)) {
+        // A copy whose changes aren't known: a function it hooked still begins with a jump to a stub, and a stub says
+        // everything about itself. Hooking such a function in memory instead would put a jump over the copy's own,
+        // and where that is longer than what the copy replaced, the stub's way back would land inside it.
+        if (stub_at((uint32_t)((uint64_t)address - base), 0xE9, &slot, &trampoline)) {
             set_slot(slot, trampoline, fake_func, out_origin_func);
             return 0;
         }
@@ -441,16 +494,14 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     if (!prepatch_active() || !in_game_image(address))
         return DobbyHook(address, fake_func, out_origin_func);
     uint32_t offset = (uint32_t)((uint64_t)address - base);
-    for (uint32_t i = 0; i < header->hook_count; i++) {
-        if (hooks[i].function == offset) {
-            if (!stub_at(offset, &slot, &trampoline)) {
-                refused++;
-                printf("BO3MacFix: can't hook %08x, the pre-patched executable's stub for it isn't as expected\n", offset);
-                return -1;
-            }
-            set_slot(slot, trampoline, fake_func, out_origin_func);
-            return 0;
+    if (prepatch_has_hook(offset)) {
+        if (!stub_at(offset, 0xE9, &slot, &trampoline)) {
+            refused++;
+            printf("BO3MacFix: can't hook %08x, the pre-patched executable's stub for it isn't as expected\n", offset);
+            return -1;
         }
+        set_slot(slot, trampoline, fake_func, out_origin_func);
+        return 0;
     }
     // a hook the copy doesn't have: hooking it in memory still works, but brings back Rosetta's JIT. Dobby's jump is
     // at most 14 bytes.
@@ -478,15 +529,18 @@ int BO3MacFix_CodePatch(void *address, uint8_t *buffer, uint32_t buffer_size) {
         patches_in_place++;
         return 0;
     }
-    for (uint32_t i = 0; i < header->value_count; i++) {
-        const prepatch_site_t *v = &values[i];
-        if (v->site == offset && buffer_size == v->length && buffer[0] == v->original[0]) {
-            uint32_t value;
-            memcpy(&value, buffer + 1, sizeof(value));
-            __atomic_store_n((uint32_t *)(base + v->slot), value, __ATOMIC_RELAXED);
-            values_set++;
-            return 0;
+    const value_def_t *value = value_def_at(offset);
+    if (value != NULL && buffer_size == sizeof(value->original) && buffer[0] == value->original[0]) {
+        uint32_t slot, wanted;
+        if (!value_stub_at(value, &slot)) {
+            refused++;
+            printf("BO3MacFix: can't patch %08x, the pre-patched executable's stub for it isn't as expected\n", offset);
+            return -1;
         }
+        memcpy(&wanted, buffer + 1, sizeof(wanted));
+        __atomic_store_n((uint32_t *)(base + slot), wanted, __ATOMIC_RELAXED);
+        values_set++;
+        return 0;
     }
     // a patch the copy doesn't have: making it in memory still works, but brings back Rosetta's JIT
     if (copy_changed(address, buffer_size)) {
@@ -500,36 +554,23 @@ int BO3MacFix_CodePatch(void *address, uint8_t *buffer, uint32_t buffer_size) {
 }
 
 bool prepatch_set_value(uint32_t site, uint32_t value) {
-    if (!prepatch_active())
+    uint32_t slot;
+    const value_def_t *def = prepatch_active() ? value_def_at(site) : NULL;
+    if (def == NULL || !value_stub_at(def, &slot))
         return false;
-    for (uint32_t i = 0; i < header->value_count; i++) {
-        if (values[i].site == site) {
-            __atomic_store_n((uint32_t *)(base + values[i].slot), value, __ATOMIC_RELAXED);
-            return true;
-        }
-    }
-    return false;
-}
-
-bool prepatch_has_hook(uint32_t offset) {
-    for (uint32_t i = 0; prepatch_active() && i < header->hook_count; i++)
-        if (hooks[i].function == offset)
-            return true;
-    return false;
+    __atomic_store_n((uint32_t *)(base + slot), value, __ATOMIC_RELAXED);
+    return true;
 }
 
 bool prepatch_redirect_call(uint32_t offset, void *function) {
-    if (!prepatch_active())
+    // nothing but a call the copy redirected is a call into the stubs' room, so the copy's code answers this alone
+    uint32_t slot, original_call;
+    if (!prepatch_active() || !stub_at(offset, 0xE8, &slot, &original_call))
         return false;
-    for (uint32_t i = 0; i < header->call_count; i++) {
-        if (calls[i].site == offset) {
-            // can be set while the game runs (from the settings menu); like a hook's, never back to 0
-            __atomic_store_n((void **)(base + calls[i].slot), function, __ATOMIC_RELEASE);
-            calls_set++;
-            return true;
-        }
-    }
-    return false;
+    // can be set while the game runs (from the settings menu); like a hook's, never back to 0
+    __atomic_store_n((void **)(base + slot), function, __ATOMIC_RELEASE);
+    calls_set++;
+    return true;
 }
 
 // how many of the game's code pages have been written to (copied on write) since it was loaded
@@ -555,7 +596,7 @@ void prepatch_report(void) {
         return;
     printf("BO3MacFix: pre-patched executable: %i of %u hooks set, %i settings, %i calls redirected, %i patches "
            "already in place, %i done in memory, %i refused, game code pages written: %i\n",
-           hooks_set, header->hook_count, values_set, calls_set, patches_in_place, in_memory, refused,
+           hooks_set, (uint32_t)Hook_Count, values_set, calls_set, patches_in_place, in_memory, refused,
            written_code_pages());
 }
 
@@ -563,7 +604,7 @@ void prepatch_report_at_quit(void) {
     if (!prepatch_active())
         return;
     printf("BO3MacFix: pre-patched executable at quit: %i of %u hooks set, %i done in memory, %i refused, game code "
-           "pages written: %i\n", hooks_set, header->hook_count, in_memory, refused, written_code_pages());
+           "pages written: %i\n", hooks_set, (uint32_t)Hook_Count, in_memory, refused, written_code_pages());
 }
 
 #pragma mark - building the copy
@@ -576,8 +617,6 @@ typedef struct {
     uint32_t first_area_used;
     uint32_t claimed[1024][2];  // ranges already changed, to catch overlaps
     int claimed_count;
-    uint8_t records[4096];      // the byte patch records
-    size_t records_size;
     uint32_t patch_count;
     char *message;
     size_t message_size;
@@ -604,18 +643,12 @@ static int claim(build_t *b, uint32_t offset, uint32_t length, const char *what)
     return 0;
 }
 
-// applies a byte patch and records the original bytes
+// applies a byte patch
 static int patch(build_t *b, uint32_t offset, const void *original, const void *patched, uint32_t length) {
     if (offset + length > b->size || memcmp(b->data + offset, original, length) != 0)
         return fail(b->message, b->message_size, "unexpected code at %08x", offset);
     if (claim(b, offset, length, "a byte patch") != 0)
         return -1;
-    if (b->records_size + 5 + length > sizeof(b->records) || length > 255)
-        return fail(b->message, b->message_size, "too many byte patches");
-    memcpy(b->records + b->records_size, &offset, sizeof(offset));
-    b->records[b->records_size + 4] = (uint8_t)length;
-    memcpy(b->records + b->records_size + 5, original, length);
-    b->records_size += 5 + length;
     b->patch_count++;
     if (patched != NULL)
         memcpy(b->data + offset, patched, length);
@@ -624,9 +657,10 @@ static int patch(build_t *b, uint32_t offset, const void *original, const void *
     return 0;
 }
 
-// the patch network_version_patch makes for each of these: the first match within 16 bytes of the address
+// the patch network_version_patch makes for each of these: the first match within 16 bytes of the address. How far
+// behind its address each one was goes into found_at, for the header.
 static int patch_near(build_t *b, const uint32_t *addresses, size_t count, const void *original, const void *patched,
-                      uint32_t length) {
+                      uint32_t length, uint8_t *found_at) {
     for (size_t i = 0; i < count; i++) {
         int o = 0;
         while (o < 16 && (addresses[i] + o + length > b->size || memcmp(b->data + addresses[i] + o, original, length) != 0))
@@ -635,6 +669,7 @@ static int patch_near(build_t *b, const uint32_t *addresses, size_t count, const
             return fail(b->message, b->message_size, "unexpected code near %08x", addresses[i]);
         if (patch(b, addresses[i] + o, original, patched, length) != 0)
             return -1;
+        found_at[i] = (uint8_t)o;
     }
     return 0;
 }
@@ -646,7 +681,7 @@ static void put_rel32(uint8_t *at, uint64_t target, uint64_t next) {
 
 static uint32_t first_area_end = ADDR_Prepatch_CodeEnd; // a variable for the tests, which fill it sooner
 
-// where the next stub goes, 0 when there's no room left: after the header's records, then in the padding before __text
+// where the next stub goes, 0 when there's no room left: after the header, then in the padding before __text
 static uint32_t stub_room(build_t *b) {
     if (!b->second_area && b->code + Stub_Max > first_area_end) {
         b->first_area_used = b->code - ADDR_Prepatch_Header;
@@ -867,18 +902,12 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         return fail(message, message_size, "out of memory");
     b->message = message;
     b->message_size = message_size;
-    prepatch_header_t h = { .version = Prepatch_Version, .table_id = table_id() };
+    prepatch_header_t h;
+    memset(&h, 0, sizeof(h)); // its padding too: the same original always gives the same copy
     memcpy(h.magic, Prepatch_Magic, sizeof(h.magic));
+    h.version = Prepatch_Version;
+    h.table_id = table_id();
     int result = -1;
-    const size_t hook_count = sizeof(hook_defs) / sizeof(hook_defs[0]);
-    const size_t value_count = sizeof(value_defs) / sizeof(value_defs[0]);
-    const size_t call_count = sizeof(call_defs) / sizeof(call_defs[0]);
-    prepatch_hook_t hook_records[sizeof(hook_defs) / sizeof(hook_defs[0])];
-    prepatch_site_t value_records[sizeof(value_defs) / sizeof(value_defs[0])];
-    prepatch_site_t call_records[sizeof(call_defs) / sizeof(call_defs[0])];
-    memset(hook_records, 0, sizeof(hook_records));
-    memset(value_records, 0, sizeof(value_records));
-    memset(call_records, 0, sizeof(call_records));
 
     if (sha256_file(original, h.source_sha256, &b->data, &b->size) != 0) {
         fail(message, message_size, "couldn't read %s", original);
@@ -888,26 +917,18 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         goto done;
 
     // the byte patches
-    for (size_t i = 0; i < sizeof(patch_defs) / sizeof(patch_defs[0]); i++) {
+    for (size_t i = 0; i < Patch_Count; i++) {
         if (patch(b, patch_defs[i].offset, patch_defs[i].original, patch_defs[i].patched, patch_defs[i].length) != 0)
             goto done;
     }
-    if (patch_near(b, netver_addresses, sizeof(netver_addresses) / sizeof(netver_addresses[0]), &netver_original,
-                   &netver_patched, sizeof(netver_original)) != 0 ||
-        patch_near(b, tuver_addresses, sizeof(tuver_addresses) / sizeof(tuver_addresses[0]), tuver_original,
-                   tuver_patched, sizeof(tuver_original)) != 0)
+    if (patch_near(b, netver_addresses, Netver_Count, &netver_original, &netver_patched, sizeof(netver_original),
+                   h.version_patch_at) != 0 ||
+        patch_near(b, tuver_addresses, Tuver_Count, tuver_original, tuver_patched, sizeof(tuver_original),
+                   h.version_patch_at + Netver_Count) != 0)
         goto done;
 
-    // the header and its records come first in the padding, then the stubs
-    h.hook_count = (uint32_t)hook_count;
-    h.value_count = (uint32_t)value_count;
-    h.call_count = (uint32_t)call_count;
-    h.patch_count = b->patch_count;
-    h.hooks_offset = ADDR_Prepatch_Header + sizeof(h);
-    h.values_offset = h.hooks_offset + sizeof(hook_records);
-    h.calls_offset = h.values_offset + sizeof(value_records);
-    h.patches_offset = h.calls_offset + sizeof(call_records);
-    uint32_t header_end = h.patches_offset + (uint32_t)b->records_size;
+    // the header comes first in the padding, then the stubs. The slots are given out in the stubs' order.
+    uint32_t header_end = ADDR_Prepatch_Header + (uint32_t)sizeof(h);
     uint32_t slot = ADDR_Prepatch_Slots;
     b->code = header_end;
     if (header_end > first_area_end) {
@@ -917,7 +938,7 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
     if (claim(b, ADDR_Prepatch_Header, header_end - ADDR_Prepatch_Header, "the header") != 0)
         goto done;
 
-    for (size_t i = 0; i < hook_count; i++) {
+    for (size_t i = 0; i < Hook_Count; i++) {
         const hook_def_t *def = &hook_defs[i];
         uint32_t f = def->function, code = stub_room(b);
         if (code == 0) {
@@ -925,7 +946,7 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
             goto done;
         }
         if (f + 16 > ADDR_Prepatch_Header || f < ADDR_Prepatch_Stubs2End || memcmp(b->data + f, def->stolen, def->length) != 0 ||
-            def->length < 5 || def->length > sizeof(def->stolen) || def->length > sizeof(hook_records[i].original)) {
+            def->length < 5 || def->length > sizeof(def->stolen)) {
             fail(message, message_size, "unexpected code at %08x", f);
             goto done;
         }
@@ -956,13 +977,11 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         b->data[f] = 0xE9;
         put_rel32(b->data + f + 1, code, f + 5);
         memset(b->data + f + 5, 0x90, def->length - 5);
-        hook_records[i] = (prepatch_hook_t){ .function = f, .length = def->length };
-        memcpy(hook_records[i].original, def->stolen, def->length);
         slot += 8;
         b->code = code + (uint32_t)n;
     }
 
-    for (size_t i = 0; i < value_count; i++) {
+    for (size_t i = 0; i < Value_Count; i++) {
         const value_def_t *def = &value_defs[i];
         uint32_t site = def->site, code = stub_room(b);
         uint8_t reg = def->original[0] - 0xB8;
@@ -989,13 +1008,11 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         memcpy(b->data + code, stub, n);
         b->data[site] = 0xE9;
         put_rel32(b->data + site + 1, code, site + 5);
-        value_records[i] = (prepatch_site_t){ .site = site, .slot = slot, .length = 5 };
-        memcpy(value_records[i].original, def->original, 5);
         slot += 8;
         b->code = code + (uint32_t)n;
     }
 
-    for (size_t i = 0; i < call_count; i++) {
+    for (size_t i = 0; i < Call_Count; i++) {
         const call_def_t *def = &call_defs[i];
         uint32_t site = def->site, code = stub_room(b);
         if (code == 0) {
@@ -1025,8 +1042,6 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         b->data[site] = 0xE8;                                                // call stub; nop
         put_rel32(b->data + site + 1, code, site + 5);
         b->data[site + 5] = 0x90;
-        call_records[i] = (prepatch_site_t){ .site = site, .slot = slot, .length = 6 };
-        memcpy(call_records[i].original, def->original, 6);
         slot += 8;
         b->code = code + (uint32_t)n;
     }
@@ -1036,10 +1051,6 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         goto done;
     }
     memcpy(b->data + ADDR_Prepatch_Header, &h, sizeof(h));
-    memcpy(b->data + h.hooks_offset, hook_records, sizeof(hook_records));
-    memcpy(b->data + h.values_offset, value_records, sizeof(value_records));
-    memcpy(b->data + h.calls_offset, call_records, sizeof(call_records));
-    memcpy(b->data + h.patches_offset, b->records, b->records_size);
 
     int fd = open(output, O_WRONLY | O_CREAT | O_TRUNC, 0755);
     if (fd < 0) {
@@ -1061,7 +1072,7 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
     }
     uint32_t used = b->second_area ? b->first_area_used + (b->code - ADDR_Prepatch_Stubs2) : b->code - ADDR_Prepatch_Header;
     snprintf(message, message_size, "made the pre-patched executable: %zu hooks, %zu settings, %zu calls, %u byte "
-             "patches, %u of %u bytes of padding used", hook_count, value_count, call_count, b->patch_count, used,
+             "patches, %u of %u bytes of padding used", Hook_Count, Value_Count, Call_Count, b->patch_count, used,
              (first_area_end - ADDR_Prepatch_Header) + (ADDR_Prepatch_Stubs2End - ADDR_Prepatch_Stubs2));
     result = 0;
 done:
