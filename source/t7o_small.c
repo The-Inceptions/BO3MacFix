@@ -11,6 +11,7 @@
 // as down plus that key with each mapping's keys; on an exact match it runs the Lua in the UI's Lua VM, under the
 // VM's own critical section, before the game gets the event. This does the same at the Mac's Sys_QueEvent (the same
 // function: the same event queue, the same calls from the window's message handler).
+#include <dispatch/dispatch.h>
 #include <errno.h>
 #include <limits.h>
 #include <os/lock.h>
@@ -210,6 +211,52 @@ const t7o_dvar_change t7o_network_defaults[] = {
     { "maxvoicepacketsperframe", false, 0, "0" },
 };
 const size_t t7o_network_default_count = sizeof(t7o_network_defaults) / sizeof(t7o_network_defaults[0]);
+
+// T7Overcharged's dvar_patches component (T7Overcharged.dll 0x18008e35c, scheduled once on its main pipeline 10 s
+// after it starts): the flags are replaced, not some bits cleared: 0x1 (only "archive": saved in the config), 0 or
+// 0x40. On the Mac as on Windows 0x100 is "cheat protected", 0x20 read only, 0x80 write protected and 0x10 latched for
+// a set from the console (the Mac's Dvar_SetVariant, 0x100fa0c1d). Three get a value after their flags; T7Overcharged
+// sets com_disable_popups with Dvar_SetFromStringByNameFromSource(name, "0", 0, 0), which is what the Mac's
+// Dvar_SetFromStringByName (source 0, flags 0) calls. r_glow_allowed isn't in the Mac's game, so it is left out there
+// as T7Overcharged leaves out a dvar it doesn't find.
+const t7o_dvar_change t7o_dvar_patches[] = {
+    { "cg_fovscale", true, 0x1, NULL },
+    { "ui_enabled", true, 0x1, NULL },
+    { "fx_drawclouds", true, 0x0, NULL },
+    { "fx_enable", true, 0x0, NULL },
+    { "gpad_stick_deadzone_max", true, 0x1, NULL },
+    { "gpad_stick_deadzone_min", true, 0x1, NULL },
+    { "r_dof_enable", true, 0x0, NULL },
+    { "r_fog", true, 0x0, NULL },
+    { "r_glow_allowed", true, 0x0, NULL },
+    { "r_lodbiasrigid", true, 0x0, NULL },
+    { "r_lodThresholdPixelArea", true, 0x0, NULL },
+    { "r_spotLightEntityShadows", true, 0x0, NULL },
+    { "r_viewModelSelfShadow", true, 0x0, NULL },
+    { "r_viewModelSpotOmniShadowResolution", true, 0x0, NULL },
+    { "r_viewModelSunShadowResolution", true, 0x0, NULL },
+    { "r_volumetric_lighting_mode", true, 0x0, NULL },
+    { "r_zfar", true, 0x0, NULL },
+    { "ui_error_callstack_ship", true, 0x0, "1" },
+    { "ui_error_report_delay", true, 0x0, "0" },
+    { "com_disable_popups", true, 0x0, "0" },
+    { "doublejump_enabled", true, 0x40, NULL },
+    { "juke_enabled", true, 0x40, NULL },
+    { "mantle_enabled", true, 0x40, NULL },
+    { "playerEnergy_enabled", true, 0x40, NULL },
+    { "sprintLeap_enabled", true, 0x40, NULL },
+    { "traverse_mode", true, 0x40, NULL },
+    { "trm_enabled", true, 0x40, NULL }, // only the flags: the mantling piece (aae_mantle.c) sets its zombies value
+    { "steamLobby_frameEnable", true, 0x0, NULL },
+    { "steamP2P_Enable", true, 0x0, NULL },
+    { "live_presence_platform", true, 0x0, NULL },
+    { "live_enableCounters", true, 0x0, NULL },
+    { "lobbyAdvertiseShowInMatchmaking", true, 0x0, NULL },
+    { "lobbySearchShowInMatchmaking", true, 0x0, NULL },
+    { "groups_enabled", true, 0x0, NULL },
+    { "noDW", true, 0x0, NULL },
+};
+const size_t t7o_dvar_patch_count = sizeof(t7o_dvar_patches) / sizeof(t7o_dvar_patches[0]);
 
 int t7o_session_mode(uint32_t session_mode_state) {
     return (int32_t)(session_mode_state << 28) >> 28;
@@ -450,11 +497,25 @@ static void apply_dvar_changes(const char *what, const t7o_dvar_change *changes,
     printf("T7Overcharged: %s: %d dvars' flags set, in session mode %d\n", what, flags_set, mode);
 }
 
+static void apply_dvar_patches(void *unused) {
+    (void)unused;
+    apply_dvar_changes("dvar flags", t7o_dvar_patches, t7o_dvar_patch_count);
+}
+
+// T7Overcharged's scheduler runs the patches on its main pipeline: here the main queue, which the game's main thread
+// serves while it reads its window's events
+static void schedule_on_main_queue(int seconds, void (*work)(void *)) {
+    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, (int64_t)seconds * (int64_t)NSEC_PER_SEC),
+                     dispatch_get_main_queue(), NULL, work);
+}
+static void (*schedule_after)(int seconds, void (*work)(void *)) = schedule_on_main_queue;
+
 void t7o_small_mod_loaded(void) {
     // nothing before t7o_small_install, and the first time only
     if (session_mode_state == NULL || atomic_exchange_explicit(&mod_loaded_once, true, memory_order_relaxed))
         return;
     apply_dvar_changes("network defaults", t7o_network_defaults, t7o_network_default_count);
+    schedule_after(T7o_Dvar_Patch_Delay_S, apply_dvar_patches);
 }
 
 void t7o_small_install(uint64_t base_address) {

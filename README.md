@@ -128,6 +128,12 @@ then: a game this Mac hosts sends up to 125 snapshots a second (`sv_network_fps`
 50000 bytes a second per player (`sv_maxRate`; 20000), and votes, map switching and voice packets are off
 (`g_allowvote`, `sv_mapswitch` and `maxvoicepacketsperframe` at 0). They stay so until the game quits, as on Windows.
 
+Ten seconds after it starts, T7Overcharged also gives 35 of the game's dvars fixed flags, and so does BO3MacFix: the
+field of view scale `cg_fovscale`, `r_fog`, `r_zfar`, depth of field, the shadow and volumetric settings, the
+movement ones (`doublejump_enabled`, `mantle_enabled`, `traverse_mode`...) and others can then be set from the
+console without cheats, and `cg_fovscale`, `ui_enabled` and the controller's stick deadzones are saved in the config.
+`BO3MACFIX_T7ODEBUG=1` logs each dvar's flags before and after.
+
 AAE's UI colour option also picks a mouse cursor, one of the Windows animated cursors in its `T7Overcharged/cursors`
 folder, through T7Overcharged's `cursoroverride` command. The Mac keeps its own cursor: BO3MacFix adds the command only
 so that the console doesn't say "Unknown command" at every start.

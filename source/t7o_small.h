@@ -102,6 +102,12 @@ typedef struct {
 extern const t7o_dvar_change t7o_network_defaults[];
 extern const size_t t7o_network_default_count;
 
+// its dvar_patches component, once, T7o_Dvar_Patch_Delay_S seconds after it starts: 35 dvars get fixed flags (so
+// cg_fovscale, r_fog and the like can be set from the console without cheats, and some are saved in the config)
+#define T7o_Dvar_Patch_Delay_S 10
+extern const t7o_dvar_change t7o_dvar_patches[];
+extern const size_t t7o_dvar_patch_count;
+
 // the session mode as the game's Com_SessionMode_GetMode gives it: the state's low 4 bits, with their sign
 int t7o_session_mode(uint32_t session_mode_state);
 // the dvar whose flags a change sets: for a dvar of the per-session-mode type (15), the one of the mode, or the dvar

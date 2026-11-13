@@ -587,6 +587,15 @@ static void wire_dvars(void) {
     session_mode_state = &game_session_mode;
 }
 
+// the scheduler: what was asked for
+static int scheduled, scheduled_seconds;
+static void (*scheduled_work)(void *);
+static void game_schedule(int seconds, void (*work)(void *)) {
+    scheduled++;
+    scheduled_seconds = seconds;
+    scheduled_work = work;
+}
+
 static void test_session_mode(void) {
     CHECK(t7o_session_mode(0) == 0 && t7o_session_mode(1) == 1 && t7o_session_mode(2) == 2);
     CHECK(t7o_session_mode(3) == 3);
@@ -628,6 +637,7 @@ static void test_network_defaults(void) {
 
     // against the made-up game: the Mac's flags, values and a fourth dvar the table doesn't have
     wire_dvars();
+    schedule_after = game_schedule;
     game_dvar_t *rate = add_dvar("sv_maxRate", 5, 0x0), *fps = add_dvar("sv_network_fps", 5, 0x1000);
     game_dvar_t *vote = add_dvar("g_allowvote", 0, 0x5);
     add_dvar("sv_mapswitch", 0, 0x100);
@@ -642,10 +652,12 @@ static void test_network_defaults(void) {
     CHECK(strcmp(rate->value, "50000") == 0 && strcmp(fps->value, "125") == 0 && strcmp(vote->value, "0") == 0);
     CHECK(strcmp(game_dvars[3].value, "0") == 0 && flags_of(game_dvars[3].dvar) == 0x100);
     CHECK(unknown_sets == 1); // maxvoicepacketsperframe, created as with create_if_missing
+    // and the dvar flags are asked for 10 s later
+    CHECK(scheduled == 1 && scheduled_seconds == 10 && scheduled_work == apply_dvar_patches);
     // once, as T7Overcharged's components start once
     memcpy(fps->dvar + 0x18, &(uint32_t){ 0x1000 }, sizeof(uint32_t));
     t7o_small_mod_loaded();
-    CHECK(flags_of(fps->dvar) == 0x1000 && rate->sets == 1);
+    CHECK(flags_of(fps->dvar) == 0x1000 && rate->sets == 1 && scheduled == 1);
     // with the debug lines, and a per-mode one in a mode it has
     wire_dvars();
     game_dvar_t *per_mode = add_dvar("sv_maxRate", 15, 0x100);
@@ -664,6 +676,54 @@ static void test_network_defaults(void) {
     apply_dvar_changes("network defaults", t7o_network_defaults, t7o_network_default_count);
     CHECK(flags_of(per_mode->dvar) == 0x100 && per_mode->sets == 1);
     debug = false;
+}
+
+static void test_dvar_patches(void) {
+    // T7Overcharged's 35, in its order, with its flags; values for three
+    CHECK(t7o_dvar_patch_count == 35);
+    static const struct {
+        const char *name;
+        uint32_t flags;
+        const char *value;
+    } want[] = {
+        { "cg_fovscale", 1, NULL }, { "ui_enabled", 1, NULL }, { "fx_drawclouds", 0, NULL }, { "fx_enable", 0, NULL },
+        { "gpad_stick_deadzone_max", 1, NULL }, { "gpad_stick_deadzone_min", 1, NULL }, { "r_dof_enable", 0, NULL },
+        { "r_fog", 0, NULL }, { "r_glow_allowed", 0, NULL }, { "r_lodbiasrigid", 0, NULL },
+        { "r_lodThresholdPixelArea", 0, NULL }, { "r_spotLightEntityShadows", 0, NULL },
+        { "r_viewModelSelfShadow", 0, NULL }, { "r_viewModelSpotOmniShadowResolution", 0, NULL },
+        { "r_viewModelSunShadowResolution", 0, NULL }, { "r_volumetric_lighting_mode", 0, NULL }, { "r_zfar", 0, NULL },
+        { "ui_error_callstack_ship", 0, "1" }, { "ui_error_report_delay", 0, "0" }, { "com_disable_popups", 0, "0" },
+        { "doublejump_enabled", 0x40, NULL }, { "juke_enabled", 0x40, NULL }, { "mantle_enabled", 0x40, NULL },
+        { "playerEnergy_enabled", 0x40, NULL }, { "sprintLeap_enabled", 0x40, NULL }, { "traverse_mode", 0x40, NULL },
+        { "trm_enabled", 0x40, NULL }, { "steamLobby_frameEnable", 0, NULL }, { "steamP2P_Enable", 0, NULL },
+        { "live_presence_platform", 0, NULL }, { "live_enableCounters", 0, NULL },
+        { "lobbyAdvertiseShowInMatchmaking", 0, NULL }, { "lobbySearchShowInMatchmaking", 0, NULL },
+        { "groups_enabled", 0, NULL }, { "noDW", 0, NULL },
+    };
+    CHECK(sizeof(want) / sizeof(want[0]) == t7o_dvar_patch_count);
+    for (size_t i = 0; i < t7o_dvar_patch_count && i < sizeof(want) / sizeof(want[0]); i++) {
+        const t7o_dvar_change *p = &t7o_dvar_patches[i];
+        CHECK(strcmp(p->name, want[i].name) == 0 && p->set_flags && p->flags == want[i].flags);
+        CHECK((p->value == NULL) == (want[i].value == NULL));
+        CHECK(p->value == NULL || want[i].value == NULL || strcmp(p->value, want[i].value) == 0);
+    }
+
+    // against the made-up game, when the scheduled work runs: cheat protected ones lose it, a per-mode one gets this
+    // mode's changed, the three values set after their flags
+    wire_dvars();
+    game_dvar_t *fov = add_dvar("cg_fovscale", 1, 0x100), *fog = add_dvar("r_fog", 0, 0x110);
+    game_dvar_t *trm = add_dvar("trm_enabled", 15, 0x0);
+    set_mode_dvars(trm, true, true, false, 0x104);
+    game_dvar_t *ship = add_dvar("ui_error_callstack_ship", 0, 0x100);
+    game_dvar_t *popups = add_dvar("com_disable_popups", 0, 0x1);
+    game_session_mode = 0x40; // zombies, played over a LAN
+    apply_dvar_patches(NULL);
+    CHECK(flags_of(fov->dvar) == 0x1 && flags_of(fog->dvar) == 0x0);
+    CHECK(flags_of(trm->modes[0]) == 0x40 && flags_of(trm->modes[1]) == 0x104 && flags_of(trm->dvar) == 0);
+    CHECK(flags_of(ship->dvar) == 0 && strcmp(ship->value, "1") == 0 && ship->sets == 1);
+    CHECK(flags_of(popups->dvar) == 0 && strcmp(popups->value, "0") == 0);
+    CHECK(fov->sets == 0 && fog->sets == 0 && trm->sets == 0); // the others only get their flags
+    CHECK(unknown_sets == 1); // ui_error_report_delay, created as with create_if_missing
 }
 
 // cursoroverride: there, says its usage without a file, logs the first file once and changes nothing else
@@ -694,6 +754,7 @@ int main(void) {
     test_session_mode();
     test_network_defaults();
     test_cursoroverride();
+    test_dvar_patches();
     if (failures == 0)
         printf("test_t7o_small: all passed\n");
     return failures == 0 ? 0 : 1;
