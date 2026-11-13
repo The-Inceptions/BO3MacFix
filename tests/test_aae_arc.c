@@ -223,7 +223,9 @@ static struct {
 } names[] = { { "elemental_bow4_zm", 0x41 }, { "frag_grenade", 0x12b }, { "nothing_zm", 0x42 }, { "big_zm", 0x200 },
               { "zero_zm", 0 }, { "bow_zm", 0x37 } };
 static char last_name_asked[200];
+static int names_asked;
 static uint32_t game_weapon_index(const char *name, void *hashes, uint8_t *sorted) {
+    names_asked++;
     snprintf(last_name_asked, sizeof(last_name_asked), "%s", name);
     CHECK(hashes == (void *)(image + ADDR_bg_weaponNameHashes) &&
           sorted == (uint8_t *)(image + ADDR_bg_weaponNameHashesSorted));
@@ -930,6 +932,13 @@ static void test_mesh_guard(void) {
     CHECK(game_mesh.calls == 3);
 }
 
+// the weapon definition detour on the frag's definition: how many times it asked the game's lookup
+static int lookups_for(detour_registers_t *registers) {
+    int before = names_asked;
+    registers->rax = (uint64_t)frag;
+    handler_Arc_Weapon_Definition(registers);
+    return names_asked - before;
+}
 static void test_definition_detour(void) {
     detour_registers_t registers;
     memset(&registers, 0, sizeof(registers));
@@ -987,7 +996,37 @@ static void test_definition_detour(void) {
     registers.rax = (uint64_t)frag;
     handler_Arc_Weapon_Definition(&registers);
     CHECK(registers.rax == (uint64_t)frag);
+    // The game's lookup at most once a second on a thread, as the plugin asks: the same name within the second takes
+    // what was found while the table still holds the same variant and definition there; a second later, another
+    // name, or another variant or definition there: asked again. A name the game doesn't have: none for the second.
+    // (With the debug lines on, a changed answer is looked up once more for its line: asked, not how often.)
     set_text("aae_arc_weapondef", "elemental_bow4_zm");
+    plugin_time += Lookup_Keep_Ms;
+    CHECK(lookups_for(&registers) >= 1 && registers.rax == (uint64_t)bow4);
+    plugin_time += Lookup_Keep_Ms - 1;
+    CHECK(lookups_for(&registers) == 0 && registers.rax == (uint64_t)bow4);
+    plugin_time += 1;
+    CHECK(lookups_for(&registers) >= 1 && registers.rax == (uint64_t)bow4);
+    CHECK(lookups_for(&registers) == 0 && registers.rax == (uint64_t)bow4);
+    static uint8_t new_variant[0x20], bow4_again[Def_Size];
+    memcpy(bow4_again, bow4, sizeof(bow4_again));
+    set_variant(0x41, new_variant, bow4);
+    CHECK(lookups_for(&registers) >= 1 && registers.rax == (uint64_t)bow4);
+    CHECK(lookups_for(&registers) == 0 && registers.rax == (uint64_t)bow4);
+    set_variant(0x41, new_variant, bow4_again);
+    CHECK(lookups_for(&registers) >= 1 && registers.rax == (uint64_t)bow4_again);
+    set_variant(0x41, NULL, NULL);
+    CHECK(lookups_for(&registers) >= 1 && registers.rax == (uint64_t)frag);
+    CHECK(lookups_for(&registers) >= 1 && registers.rax == (uint64_t)frag);
+    set_variant(0x41, variants[0], bow4);
+    set_text("aae_arc_weapondef", "not_there");
+    CHECK(lookups_for(&registers) >= 1 && registers.rax == (uint64_t)frag);
+    plugin_time += Lookup_Keep_Ms - 1;
+    CHECK(lookups_for(&registers) == 0 && registers.rax == (uint64_t)frag);
+    plugin_time += 1;
+    CHECK(lookups_for(&registers) >= 1 && registers.rax == (uint64_t)frag);
+    set_text("aae_arc_weapondef", "elemental_bow4_zm");
+    CHECK(lookups_for(&registers) >= 1 && registers.rax == (uint64_t)bow4);
 }
 
 // the anchor as the draw code would read it now: after noting the view models, as it does
@@ -1296,6 +1335,7 @@ int main(void) {
     snprintf(plugin_file, sizeof(plugin_file), "%s/%s", mod_folder, Plugin_Path);
     close(open(plugin_file, O_CREAT | O_WRONLY, 0644));
     plugin_now_ms = test_plugin_now;
+    arc_now_ms = test_plugin_now;
     image = mmap(NULL, Image_Size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (image == MAP_FAILED)
         return 2;

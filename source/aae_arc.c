@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "aae_arc.h"
 #include "aae_plugin.h"
 #include "detour.h"
@@ -185,8 +186,8 @@ const char *aae_arc_definition_problem(const uint8_t *original, const uint8_t *r
     return NULL;
 }
 
-// The plugin keeps the last name's lookup for a second and its verdicts for 12 definitions, re-checked against the
-// game's table each time: the same answers as asking again, which is what is done here.
+// The plugin keeps its verdicts for 12 definitions as well, re-checked against the game's table each time: the same
+// answers as checking again, which is what is done here. (Its lookup of the name it keeps: definition_named below.)
 const uint8_t *aae_arc_prediction_definition(const uint8_t *original, const char *dvar_text,
                                             const uint8_t *(*definition_named)(const char *name)) {
     char name[Name_Size];
@@ -531,13 +532,48 @@ install_hook_name(R_AddCodeMeshDrawSurf, void, const uint8_t *material, uint64_t
 
 // ---- the plugin (a): the weapon the arc is worked out with
 
+// The game's definition of a weapon by its name, asked of the game as the plugin asks (plugin 0x180002b30): at most
+// once a second on each thread. The game's lookup sorts its table the first time it is asked after a weapon came
+// in, without a lock, so the job thread asks it as seldom as the plugin does. Kept: the last name, the index the game
+// gave for it, and the variant and definition its tables held there; for a second they are taken again while the
+// tables still hold the same two at that index, and a name the game doesn't have stays without one for that second.
+#define Lookup_Keep_Ms 1000
+#define Weapon_Index_Most 0x1ff
+static uint64_t arc_uptime_ms(void) {
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000;
+}
+static uint64_t (*arc_now_ms)(void) = arc_uptime_ms;
+static __thread struct {
+    bool kept;
+    char name[Name_Size];
+    uint32_t index;
+    const uint8_t *variant, *definition;
+    uint64_t time;
+} lookup;
+
+static const uint8_t *variant_at(uint32_t index) {
+    return ((const uint8_t *const *)(base_address + ADDR_bg_weaponVariantDefs))[index];
+}
+
 static const uint8_t *definition_named(const char *name) {
+    uint64_t now = arc_now_ms();
+    if (lookup.kept && strcmp(lookup.name, name) == 0 && now - lookup.time < Lookup_Keep_Ms) {
+        if (lookup.index - 1 >= Weapon_Index_Most)
+            return NULL;
+        const uint8_t *variant = variant_at(lookup.index);
+        if (variant != NULL && variant == lookup.variant &&
+            *(const uint8_t *const *)(variant + WeaponVariantDef_WeaponDef) == lookup.definition)
+            return lookup.definition;
+    }
     uint32_t index = BG_FindWeaponIndexByName(name, (void *)(base_address + ADDR_bg_weaponNameHashes),
                                               (uint8_t *)(base_address + ADDR_bg_weaponNameHashesSorted));
-    if (index - 1 > 0x1fe)
-        return NULL;
-    const uint8_t *variant = ((const uint8_t *const *)(base_address + ADDR_bg_weaponVariantDefs))[index];
-    return variant != NULL ? *(const uint8_t *const *)(variant + WeaponVariantDef_WeaponDef) : NULL;
+    const uint8_t *variant = index - 1 < Weapon_Index_Most ? variant_at(index) : NULL;
+    const uint8_t *definition =
+        variant != NULL ? *(const uint8_t *const *)(variant + WeaponVariantDef_WeaponDef) : NULL;
+    snprintf(lookup.name, sizeof(lookup.name), "%s", name);
+    lookup.kept = true, lookup.index = index, lookup.variant = variant, lookup.definition = definition;
+    lookup.time = now;
+    return definition;
 }
 
 // "mov [rbp - 0xa0], rax" right behind the job's BG_GetWeaponDef: the definition in rax, the weapon in rbx
