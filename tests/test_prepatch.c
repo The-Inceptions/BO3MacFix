@@ -364,6 +364,48 @@ int main(void) {
             check_runtime(image, original);
             munmap(image, ADDR_Prepatch_SlotsEnd);
         }
+        // a hook's record takes 16 bytes of the padding
+        CHECK(sizeof(prepatch_hook_t) == 16, "a hook's record is %zu bytes", sizeof(prepatch_hook_t));
+        // A copy whose code at a hooked function or in its stub isn't what the stubs look like: that hook is refused,
+        // nothing is written anywhere, and the others still work
+        image = map_image(copy);
+        if (image != NULL) {
+            CHECK(prepatch_init((uint64_t)image), "prepatch_init doesn't see the copy");
+            const uint32_t slots_size = ADDR_Prepatch_SlotsEnd - ADDR_Prepatch_Slots;
+            uint8_t *no_slots = calloc(1, slots_size);
+            int32_t far_away = 0x100000;
+            // 0: the function doesn't start with a jump; 1: the jump goes somewhere that isn't the stubs' room;
+            // 2: the stub doesn't start with the cmp; 3: nor go on with the je; 4: its slot isn't among the slots
+            uint32_t stub2 = hook_defs[2].function + 5 + rel32(image + hook_defs[2].function + 1);
+            uint32_t stub3 = hook_defs[3].function + 5 + rel32(image + hook_defs[3].function + 1);
+            uint32_t stub4 = hook_defs[4].function + 5 + rel32(image + hook_defs[4].function + 1);
+            image[hook_defs[0].function] = 0xE8;
+            // (what the jump goes to there looks like a stub, with the first slot as its own)
+            uint32_t elsewhere = hook_defs[1].function + 5 + (uint32_t)far_away;
+            const uint8_t like_a_stub[16] = { 0x48, 0x83, 0x3D, 0, 0, 0, 0, 0x00, 0x74, 0x06, 0xFF, 0x25 };
+            int32_t to_a_slot = (int32_t)(ADDR_Prepatch_Slots - (elsewhere + 8));
+            memcpy(image + elsewhere, like_a_stub, sizeof(like_a_stub));
+            memcpy(image + elsewhere + 3, &to_a_slot, sizeof(to_a_slot));
+            memcpy(image + hook_defs[1].function + 1, &far_away, sizeof(far_away));
+            image[stub2 + 2] = 0x3C;
+            image[stub3 + 9] = 0x07;
+            memcpy(image + stub4 + 3, &far_away, sizeof(far_away));
+            dobby_hooks = 0;
+            int refused_before = refused;
+            for (int i = 0; i < 5; i++) {
+                void *orig = (void *)&failures;
+                CHECK(BO3MacFix_Hook(image + hook_defs[i].function, (void *)fake_function, &orig) == -1 &&
+                          orig == (void *)&failures, "hook %i of a damaged copy isn't refused", i);
+            }
+            CHECK(refused == refused_before + 5 && dobby_hooks == 0, "%i refused, %i hooked in memory",
+                  refused - refused_before, dobby_hooks);
+            CHECK(memcmp(image + ADDR_Prepatch_Slots, no_slots, slots_size) == 0, "a refused hook set a slot");
+            void *orig = NULL;
+            CHECK(BO3MacFix_Hook(image + hook_defs[5].function, (void *)fake_function, &orig) == 0 && orig != NULL,
+                  "the hook after the damaged ones");
+            free(no_slots);
+            munmap(image, ADDR_Prepatch_SlotsEnd);
+        }
     }
 
     // the room after the code is used up first: a stub only goes before the code when another one, 48 bytes at most

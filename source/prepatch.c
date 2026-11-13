@@ -9,9 +9,10 @@
 // - each "mov r32, imm32" a setting changes jumps to a stub that loads the value from a slot when it's set
 // - each call through objc_msgSend's pointer a setting redirects calls a stub that jumps through a slot when it's set
 // - a header at the start of the padding after __TEXT's last section lists all of it, with the original bytes
-// The stubs follow the header. That padding is 3968 bytes, and a hook takes 64 of them (32 in the header, 32 for its
-// stub), so the stubs that don't fit there go into __TEXT's other padding: the 2 KB between the Mach-O header's load
-// commands and the first section, which is mapped and executable like the rest of the segment.
+// The stubs follow the header. That padding is 3968 bytes, and a hook takes 42 to 51 of them (16 in the header, the
+// rest for its stub), so the stubs that don't fit there go into __TEXT's other padding: the 2 KB between the Mach-O
+// header's load commands and the first section, which is mapped and executable like the rest of the segment.
+// Both together are all the room there is: about 120 hooks.
 // With every slot left at 0 the copy runs exactly like the original.
 #include <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
@@ -37,7 +38,7 @@
 #define Prepatch_Magic "BO3MFPP1"
 // table_id only covers the tables below, so bump this whenever BO3MacFix_BuildPrepatched writes anything differently
 // (the stubs, the header or the records): a copy with the same version and table_id counts as up to date
-#define Prepatch_Version 3
+#define Prepatch_Version 4
 #define Stub_Max 48 // more than any stub takes: a hook's is 16 bytes, its instructions (10 at most, 14 with a short jump made near) and a 5-byte jmp
 #define Game_Base 0x100000000ULL
 
@@ -199,13 +200,12 @@ typedef struct {
     uint8_t source_sha256[CC_SHA256_DIGEST_LENGTH]; // the original it was made from
 } prepatch_header_t;
 
+// A hooked function: where it is and the bytes the jump to its stub replaced. Where the stub is isn't kept: the jump
+// says, and the stub begins with "cmp qword [rip + slot], 0" and has its trampoline 16 bytes in (hook_stub below).
 typedef struct {
     uint32_t function;
-    uint32_t slot;
-    uint32_t trampoline;
     uint8_t length;
-    uint8_t pad[3];
-    uint8_t original[16];
+    uint8_t original[11];
 } prepatch_hook_t;
 
 // a value or call site
@@ -318,7 +318,7 @@ const void *prepatch_original_code(const void *address, size_t size) {
     overlay_t o = { (uint64_t)address, (uint64_t)address + size, buffer, false };
     memcpy(buffer, address, size);
     for (uint32_t i = 0; i < header->hook_count; i++)
-        overlay(base + hooks[i].function, hooks[i].original, sizeof(hooks[i].original), &o);
+        overlay(base + hooks[i].function, hooks[i].original, hooks[i].length, &o);
     for (uint32_t i = 0; i < header->value_count; i++)
         overlay(base + values[i].site, values[i].original, values[i].length, &o);
     for (uint32_t i = 0; i < header->call_count; i++)
@@ -369,6 +369,32 @@ static bool in_game_image(const void *address) {
     return (uint64_t)address >= base && (uint64_t)address < image_end;
 }
 
+static bool in_stub_room(uint32_t offset, uint32_t length) {
+    return (offset >= ADDR_Prepatch_Header && offset + length <= ADDR_Prepatch_CodeEnd) ||
+           (offset >= ADDR_Prepatch_Stubs2 && offset + length <= ADDR_Prepatch_Stubs2End);
+}
+
+// The slot and the trampoline of a hooked function's stub (offsets from the base), read from the copy's own code:
+// the function begins with a jump to the stub, the stub with "cmp qword [rip + slot], 0 ; je ; jmp [rip + slot]", and
+// the trampoline follows those 16 bytes. False when the copy doesn't have that there.
+static bool hook_stub(const prepatch_hook_t *hook, uint32_t *slot, uint32_t *trampoline) {
+    const uint8_t *entry = (const uint8_t *)(base + hook->function);
+    int32_t relative;
+    if (entry[0] != 0xE9)
+        return false;
+    memcpy(&relative, entry + 1, sizeof(relative));
+    uint32_t stub = hook->function + 5 + (uint32_t)relative;
+    if (!in_stub_room(stub, 16))
+        return false;
+    const uint8_t *code = (const uint8_t *)(base + stub);
+    if (code[0] != 0x48 || code[1] != 0x83 || code[2] != 0x3D || code[7] != 0x00 || code[8] != 0x74 || code[9] != 0x06)
+        return false;
+    memcpy(&relative, code + 3, sizeof(relative));
+    *slot = stub + 8 + (uint32_t)relative;
+    *trampoline = stub + 16;
+    return *slot >= ADDR_Prepatch_Slots && *slot + 8 <= ADDR_Prepatch_SlotsEnd;
+}
+
 // replaces DobbyHook (see dobby.h): in the pre-patched copy, hooking a function only stores its slot
 int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     if (!prepatch_active() || !in_game_image(address))
@@ -376,10 +402,16 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     uint32_t offset = (uint32_t)((uint64_t)address - base);
     for (uint32_t i = 0; i < header->hook_count; i++) {
         if (hooks[i].function == offset) {
+            uint32_t slot, trampoline;
+            if (!hook_stub(&hooks[i], &slot, &trampoline)) {
+                refused++;
+                printf("BO3MacFix: can't hook %08x, the pre-patched executable's stub for it isn't as expected\n", offset);
+                return -1;
+            }
             // the original first: a hook installed while the game runs can be called as soon as its slot is set.
             // The stub reads the slot twice (cmp, then jmp), so a slot must never go back to 0 once it's set.
-            *out_origin_func = (void *)(base + hooks[i].trampoline);
-            __atomic_store_n((void **)(base + hooks[i].slot), fake_func, __ATOMIC_RELEASE);
+            *out_origin_func = (void *)(base + trampoline);
+            __atomic_store_n((void **)(base + slot), fake_func, __ATOMIC_RELEASE);
             hooks_set++;
             return 0;
         }
@@ -506,7 +538,7 @@ typedef struct {
     uint32_t code;              // where the next stub goes
     bool second_area;           // ... which is in the padding before __text by now
     uint32_t first_area_used;
-    uint32_t claimed[256][2];   // ranges already changed, to catch overlaps
+    uint32_t claimed[1024][2];  // ranges already changed, to catch overlaps
     int claimed_count;
     uint8_t records[4096];      // the byte patch records
     size_t records_size;
@@ -841,7 +873,7 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
     h.patches_offset = h.calls_offset + sizeof(call_records);
     uint32_t header_end = h.patches_offset + (uint32_t)b->records_size;
     uint32_t slot = ADDR_Prepatch_Slots;
-    b->code = (header_end + 15) & ~15u;
+    b->code = header_end;
     if (header_end > first_area_end) {
         no_stub_room(b);
         goto done;
@@ -851,13 +883,13 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
 
     for (size_t i = 0; i < hook_count; i++) {
         const hook_def_t *def = &hook_defs[i];
-        uint32_t f = def->function, code = stub_room(b), tramp = code + 16;
+        uint32_t f = def->function, code = stub_room(b);
         if (code == 0) {
             no_stub_room(b);
             goto done;
         }
         if (f + 16 > ADDR_Prepatch_Header || f < ADDR_Prepatch_Stubs2End || memcmp(b->data + f, def->stolen, def->length) != 0 ||
-            def->length < 5) {
+            def->length < 5 || def->length > sizeof(hook_records[i].original)) {
             fail(message, message_size, "unexpected code at %08x", f);
             goto done;
         }
@@ -888,11 +920,10 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         b->data[f] = 0xE9;
         put_rel32(b->data + f + 1, code, f + 5);
         memset(b->data + f + 5, 0x90, def->length - 5);
-        hook_records[i] = (prepatch_hook_t){ .function = f, .slot = slot, .trampoline = tramp, .length = def->length };
+        hook_records[i] = (prepatch_hook_t){ .function = f, .length = def->length };
         memcpy(hook_records[i].original, def->stolen, def->length);
-        memcpy(hook_records[i].original + def->length, b->data + f + def->length, 16 - def->length);
         slot += 8;
-        b->code = (code + (uint32_t)n + 15) & ~15u;
+        b->code = code + (uint32_t)n;
     }
 
     for (size_t i = 0; i < value_count; i++) {
@@ -925,7 +956,7 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         value_records[i] = (prepatch_site_t){ .site = site, .slot = slot, .length = 5 };
         memcpy(value_records[i].original, def->original, 5);
         slot += 8;
-        b->code = (code + (uint32_t)n + 15) & ~15u;
+        b->code = code + (uint32_t)n;
     }
 
     for (size_t i = 0; i < call_count; i++) {
@@ -961,7 +992,7 @@ EXPORT int BO3MacFix_BuildPrepatched(const char *original, const char *output, c
         call_records[i] = (prepatch_site_t){ .site = site, .slot = slot, .length = 6 };
         memcpy(call_records[i].original, def->original, 6);
         slot += 8;
-        b->code = (code + (uint32_t)n + 15) & ~15u;
+        b->code = code + (uint32_t)n;
     }
 
     if (slot > ADDR_Prepatch_SlotsEnd) {
