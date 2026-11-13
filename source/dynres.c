@@ -11,6 +11,7 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
     d->headroom_windows = 0;
     d->trial_from = 0;
     d->trial_windows = 0;
+    d->trial_watched = false;
     d->failed_trials = 0;
     d->limit = Dynres_No_Limit;
     d->event = Dynres_Event_None;
@@ -33,11 +34,21 @@ static int change(dynres_t *d, int percent) {
 
 int dynres_start_at_floor(dynres_t *d) {
     d->trial_from = 0;
+    d->trial_watched = false;
     return change(d, d->lowest);
 }
 
-// under a frame limit: the windows in a row at the limit's rate before a trial step up, doubled for each trial taken
-// back in a row
+// a trial that didn't hold, taken back or failed late: no longer on trial or watched, and the next one's hold doubles,
+// up to Dynres_Max_Backoff times
+static void trial_failed(dynres_t *d) {
+    d->trial_from = 0;
+    d->trial_watched = false;
+    if (d->failed_trials < Dynres_Max_Backoff)
+        d->failed_trials++;
+}
+
+// under a frame limit: the windows in a row at the limit's rate before a trial step up, doubled for each trial that
+// failed in a row
 static int trial_hold(const dynres_t *d, double target_fps) {
     int windows = (int)(Dynres_Hold_Up_Seconds * target_fps / Dynres_Window_Frames + 0.5);
     if (windows < Dynres_Hold_Down + 1)
@@ -57,6 +68,7 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
         d->headroom_windows = 0;
         if (limit == Dynres_No_Limit) {
             d->trial_from = 0;
+            d->trial_watched = false;
             d->failed_trials = 0;
         }
         d->limit = limit;
@@ -66,17 +78,22 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
     bool settled = d->windows_since_change > Dynres_Hold_Down;
     bool behind = fps < target_fps * Dynres_Missed;
 
-    // a trial step up under a limit: taken back at once if the GPU falls behind within its windows, kept after them.
-    // Its windows count in the match only: a pause or the background holds any size and says nothing about it.
-    if (d->trial_from != 0 && limit == Dynres_Match_Limit && ++d->trial_windows > Dynres_Trial_Windows) {
-        d->trial_from = 0;
-        d->failed_trials = 0;
+    // a trial step up under a limit: taken back at once if the GPU falls behind within its first Dynres_Trial_Windows,
+    // kept after them, and watched until Dynres_Trial_Watch: only a size that lasted that long clears the count of
+    // failed trials (a step down within it counts as one, below). Its windows count in the match only: a pause or the
+    // background holds any size and says nothing about it.
+    if (d->trial_watched && limit == Dynres_Match_Limit) {
+        d->trial_windows++;
+        if (d->trial_windows > Dynres_Trial_Windows)
+            d->trial_from = 0;
+        if (d->trial_windows > Dynres_Trial_Watch) {
+            d->trial_watched = false;
+            d->failed_trials = 0;
+        }
     }
     if (d->trial_from != 0 && settled && behind && gpu_busy >= Dynres_GPU_Bound) {
         int back = d->trial_from;
-        d->trial_from = 0;
-        if (d->failed_trials < Dynres_Max_Backoff)
-            d->failed_trials++;
+        trial_failed(d);
         d->event = Dynres_Event_Taken_Back;
         return change(d, back);
     }
@@ -88,6 +105,13 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
             return d->percent;
         int steps = fps < target_fps * Dynres_Far_Behind ? 2 : 1;
         int percent = d->percent - steps * Dynres_Step;
+        // a kept trial still watched, at a limit of the match: it failed all the same, late (Dynres_Trial_Watch); in a
+        // pause or the background the step only ends the watch
+        if (d->trial_watched && limit == Dynres_Match_Limit) {
+            trial_failed(d);
+            d->event = Dynres_Event_Failed_Late;
+        }
+        d->trial_watched = false;
         return change(d, percent > d->lowest ? percent : d->lowest);
     }
 
@@ -110,6 +134,7 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
         change(d, up);
         d->trial_from = from;
         d->trial_windows = 0;
+        d->trial_watched = true;
         d->event = Dynres_Event_Trial;
         return up;
     }

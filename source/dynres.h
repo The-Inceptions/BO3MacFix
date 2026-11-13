@@ -31,10 +31,10 @@
 // heavy moment left the resolution at the floor for good. There the way up is a trial instead: after the frame rate has
 // held the limit for Dynres_Hold_Up_Seconds in a row, one step up; if a window behind with the GPU busy comes within
 // Dynres_Trial_Windows after it (the holds after the change first, as for any step down), straight back to the size
-// before, and the next trial waits twice as long (up to 256 times, Dynres_Max_Backoff). A trial that held clears that,
-// and its windows count toward the next one's hold. Shorter than the 8 s without a limit because a wrong trial is taken
-// back: it costs a few windows a little under the limit, and the doubling makes it rare. 60% -> 100% at 40 fps: 8
-// steps, about a minute.
+// before, and the next trial waits twice as long (up to 256 times, Dynres_Max_Backoff). A trial whose size lasted
+// Dynres_Trial_Watch windows clears that (below), and a trial's windows count toward the next one's hold. Shorter
+// than the 8 s without a limit because a wrong trial is taken back: it costs a few windows a little under the limit,
+// and the doubling makes it rare. 60% -> 100% at 40 fps: 8 steps, about a minute.
 #define Dynres_Hold_Up_Seconds 6 // the trial's hold (8 windows at 40 fps)
 #define Dynres_Trial_Windows 8   // windows after a trial in which falling behind takes it back (6 s at 40 fps)
 // The hold at most doubles 8 times: 256 times the hold, 26 minutes at 40 fps. Where the next size can't hold the limit,
@@ -43,6 +43,14 @@
 // last 5% of resolution, and a trial that holds still clears the doubling, so the climb after a heavy moment in a
 // lighter part of the map stays as quick.
 #define Dynres_Max_Backoff 8
+// A trial kept after its Dynres_Trial_Windows is still watched until Dynres_Trial_Watch windows after its step up: a
+// step down for the GPU within them counts as a failed trial too, and only a trial's size that lasted them all clears
+// the count. On battery the GPU's clock can drop a while after a step up (gc16_pwrgpu_climb40: the same still scene
+// from 12 ms a frame at 49% busy to 23 ms at 91%, from one window to the next), so a kept trial fell behind a few
+// seconds later, stepped down as a plain step, and the next trial came after the shortest hold: a dip every 12 s for
+// as long as the scene sat on that edge. Counted, those thin out as where the next size never holds. A clean climb (a
+// trial every 9 windows at 40 fps, none failing) is as quick as before.
+#define Dynres_Trial_Watch 32 // windows (24 s at 40 fps)
 
 typedef struct {
     int base;     // the user's ResolutionPercent, the most it goes up to
@@ -52,7 +60,8 @@ typedef struct {
     int headroom_windows; // windows in a row in which a step up would have fit (under a limit: held the limit)
     int trial_from;       // under a limit: the size before a step up still on trial, 0 for none
     int trial_windows;    // the trial's windows so far, counted in the match only (not in a pause or the background)
-    int failed_trials;    // under a limit: trials taken back in a row (each doubles the next one's hold)
+    bool trial_watched;   // the last trial step up is within its Dynres_Trial_Watch windows, no step down since
+    int failed_trials;    // under a limit: trials that failed in a row (each doubles the next one's hold)
     int limit;            // the last window's kind of limit (dynres_limit_t)
     int event;            // what the last window did (Dynres_Event_*), for the log
 } dynres_t;
@@ -61,7 +70,7 @@ typedef struct {
 // FramePacingFPS, the game's com_maxfps), or one of a situation outside the play (the pause menu's, the menus', the
 // background's: frame_limit_for_frame's Limit_* bits)
 typedef enum { Dynres_No_Limit = 0, Dynres_Match_Limit = 1, Dynres_Situation_Limit = 2 } dynres_limit_t;
-enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back };
+enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back, Dynres_Event_Failed_Late };
 
 // starts (again) at base, with lowest as the floor (both ResolutionPercent values, 50 to 200)
 void dynres_reset(dynres_t *d, int base, int lowest);

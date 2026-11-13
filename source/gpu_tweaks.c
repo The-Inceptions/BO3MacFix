@@ -534,7 +534,8 @@ static void dynres_tick(int frame_limit_fps) {
         after[4 - logging] = (float)((now - last_present) / 1e6);
         if (--logging == 0)
             printf("dynamic resolution: %i%% -> %i%% (%.1f fps of %i, GPU busy %.0f%%%s), the next frames took "
-                   "%.1f, %.1f, %.1f, %.1f ms\n", from, to, window_fps, dynres_target_fps(frame_limit_fps), window_busy * 100,
+                   "%.1f, %.1f, %.1f, %.1f ms\n", from, to, window_fps, dynres_target_fps(frame_limit_fps),
+                   window_busy * 100,
                    logged_why, after[0], after[1], after[2], after[3]);
     }
     last_present = now;
@@ -619,7 +620,8 @@ static void dynres_tick(int frame_limit_fps) {
         }
         dynres_start_low_pending = false;
         why = dynres.event == Dynres_Event_Trial ? ", a trial under the frame limit"
-              : dynres.event == Dynres_Event_Taken_Back ? ", the trial taken back" : "";
+              : dynres.event == Dynres_Event_Taken_Back ? ", the trial taken back"
+              : dynres.event == Dynres_Event_Failed_Late ? ", soon after the last trial, which counts as failed" : "";
     }
     int value = written != 0 ? written : current;
     if (percent == value || logging > 0)

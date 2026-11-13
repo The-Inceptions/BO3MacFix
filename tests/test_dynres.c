@@ -441,7 +441,7 @@ static void test_climb_at_limit(void) {
     int windows = 0;
     while (d.percent < 100 && windows < 400)
         dynres_window_limited(&d, 40.0, busy_at_40[windows++ % Busy_At_40], 40, true);
-    CHECK(d.percent == 100 && windows <= 8 * 10); // 60 s at 40 fps
+    CHECK(d.percent == 100 && windows == 8 + 7 * 9); // the first hold, then a trial every 9 windows: 53 s at 40 fps
     // and stays there
     for (int i = 0; i < 400; i++)
         CHECK(dynres_window_limited(&d, 40.0, busy_at_40[i % Busy_At_40], 40, true) == 100);
@@ -471,8 +471,8 @@ static void test_trial_taken_back(void) {
     CHECK(d.percent == 95 || d.percent == 100);
     CHECK(trials >= 2 && trials <= 8);  // 8, 16, 32, 64, 128, 256 ... windows apart
     CHECK(missed <= trials * 3);        // each costs the holds and the window that showed it
-    // a trial that held clears the doubling: at a 40 limit, 90 -> 95 holds, then 95 -> 100 is tried after the plain
-    // hold
+    // a trial whose size lasts its watch clears the doubling: at a 40 limit, 90 -> 95 holds for Dynres_Trial_Watch
+    // windows (kept after Dynres_Trial_Windows, the count cleared only at the end of the watch)
     dynres_reset(&d, 100, 60);
     d.percent = 90;
     d.failed_trials = 3;
@@ -481,7 +481,12 @@ static void test_trial_taken_back(void) {
     CHECK(d.percent == 95);
     for (int i = 0; i < Dynres_Trial_Windows + 1; i++)
         dynres_window_limited(&d, 40.0, 0.8, 40, true);
-    CHECK(d.failed_trials == 0);
+    CHECK(d.trial_from == 0 && d.failed_trials == 3); // kept, still watched
+    for (int i = Dynres_Trial_Windows + 1; i < Dynres_Trial_Watch; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, true);
+    CHECK(d.failed_trials == 3 && d.percent == 95);
+    // the window after the watch clears it, and with the plain hold long past the next trial comes in the same window
+    CHECK(dynres_window_limited(&d, 40.0, 0.8, 40, true) == 100 && d.failed_trials == 0);
 }
 
 // The trial's rules window by window, under a 40 fps limit
@@ -668,7 +673,8 @@ static void test_limit_kinds(void) {
     d.failed_trials = 2;
     CHECK(dynres_window_limited(&d, 100.0, 0.99, 120, Dynres_No_Limit) == 65); // behind without a limit: no take-back
     CHECK(d.trial_from == 0 && d.failed_trials == 0 && d.headroom_windows == 0);
-    // a trial kept in a window that also steps down: logged as a plain step down, not as the trial taken back
+    // a trial kept in the window that also steps down: a late failure (still watched), logged as such, not as the trial
+    // taken back
     dynres_reset(&d, 100, 60);
     dynres_start_at_floor(&d);
     for (int i = 0; i < 100 && d.trial_from == 0; i++)
@@ -677,8 +683,8 @@ static void test_limit_kinds(void) {
     for (int i = 0; i < Dynres_Trial_Windows; i++)
         dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
     CHECK(d.trial_from == 60);
-    CHECK(dynres_window_limited(&d, 35.0, 0.99, 40, Dynres_Match_Limit) == 60 && d.event == Dynres_Event_None);
-    CHECK(d.trial_from == 0 && d.failed_trials == 0);
+    CHECK(dynres_window_limited(&d, 35.0, 0.99, 40, Dynres_Match_Limit) == 60 && d.event == Dynres_Event_Failed_Late);
+    CHECK(d.trial_from == 0 && d.failed_trials == 1 && !d.trial_watched);
     // under a situation's limit no trial starts, however long it holds
     dynres_reset(&d, 100, 60);
     dynres_start_at_floor(&d);
@@ -701,6 +707,75 @@ static void test_limit_kinds(void) {
     for (int i = 0; i < 7; i++)
         CHECK(dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit) == 80);
     CHECK(dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit) == 85);
+}
+
+// The cycle of gc16_pwrgpu_climb40 (patch 0003): a size that holds the limit for 9 to 28 windows after the trial step
+// up and then falls behind (the GPU's clock drops), kept by the trial and stepped down plainly a little later. Counted
+// as failed trials, these thin out like the map that can't hold the next size; without, one every 7 to 9 s for good.
+static void test_late_falls_thin_out(void) {
+    int falls_after[] = { 9, 10, 11, 12, 20, 28 }; // gc16: 9 to 12; up to the watch's 32 (24 s at 40 fps)
+    for (int f = 0; f < 6; f++) {
+        int k = falls_after[f];
+        dynres_t d;
+        dynres_reset(&d, 100, 60);
+        d.percent = 90;
+        int trials = 0, late_trials = 0, short_windows = 0, at_95 = 0, changes = 0;
+        for (int i = 0; i < 30 * 60 * 40 / Dynres_Window_Frames; i++) {
+            bool holds = d.percent <= 90 || (d.percent == 95 && at_95 < k); // 100% never holds
+            int before = d.percent;
+            dynres_window_limited(&d, holds ? 40.0 : 34.6, holds ? busy_at_40[i % Busy_At_40] : 0.99, 40,
+                                  Dynres_Match_Limit);
+            at_95 = d.percent == 95 ? at_95 + 1 : 0;
+            if (before == 90 && d.percent == 95) {
+                trials++;
+                late_trials += i >= 15 * 60 * 40 / Dynres_Window_Frames;
+            }
+            changes += d.percent != before;
+            short_windows += !holds;
+        }
+        if (getenv("DYNRES_TEST_VERBOSE"))
+            printf("  late falls after %i windows: %i trials (%i in the second quarter hour), %i changes, %i windows "
+                   "short\n", k, trials, late_trials, changes, short_windows);
+        CHECK(trials <= 9 && late_trials <= 1); // patch 0002: 120 to 141 trials, a change every 7 to 9 s
+        CHECK(changes <= 20 && short_windows <= 2 * trials);
+        CHECK(d.failed_trials == Dynres_Max_Backoff);
+    }
+}
+
+// A heavy moment long after the last trial (its size lasted the watch) is a plain step down: no failure counted, the
+// next trial after the plain hold. Within the watch but in a pause, the step only ends the watch.
+static void test_late_heavy_moment(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 60);
+    d.percent = 90;
+    for (int i = 0; i < 100 && d.percent < 100; i++) // 90 -> 95 -> 100 in trials
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+    CHECK(d.percent == 100 && d.trial_watched);
+    for (int i = 0; i < Dynres_Trial_Watch + 1; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+    CHECK(!d.trial_watched && d.failed_trials == 0);
+    CHECK(dynres_window_limited(&d, 30.0, 0.99, 40, Dynres_Match_Limit) == 90); // the heavy moment: two steps
+    CHECK(d.event == Dynres_Event_None && d.failed_trials == 0);
+    int windows = 0;
+    while (d.percent == 90 && windows < 100) {
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+        windows++;
+    }
+    CHECK(windows == 8); // the plain hold, 6 s at 40 fps
+    // a step down for the GPU in a pause during the watch: not counted, and it ends the watch, so a fall in the match
+    // after it isn't counted either
+    dynres_reset(&d, 90, 60); // a base of 90: no trial after this one
+    d.percent = 85;
+    for (int i = 0; i < 100 && d.percent < 90; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+    for (int i = 0; i < Dynres_Trial_Windows + 1; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+    CHECK(d.trial_from == 0 && d.trial_watched);
+    CHECK(dynres_window_limited(&d, 25.0, 0.99, 30, Dynres_Situation_Limit) == 80);
+    CHECK(d.failed_trials == 0 && !d.trial_watched);
+    for (int i = 0; i < Dynres_Hold_Down; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+    CHECK(dynres_window_limited(&d, 36.0, 0.99, 40, Dynres_Match_Limit) == 75 && d.failed_trials == 0);
 }
 
 // Without a limit nothing changes: the same windows give the same resolutions as the rule before (random windows), and
@@ -733,6 +808,8 @@ int main(void) {
     test_pause_during_trial();
     test_failing_trials_30_minutes();
     test_limit_kinds();
+    test_late_falls_thin_out();
+    test_late_heavy_moment();
     test_target();
     test_uneven_limit();
     test_lowest_for();
