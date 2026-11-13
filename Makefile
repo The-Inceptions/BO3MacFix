@@ -37,6 +37,9 @@ TEST_TARGETS += tests/test_aae_movement tests/test_aae_movement_x86_64
 TEST_TARGETS += tests/test_weapon_anim
 # T7Overcharged's slide changes, their places and its own slide push compared with T7Overcharged (aae_move_slide.c)
 TEST_TARGETS += tests/test_aae_move_slide tests/test_aae_move_slide_x86
+# T7Overcharged's anim_event: its tests of the entity and what it asks of the game, against a made-up game
+# (t7o_anim_event.c)
+TEST_TARGETS += tests/test_t7o_anim_event
 # the thunks for detours inside the game's functions (detour.h); x86_64 code, so this test is built for x86_64
 TEST_TARGETS += tests/test_detour
 # All-around Enhancement's prompts in the world (aae_prompt.c) and the test for its plugin (aae_plugin.c)
@@ -94,6 +97,8 @@ FRAMEWORKS = -framework CoreFoundation -framework IOKit -framework CoreGraphics 
 SOURCES = source/bo3macfix.c source/bo3macnative.m source/stream_stall_recovery.c source/utilities.c source/steam.c source/exports.c source/havok.c source/t7overcharged.c source/cpu_tuning.c
 # repeated script errors in console_mp.log (script_errors.c)
 SOURCES += source/script_errors.c
+# T7Overcharged's anim_event, AAE's inspect on the player's body in third person (t7o_anim_event.c)
+SOURCES += source/t7o_anim_event.c
 SOURCES += source/controllers.c source/gpu_tweaks.c
 # which players folder a .cfg comes from, for mods that save them from Lua (players_cfg.c)
 SOURCES += source/players_cfg.c
@@ -522,6 +527,12 @@ tests/test_aae_cheats: tests/test_aae_cheats.c source/aae_cheats.c source/aae_ch
 		source/dobby.h source/zm_loadout.c source/zm_loadout.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_aae_cheats.c \
 		source/zm_loadout.c
+
+# anim_event's tests of the entity and what it asks of the game, against a made-up game (the test includes the source)
+tests/test_t7o_anim_event: tests/test_t7o_anim_event.c source/t7o_anim_event.c source/t7o_anim_event.h \
+		source/offsets.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_t7o_anim_event.c
 
 # printsubtitle's arguments (t7o_subtitle.c), as AAE's HUD gives them
 tests/test_t7o_subtitle: tests/test_t7o_subtitle.c source/t7o_subtitle.c source/t7o_subtitle.h

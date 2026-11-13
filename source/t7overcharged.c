@@ -17,6 +17,7 @@
 #include "offsets.h"
 #include "t7overcharged.h"
 #include "t7overcharged_lua.h"
+#include "t7o_anim_event.h"
 #include "t7o_small.h"
 #include "t7o_subtitle.h"
 #include "weapon_anim.h"
@@ -227,16 +228,16 @@ void t7o_push_init(lua_State *s, const char *dll_path) {
 // about 2,000 script errors a second in a match, each one a call stack in console_mp.log. We answer hash and the
 // natives below; any other call still gets 0, and is logged once as missing.
 //
-// AAE's other three, startweaponanim, playanim and anim_event, play weapon animations (inferred from aae_core.csc:
-// the server sends "firstraise", "reloadempty" and "lowready" on its "deadshot_keyline" client system, and the client
-// starts the weapon's animation and its event; a debug loop also plays any set in the anim2 and anim3 dvars). The real
-// DLL's code isn't in the mod. They get the 0 the game's isprofilebuild gave them, without the missing line; the
-// callers start them as threads or statements and don't use the result (inferred from the import flags).
+// AAE's other three, startweaponanim, playanim and anim_event, play animations: the server sends "firstraise" and
+// "lowready" (the inspect, and the first raise after its ammo bag) on its "deadshot_keyline" client system, and the
+// client starts the weapon's animation and the event on the player's body; a debug loop also plays any set in the
+// anim2 and anim3 dvars. The callers start them as threads or statements and don't use the result.
 // - startweaponanim(localclientnum, state, hand): with the WeaponAnims setting on (BO3MACFIX_WEAPONANIMS=1), the
 //   client's viewmodel update starts that weapon animation state (weapon_anim.h); on by default. Otherwise
-//   the weapon just keeps its usual animation.
-// - anim_event(x, event): the event is one of the player's third-person anim script events (15 FIRSTRAISEWEAPON,
-//   17 RELOAD_EMPTY, 101 FLOURISH in the game's table at 0x1020fba20), which first person doesn't show: still a no-op.
+//   the weapon just keeps its usual animation and the script gets the 0 the game's isprofilebuild gave it.
+// - anim_event(entnum, event): with WeaponAnims on, the event (101 FLOURISH, 15 FIRSTRAISEWEAPON) is played on that
+//   player's body as T7Overcharged plays it, which the third person view and the other players see
+//   (t7o_anim_event.c); like T7Overcharged it gives the script nothing back. Otherwise a no-op that gives 0.
 // - playanim: only AAE's debug loop calls it, still a no-op.
 #define Hash_Native 0x22ea46c7u
 
@@ -286,7 +287,7 @@ static uint32_t script_hash(const char *name) {
 // the natives, by hash, and whether each was logged yet
 typedef enum {
     Native_GetViewOrigin, Native_GetViewAngles, // vectors from the local client's cg_t
-    Native_StartWeaponAnim, Native_PlayAnim, Native_AnimEvent, // no-ops, 0
+    Native_StartWeaponAnim, Native_PlayAnim, Native_AnimEvent, // animations, or no-ops that give 0
     Native_Count
 } native_t;
 static const char *const native_names[Native_Count] = { "getvieworigin", "getviewang", "startweaponanim", "playanim",
@@ -451,11 +452,15 @@ static bool call_native(int inst, uint32_t hash) {
         // a plain load once it's logged; the exchange makes only one thread log it
         if (!atomic_load_explicit(&native_logged[native], memory_order_relaxed) &&
             !atomic_exchange_explicit(&native_logged[native], true, memory_order_relaxed)) {
-            bool played = native == Native_StartWeaponAnim && weapon_anims_enabled;
+            bool played = (native == Native_StartWeaponAnim || native == Native_AnimEvent) && weapon_anims_enabled;
             printf("T7Overcharged: scripts use %s%s\n", native_names[native],
                    no_op && !played ? " (no weapon animations here, they get 0)" : "");
         }
         if (no_op) {
+            if (native == Native_AnimEvent && weapon_anims_enabled) {
+                t7o_anim_event(inst);
+                return true;
+            }
             if (native == Native_StartWeaponAnim && weapon_anims_enabled)
                 request_weapon_anim(inst);
             Scr_AddInt(inst, 0);
@@ -483,12 +488,14 @@ void t7o_install_script_functions(bool weapon_anims) {
     for (int native = 0; native < Native_Count; native++)
         native_hashes[native] = script_hash(native_names[native]);
     install_hook_GScr_IsProfileBuild((void *)(game_base_address + ADDR_GScr_IsProfileBuild));
-    // WeaponAnims (BO3MACFIX_WEAPONANIMS, on by default): startweaponanim plays the animation. The hook has a slot
-    // in the pre-patched copy, and is only installed with the setting on
+    // WeaponAnims (BO3MACFIX_WEAPONANIMS, on by default): startweaponanim plays the animation and anim_event the
+    // player's. The hook has a slot in the pre-patched copy, and is only installed with the setting on
     if (weapon_anims) {
         weapon_anims_enabled = true;
+        t7o_anim_event_init(game_base_address);
         install_hook_CG_UpdateViewWeaponAnim((void *)(game_base_address + ADDR_CG_UpdateViewWeaponAnim));
-        printf("T7Overcharged: WeaponAnims on, startweaponanim plays through the viewmodel update\n");
+        printf("T7Overcharged: WeaponAnims on, startweaponanim plays through the viewmodel update and anim_event on "
+               "the player's body\n");
     }
 }
 
