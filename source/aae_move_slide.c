@@ -60,8 +60,15 @@
 #define Undo_Above 90000.0f
 
 #define Flag_Sliding 0x80ull
+#define Flag_Sprinting 0x20ull
+#define Flag_16 (1ull << 16)          // refuses a slide like the next one (not followed)
+#define Flag_18 (1ull << 18)          // a sprint younger than 200 ms may slide with it
+#define Flag_No_Slide (1ull << 40)    // what a script's allowslide(false) sets (the builtin at 0x100dad972)
 #define Flag_Slide_Asked (1ull << 46) // a slide was asked for in the air: on landing the speed test decides
 #define Flag_Other_Push (1ull << 51)
+#define No_Ground 0x3ff
+#define Sprint_Least_Ms 200
+#define Slide_Least_Speed 100.0f
 
 // Which NaN comes out of an addition or multiplication of two floats that both aren't numbers: on x86 the first
 // operand's, made quiet (and a single one, made quiet). T7Overcharged's instructions have their operands in a fixed
@@ -152,6 +159,35 @@ bool aae_move_slide_clamp_left_out(bool on) {
     return on;
 }
 
+aae_move_slide_answer aae_move_slide_answer_of(const aae_move_slide_asked_t *asked) {
+    uint64_t flags = asked->flags;
+    if ((flags & Flag_Sliding) != 0)
+        return Slide_Answer_Sliding;
+    if ((flags & (Flag_16 | Flag_No_Slide)) != 0)
+        return Slide_Answer_Not_Allowed;
+    if (asked->slide_time > asked->server_time)
+        return Slide_Answer_Too_Soon;
+    if (asked->ground_entity == No_Ground)
+        return Slide_Answer_In_Air;
+    if (asked->ground_plane == 0)
+        return Slide_Answer_No_Ground;
+    if ((flags & Flag_Slide_Asked) != 0)
+        return Slide_Answer_Landing;
+    if (!asked->slide_button)
+        return Slide_Answer_No_Button;
+    if ((flags & Flag_Sprinting) == 0)
+        return Slide_Answer_Not_Sprinting;
+    int32_t into_sprint = (int32_t)((uint32_t)asked->server_time - (uint32_t)asked->sprint_start);
+    if (into_sprint < Sprint_Least_Ms && (flags & Flag_18) == 0)
+        return Slide_Answer_Sprint_Too_New;
+    // the game's order of sums; a speed that isn't a number passes, as the game's comparison lets it
+    const float *v = asked->velocity;
+    float speed = sqrtf(v[2] * v[2] + (v[1] * v[1] + v[0] * v[0]));
+    if (Slide_Least_Speed > speed)
+        return Slide_Answer_Too_Slow;
+    return Slide_Answer_Later;
+}
+
 // ---- the game's side
 
 // the player state and the move (pml_t), at the same places in both games
@@ -166,6 +202,14 @@ bool aae_move_slide_clamp_left_out(bool on) {
 #define Clamp_Limit 20.0f
 #define Ramp_Floor 0.01f     // the ramp's factor at its start is this squared
 #define Cg_PlayerState 0x11a8d0 // cg_t, the local client's: its predicted player state
+#define Ps_Ground_Entity 0x100 // int: what the player stands on
+#define Ps_Weapon_State 0x8c   // int: most likely the weapon's state; the speed ramp after a slide needs 3
+#define Ps_Sprint_Start 0x750  // int: when the sprint began
+#define Ps_Slide_Count 0x84c   // int: slides in a row; the game starts no 15th
+#define Pm_Server_Time 0x8     // the move's command: its time,
+#define Pm_Crouch_Byte 0xe     // its crouch button (this byte's 0x40, button word 0's 0x400000),
+#define Pm_Slide_Byte 0x13     // and its slide button (this byte's 1, button word 1's 0x1000000)
+#define Pml_Ground_Plane 0x30
 
 static void (*PM_Accelerate)(uint8_t *ps, uint8_t *pml, const float *direction, float wish_speed, float acceleration);
 
@@ -337,24 +381,114 @@ detour_choice(Slide_PitchClamp, "mov %r15, %rdi\n mov %r14, %rsi\n") {
     return left_out;
 }
 
+// ---- the game's slide test, looked at (BO3MACFIX_MOVEDEBUG=1 only)
+//
+// The slide function, (pmove_t *, pml_t *), once a move on each thread: hooked only for the debug line, and always
+// called as it is. When the command's slide button or crouch button goes down for a player, a line says what the game's
+// slide test saw then and what it answered, and whether a slide started.
+
+static uint8_t *const *cg_clients; // the game's pointer to the local clients' cg_t
+
+static const char *answer_text(aae_move_slide_answer answer) {
+    switch (answer) {
+    case Slide_Answer_Sliding: return "already sliding";
+    case Slide_Answer_Not_Allowed: return "no: not allowed (flag 16 or 40; 40 is a script's allowslide(false))";
+    case Slide_Answer_Too_Soon: return "no: the last slide's time is still ahead";
+    case Slide_Answer_In_Air: return "in the air: with the slide button down the game asks for a slide on landing";
+    case Slide_Answer_No_Ground: return "no: not on a ground plane";
+    case Slide_Answer_Landing: return "a slide asked for in the air: the landing's test of 150 units/s decides";
+    case Slide_Answer_No_Button: return "no: the slide button isn't down";
+    case Slide_Answer_Not_Sprinting: return "no: not sprinting";
+    case Slide_Answer_Sprint_Too_New: return "no: under 200 ms into the sprint";
+    case Slide_Answer_Too_Slow: return "no: under 100 units/s";
+    case Slide_Answer_Later: return "button, sprint and speed are right: the game's later tests decide";
+    }
+    return "?";
+}
+
+// whether a button went down for this player on this thread (each thread sees its own players: the server's or the
+// client's predicted one)
+static bool newly_down(const uint8_t *ps, bool slide, bool crouch, bool *slide_new, bool *crouch_new) {
+    static _Thread_local struct {
+        const uint8_t *ps;
+        bool slide, crouch;
+    } seen[4];
+    static _Thread_local unsigned next;
+    unsigned at = 4;
+    for (unsigned i = 0; i < 4; i++)
+        if (seen[i].ps == ps)
+            at = i;
+    if (at == 4) {
+        at = next++ % 4;
+        seen[at].ps = ps, seen[at].slide = false, seen[at].crouch = false;
+    }
+    *slide_new = slide && !seen[at].slide;
+    *crouch_new = crouch && !seen[at].crouch;
+    seen[at].slide = slide, seen[at].crouch = crouch;
+    return *slide_new || *crouch_new;
+}
+
+// the slide function (pmove_t *, pml_t *): what its test saw, read before it runs; whether it started a slide, after
+install_hook_name(PM_UpdateSlide, void, uint8_t *pm, uint8_t *pml) {
+    uint8_t *ps;
+    memcpy(&ps, pm, sizeof(ps));
+    aae_move_slide_asked_t asked;
+    memcpy(&asked.flags, ps + Ps_Flags, sizeof(asked.flags));
+    memcpy(&asked.server_time, pm + Pm_Server_Time, sizeof(asked.server_time));
+    memcpy(&asked.slide_time, ps + Ps_Slide_Time, sizeof(asked.slide_time));
+    memcpy(&asked.ground_entity, ps + Ps_Ground_Entity, sizeof(asked.ground_entity));
+    memcpy(&asked.ground_plane, pml + Pml_Ground_Plane, sizeof(asked.ground_plane));
+    memcpy(&asked.sprint_start, ps + Ps_Sprint_Start, sizeof(asked.sprint_start));
+    memcpy(asked.velocity, ps + Ps_Velocity, sizeof(asked.velocity));
+    asked.slide_button = (pm[Pm_Slide_Byte] & 1) != 0;
+    bool crouch = (pm[Pm_Crouch_Byte] & 0x40) != 0;
+    int32_t count;
+    memcpy(&count, ps + Ps_Slide_Count, sizeof(count));
+    orig_PM_UpdateSlide(pm, pml);
+    bool slide_new, crouch_new;
+    if (!newly_down(ps, asked.slide_button, crouch, &slide_new, &crouch_new))
+        return;
+    uint64_t after;
+    memcpy(&after, ps + Ps_Flags, sizeof(after));
+    const uint8_t *cg = *cg_clients;
+    bool client = cg != NULL && ps == cg + Cg_PlayerState;
+    const char *pressed = slide_new ? (crouch ? "the slide button down (crouch down too)"
+                                              : "the slide button down (crouch up)")
+                                    : (asked.slide_button ? "the crouch button down (slide down too)"
+                                                          : "the crouch button down (slide up)");
+    char sprint[48] = "not sprinting";
+    if ((asked.flags & Flag_Sprinting) != 0)
+        snprintf(sprint, sizeof(sprint), "sprinting for %d ms",
+                 (int32_t)((uint32_t)asked.server_time - (uint32_t)asked.sprint_start));
+    const char *outcome = (after & ~asked.flags & Flag_Sliding) != 0       ? "a slide started"
+                          : (after & ~asked.flags & Flag_Slide_Asked) != 0 ? "a slide asked for on landing (flag 46)"
+                                                                           : "no slide";
+    const float *v = asked.velocity;
+    say("movement: slide test (%s): %s; %s, horizontal speed %.1f, flags 16 %d 18 %d 40 %d 46 %d, slide count %d: "
+        "%s; %s\n", client ? "client" : "server", pressed, sprint, sqrtf(v[0] * v[0] + v[1] * v[1]),
+        (asked.flags & Flag_16) != 0, (asked.flags & Flag_18) != 0, (asked.flags & Flag_No_Slide) != 0,
+        (asked.flags & Flag_Slide_Asked) != 0, count, answer_text(aae_move_slide_answer_of(&asked)), outcome);
+}
+
 // ---- what the first local client's player does (BO3MACFIX_MOVEDEBUG=1)
 //
 // Its predicted player state, looked at every 5 ms from a thread of its own, whatever the setting: so a run with
 // AAEMovement off shows the game's own numbers by the same lines. It only reads, and through the kernel, which says no
 // where a plain read would fault: the game frees the cg_t when it shuts down.
 
-static uint8_t *const *cg_clients; // the game's pointer to the local clients' cg_t
-
 typedef struct {
     bool sliding, asked, after;
     int half_seen, after_seen;
+    int32_t state_at_end, state_after;
     uint64_t start, end;
     float speed_before, speed_at_start, pitch_at_start, pitch_half, pitch_low, pitch_high, speed_after[3];
 } watched_t;
 
 // one look at the player: a line when a slide is asked for in the air, when one begins and ends, and the horizontal
-// speed 0.1, 0.25 and 0.5 s after it ended
-static void watch_step(watched_t *w, uint64_t now, uint64_t flags, const float velocity[3], float pitch) {
+// speed 0.1, 0.25 and 0.5 s after it ended, with the weapon state that decides whether the game's speed ramp after a
+// slide is reached at all
+static void watch_step(watched_t *w, uint64_t now, uint64_t flags, const float velocity[3], float pitch,
+                       int32_t state) {
     static const uint64_t after_ms[3] = { 100, 250, 500 };
     float speed = sqrtf(velocity[0] * velocity[0] + velocity[1] * velocity[1]);
     bool sliding = (flags & Flag_Sliding) != 0, asked = (flags & Flag_Slide_Asked) != 0;
@@ -377,13 +511,17 @@ static void watch_step(watched_t *w, uint64_t now, uint64_t flags, const float v
         say("movement: seen: the slide ended after %llu ms: view pitch %.1f at its start, %s at 0.5 s, %.1f to %.1f "
             "in all; horizontal speed %.1f at its start\n", (unsigned long long)(now - w->start), w->pitch_at_start,
             half, w->pitch_low, w->pitch_high, w->speed_at_start);
-        w->end = now, w->after = true, w->after_seen = 0;
+        w->end = now, w->after = true, w->after_seen = 0, w->state_at_end = state;
     } else if (w->after) {
-        while (w->after_seen < 3 && now - w->end >= after_ms[w->after_seen])
+        while (w->after_seen < 3 && now - w->end >= after_ms[w->after_seen]) {
+            if (w->after_seen == 0)
+                w->state_after = state;
             w->speed_after[w->after_seen++] = speed;
+        }
         if (w->after_seen == 3) {
-            say("movement: seen: horizontal speed %.1f, %.1f and %.1f at 0.1, 0.25 and 0.5 s after the slide\n",
-                w->speed_after[0], w->speed_after[1], w->speed_after[2]);
+            say("movement: seen: horizontal speed %.1f, %.1f and %.1f at 0.1, 0.25 and 0.5 s after the slide; weapon "
+                "state %d at its end, %d at 0.1 s (the speed ramp after a slide is the game's in state 3)\n",
+                w->speed_after[0], w->speed_after[1], w->speed_after[2], w->state_at_end, w->state_after);
             w->after = false;
         }
     }
@@ -414,10 +552,12 @@ static void *watch(void *unused) {
             continue;
         uint64_t flags;
         float velocity[3], pitch;
+        int32_t state;
         memcpy(&flags, ps + Ps_Flags, sizeof(flags));
         memcpy(velocity, ps + Ps_Velocity, sizeof(velocity));
         memcpy(&pitch, ps + Ps_View_Pitch, sizeof(pitch));
-        watch_step(&watched, now_ms(), flags, velocity, pitch);
+        memcpy(&state, ps + Ps_Weapon_State, sizeof(state));
+        watch_step(&watched, now_ms(), flags, velocity, pitch, state);
     }
     return NULL;
 }
@@ -451,7 +591,13 @@ void aae_move_slide_init(uint64_t game_base_address) {
     install_detour_Slide_StartPitch((void *)(game_base_address + ADDR_StartSlide_PitchLoad));
     install_detour_Slide_PitchClamp((void *)(game_base_address + ADDR_PM_UpdateViewAngles_SlideClamp),
                                     (void *)(game_base_address + ADDR_PM_UpdateViewAngles_SlideClampDone));
-    if (debug)
-        say("movement: T7Overcharged's slide changes are hooked (slide_preserve_momentum, slideslowdown, "
-            "instant_slide, slideangles)\n");
+    if (!debug)
+        return;
+    say("movement: T7Overcharged's slide changes are hooked (slide_preserve_momentum, slideslowdown, instant_slide, "
+        "slideangles)\n");
+    // only for the debug line: the game's own slide test, looked at
+    if (prepatch_has_hook(ADDR_PM_UpdateSlide)) {
+        install_hook_PM_UpdateSlide((void *)(game_base_address + ADDR_PM_UpdateSlide));
+        say("movement: the game's slide test is looked at (a line when the slide or crouch button goes down)\n");
+    }
 }

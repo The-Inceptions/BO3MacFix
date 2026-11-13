@@ -39,5 +39,35 @@ float aae_move_slide_start_pitch(bool on, float pitch);
 // slideangles: whether the 20 degree pitch clamp while sliding is left out
 bool aae_move_slide_clamp_left_out(bool on);
 
+// For the debug line (BO3MACFIX_MOVEDEBUG=1): what the game's slide test (its slide function, before it starts a
+// slide) sees for a player, and its answer, in the game's order. Read in the Mac game's 0x100e8189d (Windows
+// 0x1401683a0); T7Overcharged changes nothing in it but the 150 of the landing's test.
+typedef struct {
+    uint64_t flags;        // the player's movement flags
+    int32_t server_time;   // the move's time
+    int32_t slide_time;    // when the last slide started, or ended
+    int32_t ground_entity; // what the player stands on, 0x3ff for nothing
+    int32_t ground_plane;  // the move's +0x30: non-zero on a ground plane
+    bool slide_button;     // the command's slide button
+    int32_t sprint_start;  // when the sprint began
+    float velocity[3];
+} aae_move_slide_asked_t;
+
+typedef enum {
+    Slide_Answer_Sliding,        // already sliding
+    Slide_Answer_Not_Allowed,    // movement flag 16 or 40 (40 is what a script's allowslide(false) sets)
+    Slide_Answer_Too_Soon,       // the last slide's time is still ahead
+    Slide_Answer_In_Air,         // in the air: with the slide button down the game asks for a slide on landing
+    Slide_Answer_No_Ground,      // not on a ground plane
+    Slide_Answer_Landing,        // a slide was asked for in the air: the landing's test decides (150 units/s)
+    Slide_Answer_No_Button,      // the slide button isn't down
+    Slide_Answer_Not_Sprinting,
+    Slide_Answer_Sprint_Too_New, // under 200 ms into the sprint
+    Slide_Answer_Too_Slow,       // under 100 units/s
+    Slide_Answer_Later,          // all of these passed: the game's later tests decide (weapon, room ahead, aiming ...)
+} aae_move_slide_answer;
+
+aae_move_slide_answer aae_move_slide_answer_of(const aae_move_slide_asked_t *asked);
+
 // installs the hooks, once, when AAEMovement is on; call behind aae_movement_init
 void aae_move_slide_init(uint64_t game_base_address);

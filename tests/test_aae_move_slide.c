@@ -442,6 +442,170 @@ static void test_pitch_clamp(void) {
     CHECK(!handler_Slide_PitchClamp((uint64_t)(uintptr_t)ps, (uint64_t)(uintptr_t)command));
 }
 
+// ---- the game's slide test (the slide function 0x100e8189d before it starts a slide), in its order
+static aae_move_slide_asked_t sprinting_on_ground(void) {
+    aae_move_slide_asked_t asked = { .flags = Flag_Sprinting, .server_time = 50000, .slide_time = 40000,
+                                     .ground_entity = 0x3fe, .ground_plane = 1, .slide_button = true,
+                                     .sprint_start = 48800, .velocity = { 230.0f, 0.0f, 0.0f } };
+    return asked;
+}
+static void test_slide_answer(void) {
+    aae_move_slide_asked_t a = sprinting_on_ground();
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Later);
+    // each test, in the game's order: whatever comes after a failed one doesn't matter
+    a.flags |= Flag_Sliding, a.slide_button = false;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Sliding);
+    a = sprinting_on_ground(), a.flags |= Flag_No_Slide, a.ground_entity = No_Ground;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Not_Allowed);
+    a = sprinting_on_ground(), a.flags |= Flag_16;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Not_Allowed);
+    a = sprinting_on_ground(), a.slide_time = 50001, a.ground_entity = No_Ground;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Too_Soon);
+    a.slide_time = 50000; // the same time is not ahead
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_In_Air);
+    a = sprinting_on_ground(), a.ground_plane = 0, a.flags |= Flag_Slide_Asked;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_No_Ground);
+    a = sprinting_on_ground(), a.flags = Flag_Slide_Asked, a.slide_button = false, a.velocity[0] = 0.0f;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Landing);
+    a = sprinting_on_ground(), a.slide_button = false;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_No_Button);
+    a = sprinting_on_ground(), a.flags = 0, a.velocity[0] = 0.0f;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Not_Sprinting);
+    // the sprint's first 200 ms, unless flag 18; 200 itself is enough; a sprint start ahead of the move counts too
+    a = sprinting_on_ground(), a.sprint_start = 49801;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Sprint_Too_New);
+    a.sprint_start = 49800;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Later);
+    a.sprint_start = 50500;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Sprint_Too_New);
+    a.flags |= Flag_18;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Later);
+    // the time into the sprint across the wrap of the clock (the slide time is compared as the game does, signed)
+    a = sprinting_on_ground(), a.server_time = INT32_MIN + 50, a.sprint_start = INT32_MAX - 500;
+    a.slide_time = INT32_MIN;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Later);
+    a.slide_time = 40000;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Too_Soon);
+    // 100 units/s in all three directions, with the game's order of sums; a speed that isn't a number passes
+    a = sprinting_on_ground(), a.velocity[0] = 99.99f;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Too_Slow);
+    a.velocity[0] = 100.0f;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Later);
+    a.velocity[0] = 60.0f, a.velocity[1] = 0.0f, a.velocity[2] = -80.0f;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Later);
+    a.velocity[2] = -79.0f;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Too_Slow);
+    a.velocity[1] = NAN;
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Later);
+    // where the grouping of the sum decides at 100 (z² + (y² + x²) is the game's; x² + (y² + z²) gives the opposite)
+    a.velocity[0] = float_of(0x419de86b), a.velocity[1] = float_of(0x42232ca9), a.velocity[2] = float_of(0x42b248a3);
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Later);
+    a.velocity[0] = float_of(0x4297a563), a.velocity[1] = float_of(0x426c7099), a.velocity[2] = float_of(0x41dc1785);
+    CHECK(aae_move_slide_answer_of(&a) == Slide_Answer_Too_Slow);
+}
+
+// the made-up game's slide function: what it was given, and the flags it leaves
+static struct {
+    int calls;
+    uint8_t *pm, *pml;
+    uint64_t flags_after;
+    bool set_flags;
+} game_update;
+static void game_update_slide(uint8_t *pm, uint8_t *pml) {
+    game_update.calls++;
+    game_update.pm = pm, game_update.pml = pml;
+    if (game_update.set_flags) {
+        uint8_t *ps;
+        memcpy(&ps, pm, sizeof(ps));
+        memcpy(ps + Ps_Flags, &game_update.flags_after, sizeof(game_update.flags_after));
+    }
+}
+// a move: the player state's pointer first, then the command (time, buttons) and the move's ground plane
+static void set_move(uint8_t *pm, uint8_t *pml, uint8_t *ps, bool slide, bool crouch, uint64_t flags, int32_t time) {
+    memset(pm, 0, 0x60);
+    memcpy(pm, &ps, sizeof(ps));
+    memcpy(pm + Pm_Server_Time, &time, sizeof(time));
+    pm[Pm_Slide_Byte] = slide ? 0x01 : 0xfe; // the bit next to it doesn't count
+    pm[Pm_Crouch_Byte] = crouch ? 0x40 : 0xbf;
+    memcpy(ps + Ps_Flags, &flags, sizeof(flags));
+    int32_t one = 1;
+    memcpy(pml + Pml_Ground_Plane, &one, sizeof(one));
+}
+static void test_observer(void) {
+    uint8_t *cg = calloc(1, Cg_PlayerState + 0x900), *server_ps = calloc(1, 0x900), pm[0x60], pml[0x100];
+    uint8_t *client_ps = cg + Cg_PlayerState;
+    uint8_t *const cg_pointer = cg;
+    cg_clients = &cg_pointer;
+    orig_PM_UpdateSlide = game_update_slide;
+    say = test_say;
+    memset(pml, 0, sizeof(pml));
+    float velocity[3] = { 240.0f, 70.0f, 0.0f };
+    int32_t start = 48750, ground = 0x3fe, count = 2;
+    for (int i = 0; i < 2; i++) {
+        uint8_t *ps = i == 0 ? server_ps : client_ps;
+        memcpy(ps + Ps_Velocity, velocity, sizeof(velocity));
+        memcpy(ps + Ps_Sprint_Start, &start, sizeof(start));
+        memcpy(ps + Ps_Ground_Entity, &ground, sizeof(ground));
+        memcpy(ps + Ps_Slide_Count, &count, sizeof(count));
+    }
+    // nothing pressed: the game's function, once, with what it was given, and no line
+    said[0] = '\0';
+    game_update = (typeof(game_update)){ 0 };
+    set_move(pm, pml, server_ps, false, false, Flag_Sprinting, 50000);
+    fake_PM_UpdateSlide(pm, pml);
+    CHECK(game_update.calls == 1 && game_update.pm == pm && game_update.pml == pml && said[0] == '\0');
+    // the slide button goes down in a sprint, and the game starts a slide: one line, and none while it stays down
+    game_update.set_flags = true, game_update.flags_after = Flag_Sprinting | Flag_Sliding;
+    set_move(pm, pml, server_ps, true, false, Flag_Sprinting, 50000);
+    fake_PM_UpdateSlide(pm, pml);
+    CHECK(said_has("movement: slide test (server): the slide button down (crouch up); sprinting for 1250 ms, "
+                   "horizontal speed 250.0, flags 16 0 18 0 40 0 46 0, slide count 2: button, sprint and speed are "
+                   "right: the game's later tests decide; a slide started\n"));
+    said[0] = '\0';
+    set_move(pm, pml, server_ps, true, false, Flag_Sprinting | Flag_Sliding, 50016);
+    fake_PM_UpdateSlide(pm, pml);
+    CHECK(said[0] == '\0' && game_update.calls == 3);
+    // the client's predicted player keeps its own buttons: its first press is a line of its own
+    game_update.flags_after = Flag_Sprinting;
+    set_move(pm, pml, client_ps, true, true, Flag_Sprinting | Flag_No_Slide, 50000);
+    fake_PM_UpdateSlide(pm, pml);
+    CHECK(said_has("movement: slide test (client): the slide button down (crouch down too); sprinting for 1250 ms, "
+                   "horizontal speed 250.0, flags 16 0 18 0 40 1 46 0, slide count 2: no: not allowed (flag 16 or 40; "
+                   "40 is a script's allowslide(false)); no slide\n"));
+    // let go, then crouch alone: the crouch line, with the game's answer for it
+    said[0] = '\0';
+    set_move(pm, pml, server_ps, false, false, Flag_Sprinting, 50100);
+    fake_PM_UpdateSlide(pm, pml);
+    CHECK(said[0] == '\0');
+    set_move(pm, pml, server_ps, false, true, Flag_Sprinting, 50116);
+    fake_PM_UpdateSlide(pm, pml);
+    CHECK(said_has("movement: slide test (server): the crouch button down (slide up); sprinting for 1366 ms, "
+                   "horizontal speed 250.0, flags 16 0 18 0 40 0 46 0, slide count 2: no: the slide button isn't down; "
+                   "no slide\n"));
+    // crouch held: no more lines
+    said[0] = '\0';
+    set_move(pm, pml, server_ps, false, true, Flag_Sprinting, 50132);
+    fake_PM_UpdateSlide(pm, pml);
+    CHECK(said[0] == '\0');
+    // in the air, the slide button asks for a slide on landing
+    said[0] = '\0';
+    int32_t air = No_Ground;
+    memcpy(server_ps + Ps_Ground_Entity, &air, sizeof(air));
+    game_update.flags_after = Flag_Slide_Asked;
+    set_move(pm, pml, server_ps, false, false, 0, 50200);
+    fake_PM_UpdateSlide(pm, pml);
+    set_move(pm, pml, server_ps, true, false, 0, 50216);
+    fake_PM_UpdateSlide(pm, pml);
+    CHECK(said_has("movement: slide test (server): the slide button down (crouch up); not sprinting, horizontal speed "
+                   "250.0, flags 16 0 18 0 40 0 46 0, slide count 2: in the air: with the slide button down the game "
+                   "asks for a slide on landing; a slide asked for on landing (flag 46)\n"));
+    CHECK(game_update.calls == 9);
+    say = printf;
+    cg_clients = NULL;
+    free(cg);
+    free(server_ps);
+}
+
 // ---- what is installed where
 // the watcher's thread: started how often, with what
 static int thread_starts;
@@ -492,6 +656,21 @@ static void test_install(void) {
         CHECK(hooks == 0);
     }
     test_enabled = true, have_stubs = true, stub_missing_for = 1;
+    // with BO3MACFIX_MOVEDEBUG the game's slide test is looked at too, from its own stub; a copy without that stub
+    // still gets the six places
+    setenv("BO3MACFIX_MOVEDEBUG", "1", 1);
+    start_thread = test_start_thread;
+    init_with(true, true, 1);
+    CHECK(hooks == 7 && was_hooked(ADDR_PM_UpdateSlide, (void *)fake_PM_UpdateSlide, (void **)&orig_PM_UpdateSlide));
+    CHECK(said_has("movement: the game's slide test is looked at (a line when the slide or crouch button goes down)\n"));
+    init_with(true, true, ADDR_PM_UpdateSlide);
+    CHECK(hooks == 6 && !said_has("slide test is looked at"));
+    init_with(false, true, 1);
+    CHECK(hooks == 0);
+    unsetenv("BO3MACFIX_MOVEDEBUG");
+    init_with(true, true, 1);
+    CHECK(hooks == 6 && !was_hooked(ADDR_PM_UpdateSlide, (void *)fake_PM_UpdateSlide, (void **)&orig_PM_UpdateSlide));
+    start_thread = pthread_create;
     // the watcher's thread: only with BO3MACFIX_MOVEDEBUG (not 0), whatever the setting says
     start_thread = test_start_thread;
     thread_starts = 0, thread_body = NULL;
@@ -516,9 +695,14 @@ static void test_install(void) {
     CHECK(ADDR_PM_DoSlideAdjustments == 0x11488f0 && ADDR_PM_Accelerate == 0x1147ed9 &&
           ADDR_PM_CmdScale_SlideRampCmp == 0x11486ac && ADDR_PM_Friction_SlideFriction == 0x113c526 &&
           ADDR_CanSlide_SpeedTest == 0xe814f5 && ADDR_StartSlide_PitchLoad == 0xe82226 &&
-          ADDR_PM_UpdateViewAngles_SlideClamp == 0x113e4b3 && ADDR_PM_UpdateViewAngles_SlideClampDone == 0x113e4c3);
+          ADDR_PM_UpdateViewAngles_SlideClamp == 0x113e4b3 && ADDR_PM_UpdateViewAngles_SlideClampDone == 0x113e4c3 &&
+          ADDR_PM_UpdateSlide == 0xe8189d);
     CHECK(Ps_Flags == 0x10 && Ps_Velocity == 0x3c && Ps_View_Pitch == 0x318 && Ps_Slide_Time == 0x844 &&
           Pml_Along == 0x40 && Pml_Flags == 0x54 && Pml_Flagged == 0x64 && Cg_PlayerState == 0x11a8d0);
+    CHECK(Ps_Ground_Entity == 0x100 && Ps_Weapon_State == 0x8c && Ps_Sprint_Start == 0x750 && Ps_Slide_Count == 0x84c &&
+          Pm_Server_Time == 8 && Pm_Crouch_Byte == 0xe && Pm_Slide_Byte == 0x13 && Pml_Ground_Plane == 0x30);
+    CHECK(Flag_Sprinting == 0x20 && Flag_16 == 0x10000 && Flag_18 == 0x40000 && Flag_No_Slide == 0x10000000000ull &&
+          Flag_Slide_Asked == 0x400000000000ull && No_Ground == 0x3ff);
 }
 
 // ---- the debug lines the game checks look for (wip/agents/movec/gamecheck)
@@ -565,20 +749,21 @@ static void test_debug_lines(void) {
     watched_t w = { 0 };
     float still[3] = { 30.0f, 38.0f, 0.0f }, fast[3] = { 600.0f, 0.0f, 0.0f }, slow[3] = { 90.0f, 0.0f, 0.0f };
     said[0] = '\0';
-    watch_step(&w, 1000, Flag_Slide_Asked, still, 12.0f);
-    watch_step(&w, 1100, Flag_Sliding, fast, 40.0f);
-    watch_step(&w, 1400, Flag_Sliding, fast, 70.0f);
-    watch_step(&w, 1620, Flag_Sliding, fast, 60.0f);
-    watch_step(&w, 1900, 0, slow, 60.0f);
-    watch_step(&w, 2010, 0, slow, 60.0f);
-    watch_step(&w, 2160, 0, slow, 60.0f);
-    watch_step(&w, 2410, 0, fast, 60.0f);
+    watch_step(&w, 1000, Flag_Slide_Asked, still, 12.0f, 0);
+    watch_step(&w, 1100, Flag_Sliding, fast, 40.0f, 0);
+    watch_step(&w, 1400, Flag_Sliding, fast, 70.0f, 0);
+    watch_step(&w, 1620, Flag_Sliding, fast, 60.0f, 0);
+    watch_step(&w, 1900, 0, slow, 60.0f, 5);
+    watch_step(&w, 2010, 0, slow, 60.0f, 3);
+    watch_step(&w, 2160, 0, slow, 60.0f, 4);
+    watch_step(&w, 2410, 0, fast, 60.0f, 4);
     CHECK(said_has("movement: seen: a slide asked for in the air (flag 46), horizontal speed 48.4\n"));
     CHECK(said_has("movement: seen: a slide begins, horizontal speed 48.4 before it, 600.0 at its start, view pitch "
                    "40.0\n"));
     CHECK(said_has("movement: seen: the slide ended after 800 ms: view pitch 40.0 at its start, 60.0 at 0.5 s, 40.0 "
                    "to 70.0 in all; horizontal speed 600.0 at its start\n"));
-    CHECK(said_has("movement: seen: horizontal speed 90.0, 90.0 and 600.0 at 0.1, 0.25 and 0.5 s after the slide\n"));
+    CHECK(said_has("movement: seen: horizontal speed 90.0, 90.0 and 600.0 at 0.1, 0.25 and 0.5 s after the slide; "
+                   "weapon state 5 at its end, 3 at 0.1 s (the speed ramp after a slide is the game's in state 3)\n"));
     say = printf, debug = 0;
 }
 
@@ -592,6 +777,8 @@ int main(void) {
     test_speed_test();
     test_start_pitch();
     test_pitch_clamp();
+    test_slide_answer();
+    test_observer();
     test_install();
     test_debug_lines();
 #if defined(__x86_64__)
