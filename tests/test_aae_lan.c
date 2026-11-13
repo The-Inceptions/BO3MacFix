@@ -32,10 +32,41 @@ static uint64_t test_steam_id(void) {
     return game_steam_id;
 }
 
+// which places the pre-patched executable has stubs for
+static bool have_stubs = true;
+static int stub_missing_for = -1;
+bool prepatch_has_hook(uint32_t offset) {
+    return have_stubs && (int)offset != stub_missing_for;
+}
+// the made-up game's aae_offlinejoin: its kind at +0x1c, its value at +0x28, and the text of one of kind 8
+static struct {
+    uint8_t game_side[0x40];
+    bool there;
+    char text[16];
+} offline_join;
+static void *game_find(uint32_t hash) {
+    return offline_join.there && hash == gsc_hash("aae_offlinejoin") ? &offline_join : NULL;
+}
+static int wrong_asks; // the text asked of a dvar that has none
+static const char *game_string(void *dvar) {
+    int32_t kind;
+    memcpy(&kind, ((uint8_t *)dvar) + 0x1c, sizeof(kind));
+    if (kind != 8)
+        wrong_asks++;
+    return ((typeof(offline_join) *)dvar)->text;
+}
+static void set_offline_join(bool there, int32_t kind, const char *text, int32_t value) {
+    memset(&offline_join, 0, sizeof(offline_join));
+    offline_join.there = there;
+    memcpy(offline_join.game_side + 0x1c, &kind, sizeof(kind));
+    memcpy(offline_join.game_side + 0x28, &value, sizeof(value));
+    snprintf(offline_join.text, sizeof(offline_join.text), "%s", text);
+}
+
 // ---- the hooks, and the game functions behind them
 static struct {
     void *address, *replacement, **original;
-} hooked[8];
+} hooked[16];
 static int hooks;
 static struct {
     int connects, parses, pings, joins;
@@ -78,7 +109,7 @@ static uint64_t game_user_send(uint64_t to, const uint8_t *packet, uint64_t leng
     return user_send.answer;
 }
 int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
-    if (hooks < 8)
+    if (hooks < 16)
         hooked[hooks] = (typeof(hooked[0])){ address, fake_func, out_origin_func };
     hooks++;
     if (out_origin_func == (void **)&orig_LanJoin_Connect)
@@ -94,7 +125,7 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
     return 0;
 }
 static bool was_hooked(uint32_t place, void *replacement, void **original) {
-    for (int i = 0; i < hooks && i < 8; i++)
+    for (int i = 0; i < hooks && i < 16; i++)
         if (hooked[i].address == (void *)(0x100000000 + (uint64_t)place))
             return hooked[i].replacement == replacement && hooked[i].original == original;
     return false;
@@ -445,7 +476,8 @@ static void test_split(void) {
             printf("  (with %s)\n", not_ones[i]);
     }
     // the largest number that fits, and one more digit
-    CHECK(!aae_lan_split("a@18446744073709551615", address, &id) && !aae_lan_split("a@184467440737095516150", address, &id));
+    CHECK(!aae_lan_split("a@18446744073709551615", address, &id) &&
+          !aae_lan_split("a@184467440737095516150", address, &id));
     // 95 characters before the "@" at most
     char long_text[200];
     memset(long_text, 'a', 95);
@@ -950,6 +982,80 @@ static void test_lobby_send(void) {
     set_mod(true);
 }
 
+// ---- the host's join checks
+static void test_switch(void) {
+    CHECK(aae_lan_switch_on(8, "1", 0) && !aae_lan_switch_on(8, "0", 1) && !aae_lan_switch_on(8, "1 ", 0) &&
+          !aae_lan_switch_on(8, " 1", 0) && !aae_lan_switch_on(8, "10", 0) && !aae_lan_switch_on(8, "", 1) &&
+          !aae_lan_switch_on(8, "true", 0) && !aae_lan_switch_on(8, NULL, 1));
+    // a bool, an int or an enum of value 1
+    CHECK(aae_lan_switch_on(1, NULL, 1) && aae_lan_switch_on(6, NULL, 1) && aae_lan_switch_on(7, NULL, 1));
+    CHECK(!aae_lan_switch_on(1, NULL, 0) && !aae_lan_switch_on(6, NULL, 2) && !aae_lan_switch_on(6, NULL, -1) &&
+          !aae_lan_switch_on(7, NULL, 0));
+    // other kinds: a float, a vector, a 64-bit int, a colour
+    CHECK(!aae_lan_switch_on(2, NULL, 1) && !aae_lan_switch_on(2, "1", 0x3f800000) && !aae_lan_switch_on(3, NULL, 1) &&
+          !aae_lan_switch_on(9, NULL, 1) && !aae_lan_switch_on(10, NULL, 1) && !aae_lan_switch_on(0, "1", 1));
+}
+
+static void test_offline_join(void) {
+    CHECK(aae_lan_offline_join(2, 4, 1, true));
+    CHECK(!aae_lan_offline_join(2, 4, 1, false) && !aae_lan_offline_join(1, 4, 1, true) &&
+          !aae_lan_offline_join(0, 4, 1, true) && !aae_lan_offline_join(3, 4, 1, true) &&
+          !aae_lan_offline_join(2, 1, 1, true) && !aae_lan_offline_join(2, 0, 1, true) &&
+          !aae_lan_offline_join(2, 4, 2, true) && !aae_lan_offline_join(2, 4, 0, true));
+}
+
+// the LAN branch of the join handler, with the joiner's network mode in ecx, the host's in eax and the join type
+// on the frame
+static uint64_t joiner_mode_after(uint64_t joiner_mode, int32_t join_type, uint64_t host_mode) {
+    uint8_t frame[0x400];
+    detour_registers_t registers;
+    memset(&registers, 0xab, sizeof(registers));
+    registers.rbp = (uint64_t)(frame + sizeof(frame));
+    memcpy(frame + sizeof(frame) - 0x340, &join_type, sizeof(join_type));
+    registers.rcx = joiner_mode, registers.rax = host_mode;
+    detour_registers_t before = registers;
+    handler_LanJoin_JoinerNetworkMode(&registers);
+    before.rcx = registers.rcx; // the only one it may change
+    CHECK(memcmp(&before, &registers, sizeof(registers)) == 0);
+    return registers.rcx;
+}
+
+static void test_join_checks(void) {
+    set_mod(true);
+    wrong_asks = 0;
+    // aae_offlinejoin "1": a direct joiner in online mode counts as one in LAN mode
+    set_offline_join(true, 8, "1", 0);
+    CHECK(joiner_mode_after(2, 4, 1) == 1);
+    CHECK(joiner_mode_after(0xffffffff00000002ull, 4, 0xffffffff00000001ull) == 1);
+    // nothing else does
+    CHECK(joiner_mode_after(2, 1, 1) == 2 && joiner_mode_after(2, 0, 1) == 2 && joiner_mode_after(0, 4, 1) == 0 &&
+          joiner_mode_after(3, 4, 1) == 3 && joiner_mode_after(2, 4, 2) == 2);
+    set_offline_join(true, 8, "0", 1);
+    CHECK(joiner_mode_after(2, 4, 1) == 2);
+    set_offline_join(false, 8, "1", 1);
+    CHECK(joiner_mode_after(2, 4, 1) == 2);
+    set_offline_join(true, 1, "", 1);
+    CHECK(joiner_mode_after(2, 4, 1) == 1);
+    set_offline_join(true, 1, "", 0x100);
+    CHECK(joiner_mode_after(2, 4, 1) == 2);
+    set_offline_join(true, 1, "", 0x101); // a bool is the byte, whatever is behind it
+    CHECK(joiner_mode_after(2, 4, 1) == 1);
+    set_offline_join(true, 6, "", 1);
+    CHECK(joiner_mode_after(2, 4, 1) == 1);
+    set_offline_join(true, 2, "1", 0x3f800000);
+    CHECK(joiner_mode_after(2, 4, 1) == 2 && wrong_asks == 0);
+    // not without the mod
+    set_offline_join(true, 8, "1", 0);
+    set_mod(false);
+    CHECK(joiner_mode_after(2, 4, 1) == 2);
+    set_mod(true);
+    // the versions: the joiner isn't turned away while the mod is loaded
+    CHECK(handler_LanJoin_PlaylistVersion(1230005, 1240000) && handler_LanJoin_FFOTDVersion(41, 42));
+    set_mod(false);
+    CHECK(!handler_LanJoin_PlaylistVersion(1230005, 1240000) && !handler_LanJoin_FFOTDVersion(41, 42));
+    set_mod(true);
+}
+
 // ---- init
 static void *started;
 static void *nothing(void *unused) {
@@ -965,12 +1071,35 @@ static void test_init(void) {
     start_thread = test_start;
     aae_lan_init(base, 0);
     CHECK(started == NULL && lobby_network_mode == NULL && hooks == 0);
+    // without the stubs of the three places in the join handler: none of them
+    const int places[] = { ADDR_LanJoin_JoinerNetworkMode, ADDR_LanJoin_PlaylistRejected, ADDR_LanJoin_FFOTDRejected };
+    for (int i = 0; i < 4; i++) {
+        have_stubs = i < 3, stub_missing_for = i < 3 ? places[i] : -1;
+        hooks = 0;
+        aae_lan_init(base, 1);
+        CHECK(hooks == 5 && !was_hooked(places[0], (void *)handler_LanJoin_JoinerNetworkMode,
+                                        &orig_LanJoin_JoinerNetworkMode));
+    }
+    have_stubs = true, stub_missing_for = -1;
+    hooks = 0;
     aae_lan_init(base, 1);
+    CHECK(hooks == 8 &&
+          was_hooked(ADDR_LanJoin_JoinerNetworkMode, (void *)handler_LanJoin_JoinerNetworkMode,
+                     &orig_LanJoin_JoinerNetworkMode) &&
+          was_hooked(ADDR_LanJoin_PlaylistRejected, (void *)handler_LanJoin_PlaylistVersion,
+                     &orig_LanJoin_PlaylistVersion) &&
+          was_hooked(ADDR_LanJoin_FFOTDRejected, (void *)handler_LanJoin_FFOTDVersion, &orig_LanJoin_FFOTDVersion));
+    CHECK(other_LanJoin_PlaylistVersion == (void *)(base + ADDR_LanJoin_PlaylistChecked) &&
+          other_LanJoin_FFOTDVersion == (void *)(base + ADDR_LanJoin_FFOTDChecked));
+    CHECK(Dvar_FindByHash == (void *)(base + ADDR_Dvar_FindByHash) &&
+          Dvar_GetString == (void *)(base + ADDR_Dvar_GetString) && Frame_JoinType == -0x340 &&
+          Dvar_Type == 0x1c && Dvar_Value == 0x28);
     CHECK(started == (void *)listener_main && lobby_network_mode == (const int32_t *)(base + ADDR_lobbyNetworkMode));
     CHECK(was_hooked(ADDR_LanJoin_SendLobbyPacket, (void *)fake_LanJoin_SendLobbyPacket,
                      (void **)&orig_LanJoin_SendLobbyPacket) &&
           UserNetworking_Send == (void *)(base + ADDR_LanJoin_UserSend));
-    CHECK(hooks == 5 && was_hooked(ADDR_LanJoin_Connect, (void *)fake_LanJoin_Connect, (void **)&orig_LanJoin_Connect) &&
+    CHECK(hooks == 8 &&
+          was_hooked(ADDR_LanJoin_Connect, (void *)fake_LanJoin_Connect, (void **)&orig_LanJoin_Connect) &&
           was_hooked(ADDR_LanJoin_ParseAddress, (void *)fake_LanJoin_ParseAddress,
                      (void **)&orig_LanJoin_ParseAddress) &&
           was_hooked(ADDR_LanJoin_PingServer, (void *)fake_LanJoin_PingServer, (void **)&orig_LanJoin_PingServer) &&
@@ -1012,6 +1141,8 @@ int main(void) {
     FFOTDVersion_Get = game_ffotd_version;
     local_users = game_users;
     UserNetworking_Send = game_user_send;
+    Dvar_FindByHash = game_find;
+    Dvar_GetString = game_string;
     local_id = test_steam_id;
     now_ms = test_clock;
     test_ids();
@@ -1031,6 +1162,9 @@ int main(void) {
     test_asking();
     test_lobby_message();
     test_lobby_send();
+    test_switch();
+    test_offline_join();
+    test_join_checks();
 
     snprintf(command, sizeof(command), "rm -rf '%s'", template);
     if (system(command) != 0)

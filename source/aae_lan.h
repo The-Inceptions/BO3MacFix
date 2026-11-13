@@ -95,3 +95,11 @@ bool aae_lan_dropped(const aae_lan_join_t *join, const aae_lan_plan_t *plan);
 // A lobby message's packet as the game sends one to a player (an int 0x28, then '1', the message's type and data):
 // to a person's Steam ID the plugin sends those through the player's own Steam networking first.
 bool aae_lan_lobby_message(uint64_t to, const uint8_t *packet, uint32_t length);
+
+// ---- the host's join checks
+// The plugin's dvar aae_offlinejoin is on when its text is "1" (a dvar of text, as the plugin makes it), or when it is
+// a bool, int or enum dvar whose value is 1.
+bool aae_lan_switch_on(int type, const char *text, int32_t value);
+// In LAN mode the host lets in only joiners in LAN mode; the plugin lets in a joiner in online mode too, when it
+// joins directly (join type 4) and aae_offlinejoin is on.
+bool aae_lan_offline_join(int joiner_mode, int join_type, int host_mode, bool switched_on);

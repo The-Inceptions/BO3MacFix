@@ -446,9 +446,10 @@ tests/test_aae_skeleton: tests/test_aae_skeleton.c source/aae_skeleton.c source/
 
 # aae_lan.c: the plugin's packets and rules, and the host's listener talking to the test over the loopback
 tests/test_aae_lan: tests/test_aae_lan.c source/aae_lan.c source/aae_lan.h source/aae_plugin.c source/aae_plugin.h \
-		source/offsets.h source/steam.h source/t7overcharged.h
+		source/detour.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h source/prepatch.h \
+		source/steam.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-		-o $@ tests/test_aae_lan.c
+		-o $@ tests/test_aae_lan.c source/gsc_obj.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

@@ -161,6 +161,10 @@ static const hook_def_t hook_defs[] = {
     { ADDR_LanJoin_Join, Push_R15 },
     { ADDR_LanJoin_ParseAddress, Push_R15 },
     { ADDR_LanJoin_PingServer, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x89, 0xF8 } }, // ...; mov eax, edi
+    { ADDR_LanJoin_FFOTDRejected, 7, 0, { 0x44, 0x8B, 0xBD, 0x24, 0xFF, 0xFF, 0xFF } }, // mov r15d, [rbp-0xdc]
+    // cmp ecx, 1; mov r8d, [rbp-0x340] (a detour)
+    { ADDR_LanJoin_JoinerNetworkMode, 10, 0, { 0x83, 0xF9, 0x01, 0x44, 0x8B, 0x85, 0xC0, 0xFC, 0xFF, 0xFF } },
+    { ADDR_LanJoin_PlaylistRejected, 7, 0, { 0x44, 0x8B, 0xBD, 0x20, 0xFF, 0xFF, 0xFF } }, // mov r15d, [rbp-0xe0]
     { ADDR_LanJoin_SendLobbyPacket, Push_R15 },
     { ADDR_load_workshop_texture, Push_R15 },
     { ADDR_LobbyMsgRW_PrepReadMsg, Push_R14 },

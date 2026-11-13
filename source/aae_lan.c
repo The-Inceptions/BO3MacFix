@@ -24,8 +24,11 @@
 #include <unistd.h>
 #include "aae_lan.h"
 #include "aae_plugin.h"
+#include "detour.h"
 #include "dobby.h"
+#include "gsc_obj.h"
 #include "offsets.h"
+#include "prepatch.h"
 #include "steam.h"
 
 #define Magic "AAELAN35"
@@ -462,7 +465,8 @@ static void *asker_main(void *unused) {
             char text[16];
             if (id != 0)
                 printf("lan join: the host at %s says its Steam ID is %llu (connect %u, %d %s)\n",
-                       address_text(address, text), (unsigned long long)id, attempt, tries, tries == 1 ? "query" : "queries");
+                       address_text(address, text), (unsigned long long)id, attempt, tries,
+                       tries == 1 ? "query" : "queries");
             else
                 printf("lan join: the host at %s didn't give its Steam ID (connect %u, %d queries): it has neither the "
                        "mod's plugin nor this, or isn't in a LAN or online game\n", address_text(address, text),
@@ -635,6 +639,78 @@ install_hook_name(LanJoin_SendLobbyPacket, uint64_t, uint64_t to, const uint8_t 
     return orig_LanJoin_SendLobbyPacket(to, packet, length);
 }
 
+// ---- the host's join checks
+//
+// The host's join handler (0x1012334e4) turns a joiner away for many reasons; the plugin changes two of its checks.
+// In LAN mode the joiner has to be in LAN mode too: the plugin lets a joiner in online mode count as one in LAN mode
+// when it joins directly (join type 4, as its joiners do) and its dvar aae_offlinejoin is on at the host. In online
+// mode the joiner's playlist and ffotd versions have to be the host's: the plugin makes both checks pass (the game's
+// two getters answer with the joiner's own versions there). Both only from the pre-patched executable (detour.h).
+//
+// aae_offlinejoin: the plugin makes it, as text "0", for the player to set. Without the plugin there is none until
+// somebody sets it (then it is text too), and none counts as the plugin's "0".
+
+#define Dvar_Type 0x1c  // the dvar's kind, an int
+#define Dvar_Value 0x28 // its value: a bool's is a byte, an int's or an enum's an int
+enum { Dvar_Bool = 1, Dvar_Int = 6, Dvar_Enum = 7, Dvar_String = 8 };
+#define Frame_JoinType (-0x340) // the join handler's join type of the joiner, from its frame pointer
+
+bool aae_lan_switch_on(int type, const char *text, int32_t value) {
+    if (type == Dvar_String)
+        return text != NULL && strcmp(text, "1") == 0;
+    return (type == Dvar_Bool || type == Dvar_Int || type == Dvar_Enum) && value == 1;
+}
+
+bool aae_lan_offline_join(int joiner_mode, int join_type, int host_mode, bool switched_on) {
+    return joiner_mode == 2 && join_type == Join_Direct && host_mode == 1 && switched_on;
+}
+
+static void *(*Dvar_FindByHash)(uint32_t hash);
+static const char *(*Dvar_GetString)(void *dvar);
+
+static bool offline_join_on(void) {
+    const uint8_t *dvar = Dvar_FindByHash(gsc_hash("aae_offlinejoin"));
+    if (dvar == NULL)
+        return false;
+    int32_t type, value = 0;
+    memcpy(&type, dvar + Dvar_Type, sizeof(type));
+    if (type == Dvar_Bool)
+        value = dvar[Dvar_Value];
+    else
+        memcpy(&value, dvar + Dvar_Value, sizeof(value));
+    return aae_lan_switch_on(type, type == Dvar_String ? Dvar_GetString((void *)dvar) : NULL, value);
+}
+
+// The LAN branch's "cmp ecx, 1", the joiner's network mode in ecx and the host's (1 on this branch) in eax. That
+// compare is the first of the instructions this place's stub runs after the handler, so the jne behind it reads flags
+// set from the handler's ecx.
+detour_with_registers(LanJoin_JoinerNetworkMode) {
+    int32_t join_type;
+    memcpy(&join_type, (const uint8_t *)registers->rbp + Frame_JoinType, sizeof(join_type));
+    if (!aae_lan_offline_join((int32_t)registers->rcx, join_type, (int32_t)registers->rax, true) ||
+        !aae_plugin_loaded_lately() || !offline_join_on())
+        return;
+    registers->rcx = 1;
+    printf("lan join: a joiner in online mode joining directly counts as one in LAN mode (aae_offlinejoin is 1)\n");
+}
+
+// The online branch's two checks, each turning the joiner away at the place: there the joiner's version is in ebx and
+// the host's in eax, and the next instruction loads r15 anew, followed by a call, so nothing is live but what the
+// check behind it loads again. Going on with that check instead is the game's own way when the versions are the same.
+static bool versions_pass(const char *which, uint64_t joiner, uint64_t host) {
+    if (!aae_plugin_loaded_lately())
+        return false;
+    printf("lan join: a joiner with %s version %d (this game's %d) isn't turned away for it\n", which, (int32_t)joiner,
+           (int32_t)host);
+    return true;
+}
+detour_choice(LanJoin_PlaylistVersion, "mov %rbx, %rdi\n mov %rax, %rsi\n") {
+    return versions_pass("playlist", first, second);
+}
+detour_choice(LanJoin_FFOTDVersion, "mov %rbx, %rdi\n mov %rax, %rsi\n") {
+    return versions_pass("ffotd", first, second);
+}
+
 void aae_lan_init(uint64_t game_base_address, int enabled) {
     if (!enabled)
         return;
@@ -651,8 +727,21 @@ void aae_lan_init(uint64_t game_base_address, int enabled) {
     install_hook_LanJoin_ParseAddress((void *)(game_base_address + ADDR_LanJoin_ParseAddress));
     install_hook_LanJoin_PingServer((void *)(game_base_address + ADDR_LanJoin_PingServer));
     DobbyHook((void *)(game_base_address + ADDR_LanJoin_Join), (void *)fake_LanJoin_Join, (void **)&orig_LanJoin_Join);
-    UserNetworking_Send = (uint64_t (*)(uint64_t, const uint8_t *, uint64_t))(game_base_address + ADDR_LanJoin_UserSend);
+    UserNetworking_Send =
+        (uint64_t (*)(uint64_t, const uint8_t *, uint64_t))(game_base_address + ADDR_LanJoin_UserSend);
     install_hook_LanJoin_SendLobbyPacket((void *)(game_base_address + ADDR_LanJoin_SendLobbyPacket));
+    Dvar_FindByHash = (void *(*)(uint32_t))(game_base_address + ADDR_Dvar_FindByHash);
+    Dvar_GetString = (const char *(*)(void *))(game_base_address + ADDR_Dvar_GetString);
+    if (!prepatch_has_hook(ADDR_LanJoin_JoinerNetworkMode) || !prepatch_has_hook(ADDR_LanJoin_PlaylistRejected) ||
+        !prepatch_has_hook(ADDR_LanJoin_FFOTDRejected)) {
+        printf("lan join: not running from the pre-patched executable: the host's join checks are the game's own\n");
+        return;
+    }
+    install_detour_LanJoin_JoinerNetworkMode((void *)(game_base_address + ADDR_LanJoin_JoinerNetworkMode));
+    install_detour_LanJoin_PlaylistVersion((void *)(game_base_address + ADDR_LanJoin_PlaylistRejected),
+                                           (void *)(game_base_address + ADDR_LanJoin_PlaylistChecked));
+    install_detour_LanJoin_FFOTDVersion((void *)(game_base_address + ADDR_LanJoin_FFOTDRejected),
+                                        (void *)(game_base_address + ADDR_LanJoin_FFOTDChecked));
     pthread_t thread;
     if (start_thread(&thread, NULL, listener_main, NULL) == 0)
         pthread_detach(thread);

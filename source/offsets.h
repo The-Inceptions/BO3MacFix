@@ -608,6 +608,11 @@
 #define ADDR_localUsers 0x20915f0 // two pointers to the local users' structs, each with its xuid first: what IsLocalXuid (0x103a7f6) compares an xuid with (Windows: IsLocalXuid 0x141eba6a0)
 #define ADDR_LanJoin_SendLobbyPacket 0xf6aa95 // func - bool (uint64_t xuid, const void *packet, int length): a lobby message's packet through the Steam game server's networking; its one caller, SendLobbyPacket (0x1435e56: an int 0x28, then '1', the type and the data; 0x408 bytes), sends it through the player's own (ADDR_LanJoin_UserSend) when this fails (Windows 0x141ea9f70, in 0x141ea3730)
 #define ADDR_LanJoin_UserSend 0x1054ed8 // func - the same through the player's own Steam networking (Windows 0x141ea77d0)
+#define ADDR_LanJoin_JoinerNetworkMode 0x1233d38 // mid-func - "cmp ecx, 1 ; mov r8d, [rbp - 0x340] ; jne": the host's join handler (0x12334e4), LAN branch: the joiner's network mode in ecx must be 1, else "joining a LAN game from LIVE" (0x23); the join type at rbp - 0x340 must then be 1 or 4 (Windows 0x141ed28b8)
+#define ADDR_LanJoin_PlaylistRejected 0x1233eb0 // mid-func - "mov r15d, [rbp - 0xe0]": the online branch turning a joiner away for its playlist version ([rbp - 0xe0] in ebx, the host's from 0x11153ae in eax); only the jne at 0x1233df0 comes here (Windows: the check at 0x141ed28e2)
+#define ADDR_LanJoin_PlaylistChecked 0x1233df6 // where that check goes on when the versions are the same: the ffotd check
+#define ADDR_LanJoin_FFOTDRejected 0x1233f4d // mid-func - "mov r15d, [rbp - 0xdc]": the same for the ffotd version (from 0x12307c8); only the jne at 0x1233e0a comes here (Windows: the check at 0x141ed290e)
+#define ADDR_LanJoin_FFOTDChecked 0x1233e10 // where that check goes on when they are the same (r14d loaded before its jne)
 // -- end lan join
 // T7Overcharged's smaller pieces (t7o_small.c); Windows addresses from T7Overcharged's own patterns for its names
 #define ADDR_Sys_QueEvent 0xd62e06 // func - void (int time, int type, int value, int value2, int, int, void *): the window's key and mouse messages into the game's event queue (256 of 32 bytes, critical section 0x31); type 1 is a key, value2 1 down and 0 up; mouse buttons are keys 200-204 (Windows 0x1422882e0, T7Overcharged's OFF_sys_que_event: the same body and callers)
