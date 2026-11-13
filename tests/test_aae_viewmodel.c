@@ -983,6 +983,86 @@ static void test_bullets(void) {
     gun_position = true, bullet_depletion = false;
 }
 
+static void capture_begin(void);
+static void capture_end(void);
+
+// a game whose DObjSetLocalTag writes into the numbers it was handed (the real one only reads them)
+static void game_set_local_tag_scribbles(DObj *obj, int32_t *part_bits, int index, const float *translation,
+                                         const float *angles) {
+    game_set_local_tag(obj, part_bits, index, translation, angles);
+    ((float *)translation)[0] = 555.0f, ((float *)angles)[2] = 666.0f;
+}
+
+// A hidden bullet's move is read from the two texts once, when the piece starts, not for every bullet; each bullet
+// gets the same numbers as reading them would give, and the game a copy of its own.
+static void test_hide_move(void) {
+    float translation[3], rotation[3];
+    CHECK(aae_viewmodel_transform(Hide_Position, Hide_Angles, translation, rotation));
+    hide_move.read = false;
+    memset(hide_move.translation, 0, sizeof(hide_move.translation));
+    capture_begin();
+    aae_viewmodel_init(0x100000000, 0, 1);
+    capture_end();
+    CHECK(hide_move.read && memcmp(hide_move.translation, translation, sizeof(translation)) == 0 &&
+          memcmp(hide_move.rotation, rotation, sizeof(rotation)) == 0 && hide_move.translation[0] == -1000.0f &&
+          signbit(hide_move.translation[1]) && hide_move.rotation[2] == 0.0f);
+    // the made-up game again (init pointed everything at the real game's addresses)
+    loaded_mod = loaded_name;
+    Dvar_FindByHash = game_find;
+    Dvar_GetString = game_string;
+    Sys_IsMainThread = game_main_thread;
+    Com_IsRunningUILevel = game_ui_level;
+    DObjGetLocalClientIndex = game_local_client;
+    GScr_AllocString = game_alloc_string;
+    DObjGetBoneIndex = game_bone_index;
+    DObjSetLocalTag = game_set_local_tag;
+    BG_GetAmmoInClip = game_ammo;
+    BG_IsDualWield = game_dual_wield;
+    BG_GetDualWieldWeapon = game_dual_wield_weapon;
+    set_mod(true);
+    gun_position = false, bullet_depletion = true;
+    write_file(mod_folder, "viewmodel_hide.cfg", "viewmodel_hide j_bullet \"\" \"\" 01 12\n");
+    hide_config_from[0] = '\0';
+    clip_right = 5;
+    frame();
+    CHECK(tags == 6 && hidden(0, "j_bullet05") && hidden(5, "j_bullet10"));
+    // the numbers kept are the ones every bullet gets: the texts aren't read again
+    const float kept_translation[3] = { 7, 8, 9 }, kept_rotation[3] = { 10, 11, 12 };
+    memcpy(hide_move.translation, kept_translation, sizeof(kept_translation));
+    memcpy(hide_move.rotation, kept_rotation, sizeof(kept_rotation));
+    frame();
+    CHECK(tags == 6 && tagged(0, "j_bullet05", 7, 8, 9, 10, 11, 12) && tagged(5, "j_bullet10", 7, 8, 9, 10, 11, 12));
+    // a game that wrote into what it was handed changes neither the next bullet's numbers nor the kept ones
+    DObjSetLocalTag = game_set_local_tag_scribbles;
+    frame();
+    CHECK(tags == 6 && tagged(0, "j_bullet05", 7, 8, 9, 10, 11, 12) && tagged(5, "j_bullet10", 7, 8, 9, 10, 11, 12) &&
+          memcmp(hide_move.translation, kept_translation, sizeof(kept_translation)) == 0 &&
+          memcmp(hide_move.rotation, kept_rotation, sizeof(kept_rotation)) == 0);
+    DObjSetLocalTag = game_set_local_tag;
+    // not read (it always is): each bullet reads the texts itself, with the same tags as the kept numbers give
+    hide_move.read = false;
+    frame();
+    CHECK(tags == 6 && hidden(0, "j_bullet05") && hidden(1, "j_bullet06") && hidden(5, "j_bullet10"));
+    read_hide_move();
+    CHECK(hide_move.read);
+    frame();
+    CHECK(tags == 6 && hidden(0, "j_bullet05") && hidden(1, "j_bullet06") && hidden(5, "j_bullet10"));
+    // the moves of the gun position still read their own texts (no viewmodel_move.cfg: only the dvars' moves)
+    char path[sizeof(mod_folder) + 64];
+    snprintf(path, sizeof(path), "%s/T7Overcharged/viewmodel_move.cfg", mod_folder);
+    unlink(path);
+    move_config_from[0] = '\0';
+    gun_position = true;
+    neutral_moves(0);
+    set_text("viewmodel_p0_move0", "tag_ads 1 2 3 4 5 6");
+    frame();
+    CHECK(tags == 11 && tagged(0, "tag_ads", 3, -1, 2, 4, 5, 6) && hidden(5, "j_bullet05") &&
+          hidden(10, "j_bullet10"));
+    remove_dvars();
+    forget_moves();
+    gun_position = true, bullet_depletion = false;
+}
+
 // ---- the debug lines (BO3MACFIX_VIEWMODELDEBUG=1), which the checks in the game read
 
 // what the code prints between the two calls
@@ -1168,6 +1248,7 @@ int main(void) {
     test_bullets();
     snprintf(capture_path, sizeof(capture_path), "%s/printed.txt", template);
     test_debug();
+    test_hide_move();
 
     snprintf(command, sizeof(command), "rm -rf '%s'", template);
     if (system(command) != 0)

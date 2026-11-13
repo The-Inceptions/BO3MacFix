@@ -434,9 +434,17 @@ static void note_move(int local_client, int place, const char *bone, int index, 
 // texts that aren't three numbers each. T7Overcharged hands DObjGetBoneIndex a bone index it never set, which the
 // game takes as a guess (0xffff would even be "not there"); its own callers start with 0xfffe, "don't know", as
 // this does.
+static int set_read_tag(DObj *obj, const char *bone, const float translation[3], const float rotation[3]);
 static int set_tag(DObj *obj, const char *bone, const char *position, const char *angles, float translation[3],
                    float rotation[3]) {
-    if (!aae_viewmodel_transform(position, angles, translation, rotation) || bone[0] == '\0')
+    if (!aae_viewmodel_transform(position, angles, translation, rotation))
+        return -2;
+    return set_read_tag(obj, bone, translation, rotation);
+}
+
+// the same with the two texts already read into numbers
+static int set_read_tag(DObj *obj, const char *bone, const float translation[3], const float rotation[3]) {
+    if (bone[0] == '\0')
         return -2;
     uint32_t name = GScr_AllocString(bone);
     uint16_t index = 0xfffe;
@@ -603,6 +611,30 @@ static void note_hidden(int local_client, bool left_hand, int clip, int hidden, 
     noted[local_client][left_hand] = hash;
 }
 
+// A hidden bullet's move: Hide_Position and Hide_Angles as set_tag reads them. T7Overcharged reads the two texts
+// again for every bullet it hides, up to 348 times a frame on the main thread (every listed number at or above the
+// clip, for any gun, as the list isn't per weapon): 50 to 100 microseconds of each frame under Rosetta. They are this
+// file's constants, so they are read once, when the piece starts (before the hook can run, so only read after), and
+// each bullet gets a copy of the same numbers. If they couldn't be read (they always can), each bullet reads them
+// itself as before.
+static struct {
+    bool read;
+    float translation[3], rotation[3];
+} hide_move;
+
+static void read_hide_move(void) {
+    hide_move.read = aae_viewmodel_transform(Hide_Position, Hide_Angles, hide_move.translation, hide_move.rotation);
+}
+
+static int hide_tag(DObj *obj, const char *bone) {
+    float translation[3], rotation[3];
+    if (!hide_move.read)
+        return set_tag(obj, bone, Hide_Position, Hide_Angles, translation, rotation);
+    memcpy(translation, hide_move.translation, sizeof(translation));
+    memcpy(rotation, hide_move.rotation, sizeof(rotation));
+    return set_read_tag(obj, bone, translation, rotation);
+}
+
 // T7O 0x18007d300 and 0x18007c96c: one gun's clip, and its listed bullets hidden from the clip's count on
 static void hide_hand(int local_client, void *ps, DObj *obj, uint64_t weapon, bool left_hand) {
     int clip = BG_GetAmmoInClip(ps, weapon), hidden = 0, missing = 0;
@@ -617,9 +649,8 @@ static void hide_hand(int local_client, void *ps, DObj *obj, uint64_t weapon, bo
             if (!aae_viewmodel_bullet_hidden(number, clip))
                 continue;
             char bone[128];
-            float translation[3], rotation[3];
             aae_viewmodel_bullet_bone(hide, left_hand, number, bone);
-            if (set_tag(obj, bone, Hide_Position, Hide_Angles, translation, rotation) < 0) {
+            if (hide_tag(obj, bone) < 0) {
                 missing++;
                 continue;
             }
@@ -678,6 +709,7 @@ void aae_viewmodel_init(uint64_t game_base_address, int gun_position_on, int bul
         return;
     const char *env = getenv("BO3MACFIX_VIEWMODELDEBUG");
     debug = env != NULL ? atoi(env) : 0;
+    read_hide_move(); // before the hook can run
     aae_plugin_init(game_base_address);
     Dvar_FindByHash = (void *)(game_base_address + ADDR_Dvar_FindByHash);
     Dvar_GetString = (void *)(game_base_address + ADDR_Dvar_GetString);
