@@ -613,10 +613,33 @@ static bool fake_CG_DrawCrosshairTest(uint8_t *cg, uint8_t *ps) {
 // For a player on this machine the point is read straight from the dvar. A player on another machine sends theirs
 // to the server (aae_freeaim_net.c), and a point that came that way goes first.
 
+// A dvar's text, copied out whole. The mod's script sets the point's dvar on the client's thread whenever the aim
+// moves, and the server's thread reads it for every shot: the text can be replaced while it is read. The game puts
+// the new text into the dvar before it lets go of the old one (0x100fa114f, then 0x100fa1190), so a copy is whole
+// when the dvar still hands out the same text after the copy was made; when it doesn't, the copy is made again from
+// the new one. (The plugin parses a copy as well, of the same 192 bytes.) False for no text, for one that doesn't fit,
+// and for one that was replaced every time.
+#define Text_Copy_Size 192
+#define Text_Copy_Tries 4
+static bool dvar_text_copy(const char *name, char copy[Text_Copy_Size]) {
+    for (int tries = 0; tries < Text_Copy_Tries; tries++) {
+        const char *text = dvar_text(name, NULL);
+        size_t length = 0;
+        if (text == NULL)
+            return false;
+        while (length < Text_Copy_Size && (copy[length] = text[length]) != '\0')
+            length++;
+        if (dvar_text(name, NULL) == text)
+            return length < Text_Copy_Size;
+    }
+    return false;
+}
+
 // the point under the crosshair of a local client, as the mod's script left it
 static bool local_target(int which, float target[3]) {
-    const char *text = dvar_text(which == 0 ? "aae_freeaim_target" : "aae_freeaim_target_1", NULL);
-    return text != NULL && aae_freeaim_target(text, target);
+    char text[Text_Copy_Size];
+    return dvar_text_copy(which == 0 ? "aae_freeaim_target" : "aae_freeaim_target_1", text) &&
+           aae_freeaim_target(text, target);
 }
 
 // the number of the player this entity is, when their view is a third person one

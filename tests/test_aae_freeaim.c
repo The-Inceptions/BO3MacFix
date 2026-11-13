@@ -74,6 +74,12 @@ static struct {
               { .name = "aae_freeaim_target_1" },
               { .name = "aae_freeaim_nonbullet" } };
 static int wrong_asks; // times the text of a dvar without text was asked for
+// The point's text replaced while it is read, as the mod's script does it from the client's thread: from the given
+// ask for aae_freeaim_target on, the game hands out another text at another place, and what the old one was is gone
+// (every time, when it keeps being replaced).
+static int target_asks, replaced_at_ask;
+static bool replaced_every_time;
+static char replaced_text[2][200];
 static void *game_find(uint32_t hash) {
     for (size_t i = 0; i < sizeof(dvars) / sizeof(dvars[0]); i++)
         if (dvars[i].there && gsc_hash(dvars[i].name) == hash)
@@ -87,6 +93,12 @@ static const char *game_string(void *dvar) {
     if (kind != Dvar_Type_String) {
         wrong_asks++;
         return "garbage";
+    }
+    if (strcmp(d->name, "aae_freeaim_target") == 0 && replaced_at_ask != 0 && ++target_asks >= replaced_at_ask) {
+        int asked = target_asks - replaced_at_ask;
+        if (asked == 0 || replaced_every_time)
+            memset(d->text, '9', sizeof(d->text) - 1); // the old text's place belongs to something else now
+        return replaced_text[replaced_every_time ? asked % 2 : 0];
     }
     return d->text;
 }
@@ -628,6 +640,32 @@ static void test_shots(void) {
     CHECK(fires(shooter, shot) && near(fired.directions[2], 1.0f));
     set_shooter(0, true, true);
     CHECK(fires(shooter, shot) && near(fired.directions[0], 0.70710678f));
+    // The script replaces the point's text while the shot reads it: between the two times the dvar is asked the old
+    // text's place has become something else's. The shot goes at the new point, not at what the old place holds now.
+    snprintf(replaced_text[0], sizeof(replaced_text[0]), "-239 -1208 500");
+    target_asks = 0;
+    replaced_at_ask = 2;
+    CHECK(fires(shooter, shot) && near(fired.directions[2], 1.0f) && target_asks == 4);
+    // a text that is replaced every time it is looked at is given up after four tries: straight ahead
+    snprintf(replaced_text[1], sizeof(replaced_text[1]), "-239 -1208 500");
+    set_text("aae_freeaim_target", "-139 -1108 140");
+    target_asks = 0;
+    replaced_every_time = true;
+    CHECK(!fires(shooter, shot) && target_asks == 8);
+    replaced_at_ask = 0;
+    replaced_every_time = false;
+    // a text of 191 characters is read, one of 192 isn't (the plugin's copy is 192 bytes with its end)
+    char long_text[200];
+    memset(long_text, ' ', sizeof(long_text));
+    memcpy(long_text, "-139 -1108 140", 14);
+    long_text[191] = '\0';
+    set_text("aae_freeaim_target", long_text);
+    CHECK(fires(shooter, shot) && near(fired.directions[0], 0.70710678f));
+    long_text[191] = ' ';
+    long_text[192] = '\0';
+    set_text("aae_freeaim_target", long_text);
+    CHECK(!fires(shooter, shot));
+    set_text("aae_freeaim_target", "-139 -1108 140");
     // a point that can't be read, or isn't text, or isn't there: straight ahead
     set_text("aae_freeaim_target", "-139 -1108");
     CHECK(!fires(shooter, shot));
