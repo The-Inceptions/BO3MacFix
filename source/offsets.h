@@ -409,4 +409,18 @@
 #define ADDR_BG_GetShieldHealth 0x1387ecf // func - int (int, int client_num, Weapon): through the thread-local bgs; the start hit points without one - name is a guess
 #define ADDR_BG_ThreadBgs 0x12ddff8 // func - bgs_t **(void): this thread's bgs pointer (thread-local) - name is a guess
 // -- end zm inventory
+// -- T7O crash guards (t7o_guards.c)
+// "mov ecx, [rax + 4*rcx + 0x3c0]" in the function that works out one of a weapon's fields for CG_RegisterWeapon
+// (0x1381200: weapon, its variant definition, field, the weapon's mode attachment; Windows 0x1426752f0): the override
+// bits of the mode attachment's entry, rax, loaded at 0x1381298 from the definition's table at +0x40 without a null
+// test, for fields 0x68..0x6c and 0xad..0xaf; rcx is field >> 5, r12 the field, rbx the attachment's number, r15 the
+// weapon. Behind it bt/jb; 0x13812b3, where the game goes on when the attachment doesn't override the field, is where
+// T7Overcharged's bg_weapon_attachment_fix sends it when rax is null (its BG_WeaponAttachment_CrashRip/_CrashFix,
+// Windows 0x1426753a3 / 0x1426753b3)
+#define ADDR_BG_WeaponAttachment_Overrides 0x13812a2
+// func - int (int localClientNum): the controller of a local client from the 2-entry table at 0x119c1370 (0x24 bytes
+// each: +4 the client's number, +8 its controller), -1 when that entry's number isn't localClientNum; no bounds test
+// (Windows 0x1420e31b0, which T7Overcharged's local_client_bounds_fix hooks)
+#define ADDR_Com_LocalClient_GetControllerIndex 0xeae63e
+// -- end T7O crash guards
 // -- END OFFSETS

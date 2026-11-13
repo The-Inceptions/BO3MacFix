@@ -75,6 +75,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_ASL_Window_UpdateLetterbox, Push_R14 },
     { ADDR_ASL_XInputGetState, Push_R14 },
     { ADDR_ASL_XInputSetState, Push_R14 },
+    { ADDR_BG_WeaponAttachment_Overrides, 7, 0, { 0x8B, 0x8C, 0x88, 0xC0, 0x03, 0x00, 0x00 } }, // mov ecx, [rax+4*rcx+0x3c0] (a detour)
     { ADDR_AddDObjToScene, Push_R15 },
     { ADDR_CG_CalcViewValues_ViewAxis, 5, 4, { 0x83, 0xFB, 0x0B, 0x74, 0x08 } }, // cmp ebx, 0xb; je +8 (a detour)
     { ADDR_CScr_Delete, Push_R14 },
@@ -95,6 +96,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Cocoa_HandleMouseEvent, Push_R15 },
     { ADDR_CL_SetCGameTime, Push_R15 },
     { ADDR_Com_GetBuildIntField, 5, 4, { 0x83, 0xFF, 0x02, 0x74, 0x11 } }, // cmp edi, 2; je +0x11
+    { ADDR_Com_LocalClient_GetControllerIndex, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xF7 } }, // ...; movsxd rsi, edi
     { ADDR_CSteamAPIContext_Init, Push_R15 },
     { ADDR_DB_GetStreamFraction, Push_R15 },
     { ADDR_Dvar_SetBool, 8, 0, { 0x55, 0x48, 0x89, 0xE5, 0x40, 0x0F, 0xB6, 0xF6 } }, // ...; movzx esi, sil

@@ -47,6 +47,7 @@ tests/test_aae_prompt
 tests/test_aae_freeaim
 tests/test_aae_linkcam
 tests/test_aae_freeaim_net
+tests/test_t7o_guards
 tests/test_gsc_obj
 tests/test_gsc_detours
 tests/test_script_vars

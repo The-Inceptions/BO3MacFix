@@ -38,6 +38,8 @@ TEST_TARGETS += tests/test_aae_freeaim
 TEST_TARGETS += tests/test_aae_linkcam
 # free aim for players on other machines: what is sent, what the server keeps (aae_freeaim_net.c)
 TEST_TARGETS += tests/test_aae_freeaim_net
+# T7Overcharged's weapon attachment and local client guards (t7o_guards.c)
+TEST_TARGETS += tests/test_t7o_guards
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -110,6 +112,8 @@ SOURCES += source/aae_freeaim.c source/aae_freeaim_net.c
 SOURCES += source/aae_linkcam.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
+# T7OCrashGuards: two of T7Overcharged's guards against crashes of the game itself (t7o_guards.c)
+SOURCES += source/t7o_guards.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
 # weapons back with their camo, attachments and ammo types, and its perks (zm_inventory.c, zm_loadout.c)
 SOURCES += source/checkpoint.c source/zm_inventory.c source/zm_loadout.c
@@ -249,6 +253,13 @@ tests/test_aae_freeaim_net: tests/test_aae_freeaim_net.c tests/freeaim_net_cases
 		source/aae_freeaim_net.c source/aae_freeaim_net.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_freeaim_net.c
+
+# t7o_guards.c: the weapon attachment guard against a made-up weapon field lookup, the local client guard against a
+# made-up controller lookup
+tests/test_t7o_guards: tests/test_t7o_guards.c source/t7o_guards.c source/t7o_guards.h source/detour.h \
+		source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_t7o_guards.c
 
 # aae_linkcam.c: the plugin's rules for entities linked to the camera, and its hooks against a made-up game
 tests/test_aae_linkcam: tests/test_aae_linkcam.c tests/linkcam_cases.h tests/linkcam_side.h source/aae_linkcam.c \
