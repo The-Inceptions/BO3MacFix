@@ -53,6 +53,7 @@ tests/test_aae_coop_pause
 tests/test_clientfield_guard
 tests/test_aae_arc
 tests/test_aae_vmwidget
+tests/test_aae_skeleton
 tests/test_gsc_obj
 tests/test_gsc_detours
 tests/test_script_vars

@@ -50,6 +50,8 @@ TEST_TARGETS += tests/test_clientfield_guard
 TEST_TARGETS += tests/test_aae_arc
 # the mod's widgets on the first person weapon: the plugin's tables, sums and methods (aae_vmwidget.c)
 TEST_TARGETS += tests/test_aae_vmwidget
+# the one hook on DObjCalcSkel for both pieces that work after the view model's skeleton (aae_skeleton.c)
+TEST_TARGETS += tests/test_aae_skeleton
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -129,6 +131,8 @@ SOURCES += source/aae_arc.c
 # AAEViewmodelWidgets: the two UI element methods the plugin adds for widgets on the first person weapon
 # (aae_vmwidget.c)
 SOURCES += source/aae_vmwidget.c
+# the hook both of them do their work after the view model's skeleton through (aae_skeleton.c)
+SOURCES += source/aae_skeleton.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # T7OCrashGuards: two of T7Overcharged's guards against crashes of the game itself (t7o_guards.c)
@@ -310,7 +314,8 @@ tests/test_clientfield_guard: tests/test_clientfield_guard.c source/clientfield_
 		-o $@ tests/test_clientfield_guard.c
 
 # aae_arc.c: T7Overcharged's arc test, the plugin's checks and sums, and the hooks against a made-up game
-tests/test_aae_arc: tests/test_aae_arc.c tests/arc_bend_cases.h source/aae_arc.c source/aae_arc.h source/aae_plugin.c \
+tests/test_aae_arc: tests/test_aae_arc.c tests/arc_bend_cases.h source/aae_arc.c source/aae_arc.h source/aae_skeleton.h \
+		source/aae_plugin.c \
 		source/aae_plugin.h source/detour.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h \
 		source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
@@ -319,9 +324,17 @@ tests/test_aae_arc: tests/test_aae_arc.c tests/arc_bend_cases.h source/aae_arc.c
 # aae_vmwidget.c: the plugin's tables and sums, its two methods and the updates they give an element, against a
 # made-up game and Lua stack
 tests/test_aae_vmwidget: tests/test_aae_vmwidget.c source/aae_vmwidget.c source/aae_vmwidget.h source/aae_plugin.c \
-		source/aae_plugin.h source/havok.h source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
+		source/aae_plugin.h source/aae_skeleton.h source/havok.h source/offsets.h source/dobby.h source/prepatch.h \
+		source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_vmwidget.c
+
+# aae_skeleton.c: the one hook on DObjCalcSkel, the order of the pieces' work and the two calls, against a made-up
+# game; it finds out where the hook returns to through the frame pointers
+tests/test_aae_skeleton: tests/test_aae_skeleton.c source/aae_skeleton.c source/aae_skeleton.h source/offsets.h \
+		source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -fno-omit-frame-pointer -Wall -Wextra -Werror -fsanitize=address,undefined \
+		-fno-sanitize-recover=undefined -o $@ tests/test_aae_skeleton.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

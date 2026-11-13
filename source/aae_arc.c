@@ -36,6 +36,7 @@
 #include <time.h>
 #include "aae_arc.h"
 #include "aae_plugin.h"
+#include "aae_skeleton.h"
 #include "detour.h"
 #include "dobby.h"
 #include "gsc_obj.h"
@@ -412,7 +413,6 @@ static int (*BG_WeaponAmmo)(const uint8_t *player_state, uint64_t weapon);
 static uint32_t (*BG_FindWeaponIndexByName)(const char *name, void *hashes, uint8_t *sorted);
 static uint32_t (*SL_GetStringOfSize)(const char *text, uint32_t user, uint32_t length, int type);
 static int (*DObjGetBoneIndex)(const uint8_t *object, uint32_t name, uint16_t *index, int model);
-static const void *skeleton_sites[2]; // where the view model's two DObjCalcSkel calls return to
 
 static bool active(void) {
     return aae_plugin_loaded_lately();
@@ -753,21 +753,13 @@ static void find_anchor(const uint8_t *object) {
     }
 }
 
-// DObjCalcSkel (DObj, part bits, origin): the game works out a model's skeleton. The plugin does its work after the
-// view model's two calls (from where the view model is drawn and updated); here those two are told by where they
-// return to.
-static uint64_t (*orig_DObjCalcSkel)(const uint8_t *object, uint64_t second, uint64_t third, uint64_t fourth,
-                                     uint64_t fifth, uint64_t sixth);
-static uint64_t calc_skeleton(const uint8_t *object, uint64_t second, uint64_t third, uint64_t fourth, uint64_t fifth,
-                              uint64_t sixth, const void *from) {
-    uint64_t result = orig_DObjCalcSkel(object, second, third, fourth, fifth, sixth);
-    if ((from == skeleton_sites[0] || from == skeleton_sites[1]) && object != NULL && active())
+// The game has worked out a model's skeleton at one of the view model's two DObjCalcSkel calls (from where the view
+// model is drawn and updated). The plugin does its work after those two; aae_skeleton.c tells them apart (by where
+// they return to) and calls this, before the widgets' work, as the plugin does.
+static void anchor_after_skeleton(const uint8_t *object, int call) {
+    (void)call;
+    if (object != NULL && active())
         find_anchor(object);
-    return result;
-}
-static uint64_t fake_DObjCalcSkel(const uint8_t *object, uint64_t second, uint64_t third, uint64_t fourth,
-                                  uint64_t fifth, uint64_t sixth) {
-    return calc_skeleton(object, second, third, fourth, fifth, sixth, __builtin_return_address(0));
 }
 
 // the anchor of a local client, as the plugin reads it: a whole one, for the key of the tag text now
@@ -892,8 +884,6 @@ void aae_arc_init(uint64_t game_base_address, int enabled) {
     BG_FindWeaponIndexByName = (void *)(base_address + ADDR_BG_FindWeaponIndexByName);
     SL_GetStringOfSize = (void *)(base_address + ADDR_SL_GetStringOfSize);
     DObjGetBoneIndex = (void *)(base_address + ADDR_DObjGetBoneIndex);
-    skeleton_sites[0] = (const void *)(base_address + ADDR_DObjCalcSkel_ViewModelReturn);
-    skeleton_sites[1] = (const void *)(base_address + ADDR_DObjCalcSkel_ViewModelReturn2);
     const uint32_t places[] = { ADDR_CG_ArcPrediction_NoTacticalMode, ADDR_CG_ArcPrediction_WeaponDef,
                                 ADDR_CG_DrawArc_FirstLine, ADDR_CG_DrawArc_SecondLine, ADDR_CG_DrawArc_MarkerTest };
     for (size_t i = 0; i < sizeof(places) / sizeof(places[0]); i++) {
@@ -907,7 +897,7 @@ void aae_arc_init(uint64_t game_base_address, int enabled) {
                                         (void *)(base_address + ADDR_CG_ArcPrediction_TacticalMode));
     install_hook_R_AddCodeMeshDrawSurf((void *)(base_address + ADDR_R_AddCodeMeshDrawSurf));
     install_detour_Arc_Weapon_Definition((void *)(base_address + ADDR_CG_ArcPrediction_WeaponDef));
-    DobbyHook((void *)(base_address + ADDR_DObjCalcSkel), (void *)fake_DObjCalcSkel, (void **)&orig_DObjCalcSkel);
+    aae_skeleton_add(base_address, AAE_SKELETON_TAG, anchor_after_skeleton);
     install_detour_Arc_First_Line((void *)(base_address + ADDR_CG_DrawArc_FirstLine));
     install_detour_Arc_Second_Line((void *)(base_address + ADDR_CG_DrawArc_SecondLine));
     install_detour_Arc_Marker((void *)(base_address + ADDR_CG_DrawArc_MarkerTest));

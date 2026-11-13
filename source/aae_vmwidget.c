@@ -23,9 +23,10 @@
 // The bones. Each frame the game computes the weapon model's skeleton. The plugin redirects two of the game's calls
 // of DObjCalcSkel to a function of its own that calls it and then copies, for every tag a widget uses, the bone's
 // rotation and position out of the local client's weapon model (it notes which model that is in a hook of the view
-// model's update). Here DObjCalcSkel is hooked and does that only when it returns to one of those two calls, and the
-// weapon model is read from the game's view weapon state at that moment. The copies are kept under a sequence count,
-// as the plugin keeps them: the UI reads them on another path of the frame.
+// model's update). Here aae_skeleton.c hooks DObjCalcSkel for this and the grenade line's piece (the plugin does
+// that one's work first, in the same function) and calls widgets_after_skeleton after those two calls; the weapon
+// model is read from the game's view weapon state at that moment. The copies are kept under a sequence count, as the
+// plugin keeps them: the UI reads them on another path of the frame (the two calls run on the game's job threads).
 //
 // Each element set up this way gets an update function of the plugin's (the element's +0x110), which the game calls
 // every frame with (local client, element, root element, two numbers, the UI's lua_State). The one for a widget puts
@@ -41,6 +42,7 @@
 #include <string.h>
 #include <time.h>
 #include "aae_plugin.h"
+#include "aae_skeleton.h"
 #include "aae_vmwidget.h"
 #include "dobby.h"
 #include "offsets.h"
@@ -460,7 +462,6 @@ static void (*CG_WorldToScreen)(int local_client, const float world[3], float sc
 static int (*DObjGetBoneIndex)(const uint8_t *model, uint32_t name, int16_t *index, uint32_t parts);
 static aae_vmwidget_method_t *generic_method;
 static lua_CFunction generic_function;
-static const void *skeleton_returns[2]; // where the two calls of DObjCalcSkel the plugin redirects return to
 static uint8_t *const *view_weapon_states;
 static const int *local_client_count;
 
@@ -804,12 +805,14 @@ static void note_weapon_models(void) {
 
 // For the debug lines: what each tag in use has from a local client's weapon model after its skeleton was computed:
 // where its bone is, whether the game computed that bone this time, whether it was kept. A line when that changes.
-static void debug_bones(const uint8_t *model) {
+static void debug_bones(const uint8_t *model, int call) {
+    // kept for each of the two calls apart: they compute different bones of the model (one the right hand's, the
+    // other not), so a record shared by both would change at every call
     static struct {
         const void *model;
         int16_t index;
         int8_t computed, valid;
-    } said[AAE_VMWIDGET_TAGS];
+    } said[2][AAE_VMWIDGET_TAGS];
     int client = 0;
     while (client < AAE_VMWIDGET_LOCAL_CLIENTS && state.noted[client].model != model)
         client++;
@@ -826,11 +829,11 @@ static void debug_bones(const uint8_t *model) {
             memcpy(&bits, model + Model_Computed + (size_t)(index >> 5) * 4, sizeof(bits));
             computed = (bits & (0x80000000u >> (index & 31))) != 0;
         }
-        if (said[which].model == model && said[which].index == index && said[which].computed == computed &&
-            said[which].valid == valid)
+        typeof(said[0][0]) *seen = &said[call][which];
+        if (seen->model == model && seen->index == index && seen->computed == computed && seen->valid == valid)
             continue;
-        said[which].model = model, said[which].index = index;
-        said[which].computed = computed, said[which].valid = valid;
+        seen->model = model, seen->index = index;
+        seen->computed = computed, seen->valid = valid;
         char where[48];
         if (index >= 0)
             snprintf(where, sizeof(where), "bone %d of %u, %s", index, bones, computed > 0 ? "computed" : "not computed");
@@ -838,38 +841,29 @@ static void debug_bones(const uint8_t *model) {
             snprintf(where, sizeof(where), "not looked for");
         else
             snprintf(where, sizeof(where), "not found among %u bones", bones);
-        printf("viewmodel widgets: %s (tag %u) in the weapon model %p of local client %d: %s, %s\n",
-               debug_names[which][0] != '\0' ? debug_names[which] : "?", (unsigned)which, (const void *)model, client,
-               where, valid ? "kept" : "not kept");
+        printf("viewmodel widgets: after the skeleton call %d, %s (tag %u) in the weapon model %p of local client %d: "
+               "%s, %s\n", call + 1, debug_names[which][0] != '\0' ? debug_names[which] : "?", (unsigned)which,
+               (const void *)model, client, where, valid ? "kept" : "not kept");
     }
 }
 
-// The game has computed a model's skeleton and returns to `from`: what the plugin does after the two calls it
-// redirects. Nothing is done while no widget uses a tag, which is all the time without the mod: the methods that
-// would set one up only exist with it.
-static void skeleton_computed(const uint8_t *model, const void *from) {
-    if ((from == skeleton_returns[0] || from == skeleton_returns[1]) && ready &&
+// The game has computed a model's skeleton at one of the two calls the plugin redirects (call 0 or 1, aae_skeleton.c
+// tells them apart): the plugin's work after them. Nothing is done for no model, and nothing while no widget uses a
+// tag, which is all the time without the mod: the methods that would set one up only exist with it.
+static void widgets_after_skeleton(const uint8_t *model, int call) {
+    if (model == NULL || !ready ||
         (atomic_load_explicit(&state.active[0], memory_order_relaxed) |
-         atomic_load_explicit(&state.active[1], memory_order_relaxed)) != 0) {
-        note_weapon_models();
-        aae_vmwidget_skeleton(&state, model, DObjGetBoneIndex);
-        if (debug)
-            debug_bones(model);
-        if (debug) {
-            static _Atomic int said;
-            int call = from == skeleton_returns[0] ? 1 : 2;
-            if ((atomic_fetch_or(&said, call) & call) == 0)
-                printf("viewmodel widgets: bones are kept after the game's skeleton call %d, on %s thread\n", call,
-                       pthread_main_np() ? "the main" : "another");
-        }
+         atomic_load_explicit(&state.active[1], memory_order_relaxed)) == 0)
+        return;
+    note_weapon_models();
+    aae_vmwidget_skeleton(&state, model, DObjGetBoneIndex);
+    if (debug && (call == 0 || call == 1)) {
+        debug_bones(model, call);
+        static _Atomic int said;
+        if ((atomic_fetch_or(&said, 1 << call) & (1 << call)) == 0)
+            printf("viewmodel widgets: bones are kept after the game's skeleton call %d, on %s thread\n", call + 1,
+                   pthread_main_np() ? "the main" : "another");
     }
-}
-
-// DObjCalcSkel(model, parts, origin)
-install_hook_name(DObjCalcSkel, uint64_t, uint8_t *model, uint64_t parts, uint64_t origin) {
-    uint64_t result = orig_DObjCalcSkel(model, parts, origin);
-    skeleton_computed(model, __builtin_return_address(0));
-    return result;
 }
 
 void aae_vmwidget_init(uint64_t game_base_address, int enabled) {
@@ -891,11 +885,9 @@ void aae_vmwidget_init(uint64_t game_base_address, int enabled) {
     DObjGetBoneIndex = (void *)(base_address + ADDR_DObjGetBoneIndex);
     generic_method = (aae_vmwidget_method_t *)(base_address + ADDR_LUI_Generic3DMethod);
     generic_function = (lua_CFunction)(base_address + ADDR_Lua_SetupGeneric3DWidget);
-    skeleton_returns[0] = (const void *)(base_address + ADDR_DObjCalcSkel_ViewReturn);
-    skeleton_returns[1] = (const void *)(base_address + ADDR_DObjCalcSkel_PoseReturn);
     view_weapon_states = (uint8_t *const *)(base_address + ADDR_cgViewWeaponStates);
     local_client_count = (const int *)(base_address + ADDR_LOCAL_CLIENT_COUNT);
     ready = true;
     install_hook_LUI_Startup((void *)(base_address + ADDR_LUI_Startup));
-    install_hook_DObjCalcSkel((void *)(base_address + ADDR_DObjCalcSkel));
+    aae_skeleton_add(base_address, AAE_SKELETON_WIDGETS, widgets_after_skeleton);
 }

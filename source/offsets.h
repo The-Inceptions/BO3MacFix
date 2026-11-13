@@ -160,8 +160,8 @@
 #define ADDR_CG_DrawArc_MarkerTest 0x11f4c8b // "cmp byte [r15 + rsi + 0xee9], 0 ; je": whether the end marker is drawn, rsi the arcs, r15 the local client's offset (Windows 0x1405f69a7)
 #define ADDR_CG_ArcMaterials 0x1536c4f8 // 4 Material *: what the draw function gives its commands (+0x38), copied from the client's media (+0x258 to +0x270) at 0x12ba85e
 #define ADDR_R_AddCodeMeshDrawSurf 0xe8a35d // func - void (Material *, ... 9 arguments): reads material + 0x278 first (Windows 0x141c92ce0, "OFF_R_AddCodeMeshDrawSurf")
-#define ADDR_DObjCalcSkel 0xe398de // func - (DObj *, part bits, origin): works out a model's skeleton (Windows 0x1422c0480)
-#define ADDR_DObjCalcSkel_ViewModelReturn 0x10b55ea // where the view model's two calls of it return to (Windows: the calls at 0x1401abb5c and 0x14099da09)
+#define ADDR_DObjCalcSkel 0xe398de // func - (DObj *, const uint32_t parts[12], const float origin[3] or NULL): works out a model's skeleton; its callers set no other register and use nothing it returns; hooked once for every piece, see aae_skeleton.c (Windows 0x1422c0480)
+#define ADDR_DObjCalcSkel_ViewModelReturn 0x10b55ea // where the view model's two calls of it return to: the call at 0x10b55e5 (Windows 0x1401abb5c) and the one at 0x14bb2c0 (Windows 0x14099da09)
 #define ADDR_DObjCalcSkel_ViewModelReturn2 0x14bb2c5
 #define ADDR_DObjGetBoneIndex 0xf74d4f // func - int (DObj *, scr_string_t name, uint16_t *index, int model): 0xffff as the index makes it say no (Windows 0x1422c4240)
 #define ADDR_SL_GetStringOfSize 0x11b6d8d // func - scr_string_t (const char *, int user, int length + 1, int type) (Windows 0x1412d8830)
@@ -489,13 +489,8 @@
 #define ADDR_LUI_ToElement 0xeb9f00 // func - element * (lua_State *, int index), NULL when that argument isn't a UI element (Windows 0x142694d40) - name is a guess
 #define ADDR_CG_WorldToScreen 0x12fc923 // func - (int localClientNum, const float world[3], float screen[2]), the 3D widget's projection (Windows 0x1427a01b0) - name is a guess
 #define ADDR_hks_obj_tolstring 0x146d28b // func - const char * (lua_State *, HksObject *, size_t *length): a number becomes its text in place, NULL for anything else but a string (Windows 0x141d3ec30)
-#define ADDR_SL_GetStringOfSize 0x11b6d8d // func - uint32_t (const char *, uint32_t user, uint32_t length with the closing 0, int type), a script string (Windows 0x1412d8830)
 #define ADDR_hksi_lua_createtable 0x14467c8 // func - void (lua_State *, int narr, int nrec), pushes a new table (Windows 0x141d46bf0)
 #define ADDR_hksi_luaL_ref 0x1445261 // func - int (lua_State *, int table): pops the value, its reference or -1 for nil; 0x101474880 jumps to it (Windows 0x141d40710)
-#define ADDR_DObjCalcSkel 0xe398de // func - (DObj *, const int *parts, const float *origin): computes the model's skeleton (Windows 0x1422c0480)
-#define ADDR_DObjCalcSkel_ViewReturn 0x10b55ea // where DObjCalcSkel returns to in the first function the plugin redirects it in (the call at 0x10b55e5, Windows 0x1401abb5c)
-#define ADDR_DObjCalcSkel_PoseReturn 0x14bb2c5 // and in the second (the call at 0x14bb2c0, Windows 0x14099da09)
-#define ADDR_DObjGetBoneIndex 0xf74d4f // func - int (DObj *, uint32_t name, int16_t *index, uint32_t parts): the bone with that script string, index -1 when there is none (Windows 0x1422c4240)
 // -- client fields (clientfield_guard.c). The lookup, and the places that read through what it returns without
 // checking it, each given as the instruction right after its call (where the lookup returns to). Windows places are
 // those of the build T7Overcharged's names fit (BlackOps3.exe CheckSum 0x6531394); see wip/night/impl-clientfield.md

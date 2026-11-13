@@ -74,16 +74,15 @@ static void game_add_mesh(const uint8_t *material, uint64_t second, uint64_t thi
     game_mesh.calls++;
     memcpy(game_mesh.arguments, got, sizeof(got));
 }
+// the shared hook on DObjCalcSkel (aae_skeleton.c, tested by itself): which piece asked, with what work
 static struct {
-    int calls;
-    uint64_t arguments[6];
-} game_skeleton;
-static uint64_t game_calc_skeleton(const uint8_t *object, uint64_t second, uint64_t third, uint64_t fourth,
-                                   uint64_t fifth, uint64_t sixth) {
-    const uint64_t got[6] = { (uint64_t)object, second, third, fourth, fifth, sixth };
-    game_skeleton.calls++;
-    memcpy(game_skeleton.arguments, got, sizeof(got));
-    return 0x5ca1ab1e;
+    int asks, piece;
+    uint64_t base;
+    aae_skeleton_work_t work;
+} skeleton_asked;
+void aae_skeleton_add(uint64_t game_base_address, int piece, aae_skeleton_work_t work) {
+    skeleton_asked.asks++;
+    skeleton_asked.base = game_base_address, skeleton_asked.piece = piece, skeleton_asked.work = work;
 }
 // the game's function as the job calls it: the two floats come in xmm0 and xmm1
 typedef void (*add_segment_t)(int local_client, const void *trace, float start_thickness, float end_thickness);
@@ -111,8 +110,6 @@ int BO3MacFix_Hook(void *address, void *fake_func, void **out_origin_func) {
         *out_origin_func = (void *)game_should_predict;
     else if (out_origin_func == (void **)&orig_R_AddCodeMeshDrawSurf)
         *out_origin_func = (void *)game_add_mesh;
-    else if (out_origin_func == (void **)&orig_DObjCalcSkel)
-        *out_origin_func = (void *)game_calc_skeleton;
     else if (out_origin_func == (void **)&orig_CG_ArcPrediction_AddSegment)
         *out_origin_func = (void *)game_add_segment;
     return 0;
@@ -778,13 +775,16 @@ static void test_init(void) {
     const uint32_t places[] = { ADDR_CG_ArcPrediction_NoTacticalMode, ADDR_CG_ArcPrediction_WeaponDef,
                                 ADDR_CG_DrawArc_FirstLine, ADDR_CG_DrawArc_SecondLine, ADDR_CG_DrawArc_MarkerTest };
     for (size_t i = 0; i < sizeof(places) / sizeof(places[0]); i++) {
-        stub_missing_for = (int)places[i], hooks = 0;
+        stub_missing_for = (int)places[i], hooks = 0, skeleton_asked.asks = 0;
         aae_arc_init(base, 1);
-        CHECK(hooks == 0);
+        CHECK(hooks == 0 && skeleton_asked.asks == 0);
     }
-    stub_missing_for = -1, hooks = 0;
+    stub_missing_for = -1, hooks = 0, skeleton_asked.asks = 0;
     aae_arc_init(base, 1);
-    CHECK(hooks == 9);
+    CHECK(hooks == 8);
+    // the anchor's work after the view model's skeleton, through the hook shared with the widgets, first of the two
+    CHECK(skeleton_asked.asks == 1 && skeleton_asked.base == base && skeleton_asked.piece == AAE_SKELETON_TAG &&
+          skeleton_asked.work == anchor_after_skeleton);
     CHECK(was_hooked(base, ADDR_CG_ShouldPredictArc, (void *)fake_CG_ShouldPredictArc,
                      (void **)&orig_CG_ShouldPredictArc));
     CHECK(was_hooked(base, ADDR_CG_ArcPrediction_NoTacticalMode, (void *)handler_Arc_No_Tactical_Mode,
@@ -794,7 +794,6 @@ static void test_init(void) {
                      (void **)&orig_R_AddCodeMeshDrawSurf));
     CHECK(was_hooked(base, ADDR_CG_ArcPrediction_WeaponDef, (void *)handler_Arc_Weapon_Definition,
                      &orig_Arc_Weapon_Definition));
-    CHECK(was_hooked(base, ADDR_DObjCalcSkel, (void *)fake_DObjCalcSkel, (void **)&orig_DObjCalcSkel));
     CHECK(was_hooked(base, ADDR_CG_DrawArc_FirstLine, (void *)handler_Arc_First_Line, &orig_Arc_First_Line) &&
           was_hooked(base, ADDR_CG_DrawArc_SecondLine, (void *)handler_Arc_Second_Line, &orig_Arc_Second_Line));
     CHECK(was_hooked(base, ADDR_CG_DrawArc_MarkerTest, (void *)handler_Arc_Marker, &orig_Arc_Marker));
@@ -807,8 +806,6 @@ static void test_init(void) {
           BG_FindWeaponIndexByName == (void *)(base + ADDR_BG_FindWeaponIndexByName));
     CHECK(SL_GetStringOfSize == (void *)(base + ADDR_SL_GetStringOfSize) &&
           DObjGetBoneIndex == (void *)(base + ADDR_DObjGetBoneIndex));
-    CHECK(skeleton_sites[0] == (const void *)(base + ADDR_DObjCalcSkel_ViewModelReturn) &&
-          skeleton_sites[1] == (const void *)(base + ADDR_DObjCalcSkel_ViewModelReturn2));
     // the places in the game's own structures, as they were read from its code
     CHECK(Cg_Size == 0x342a80 && Cg_Player_State == 0x11a8d0 && Ps_Aim_Flags == 0x12 && Ps_Flags == 0x20 &&
           Ps_Weapon_State == 0x5c && Ps_Ammo_Weapon == 0x298 && Ps_Sights == 0x2fc);
@@ -1059,24 +1056,23 @@ static void a_view_model(void) {
     set_mod(true);
 }
 static bool skeleton_done(const uint8_t *object) {
-    return calc_skeleton(object, 2, 3, 4, 5, 6, skeleton_sites[0]) == 0x5ca1ab1e;
+    anchor_after_skeleton(object, 0);
+    return true;
 }
 
 static void test_anchor(void) {
     float anchor[3];
     a_view_model();
-    // after the view model's skeleton: its right hand, from either of the two places
-    game_skeleton.calls = 0;
-    CHECK(calc_skeleton(view_model, 2, 3, 4, 5, 6, skeleton_sites[1]) == 0x5ca1ab1e && game_skeleton.calls == 1);
-    const uint64_t expected[6] = { (uint64_t)view_model, 2, 3, 4, 5, 6 };
-    CHECK(memcmp(game_skeleton.arguments, expected, sizeof(expected)) == 0);
+    // after the view model's skeleton: its right hand, after either of the two calls (aae_skeleton.c calls this only
+    // after those two, and tells which: the anchor doesn't mind)
+    anchor_after_skeleton(view_model, 1);
     CHECK(anchor_of(0, anchor) && anchor[0] == 11.0f && anchor[1] == 12.0f && anchor[2] == 13.0f);
     CHECK(!anchor_of(1, anchor));
-    // from anywhere else, or for another model, or without the mod: nothing
+    // for another model, or none, or without the mod: nothing
     a_view_model();
-    CHECK(calc_skeleton(view_model, 2, 3, 4, 5, 6, (const void *)test_anchor) == 0x5ca1ab1e && !anchor_of(0, anchor));
     CHECK(skeleton_done(other_model) && !anchor_of(0, anchor));
-    CHECK(calc_skeleton(NULL, 2, 3, 4, 5, 6, skeleton_sites[0]) == 0x5ca1ab1e && !anchor_of(0, anchor));
+    anchor_after_skeleton(NULL, 0);
+    CHECK(!anchor_of(0, anchor));
     set_mod(false);
     CHECK(skeleton_done(view_model) && !anchor_of(0, anchor));
     set_mod(true);

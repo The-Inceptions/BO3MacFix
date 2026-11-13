@@ -1453,10 +1453,15 @@ static void fake_startup(uint64_t first, uint64_t second) {
     startup.ours_in = list[1].next == &tag_widget_method && tag_widget_method.next == &tag_widget_line_method &&
                       tag_widget_line_method.next == &list[2];
 }
-static uint64_t skeleton_arguments[3];
-static uint64_t fake_calc_skel(uint8_t *model, uint64_t parts, uint64_t origin) {
-    skeleton_arguments[0] = (uint64_t)model, skeleton_arguments[1] = parts, skeleton_arguments[2] = origin;
-    return 0x5555;
+// the shared hook on DObjCalcSkel (aae_skeleton.c, tested by itself): which piece asked, with what work
+static struct {
+    int asks, piece;
+    uint64_t base;
+    aae_skeleton_work_t work;
+} skeleton_asked;
+void aae_skeleton_add(uint64_t game_base_address, int piece, aae_skeleton_work_t work) {
+    skeleton_asked.asks++;
+    skeleton_asked.base = game_base_address, skeleton_asked.piece = piece, skeleton_asked.work = work;
 }
 
 // ---- the mod with the plugin
@@ -1498,65 +1503,76 @@ static void test_startup(void) {
     CHECK(startup.calls == 4 && !startup.ours_in && list[1].next == &list[2]);
 }
 
-static void test_skeleton_hook(void) {
+// the widgets' work after the view model's skeleton (aae_skeleton.c calls it only after the two calls, and says
+// which one; the work is the same for both)
+static void test_after_skeleton(void) {
     fresh();
     aae_vmwidget_tag_t *tag = widget_on(elements[0], 0, 0, 0);
-    skeleton_returns[0] = (const void *)0x10, skeleton_returns[1] = (const void *)0x20;
     set_model(&models[0], trees[0], 8, true);
     set_bone(&models[0], 2, tag->name, turned, at);
     set_model(&models[1], trees[1], 8, true);
     set_bone(&models[1], 2, tag->name, identity, at);
     set_weapon_model(0, &models[0]);
     set_weapon_model(1, &models[1]);
-    // returning anywhere else: nothing
-    skeleton_computed(models[0].bytes, (const void *)0x30);
-    CHECK(tag->bone[0].valid == 0 && state.noted[0].model == NULL);
-    // to one of the two: the local clients' weapon models are noted and the bones kept
-    skeleton_computed(models[0].bytes, (const void *)0x10);
+    // the local clients' weapon models are noted and the bones kept
+    widgets_after_skeleton(models[0].bytes, 0);
     CHECK(kept_as(tag, 0, turned, at) && state.noted[0].model == models[0].bytes && state.noted[1].model == NULL);
-    skeleton_computed(models[1].bytes, (const void *)0x20);
+    widgets_after_skeleton(models[1].bytes, 1);
     CHECK(tag->bone[1].valid == 0 && state.noted[1].model == NULL);
     // as many local clients as the game has
     clients_in_game = 2;
-    skeleton_computed(models[1].bytes, (const void *)0x20);
+    widgets_after_skeleton(models[1].bytes, 1);
     CHECK(kept_as(tag, 1, identity, at) && state.noted[1].model == models[1].bytes);
     // a client without a weapon model keeps its note
     set_weapon_model(1, NULL);
-    skeleton_computed(models[0].bytes, (const void *)0x10);
+    widgets_after_skeleton(models[0].bytes, 0);
     CHECK(state.noted[1].model == models[1].bytes);
     // no view weapon states yet: nothing noted
     view_states_pointer = NULL;
     state.noted[0].model = NULL;
-    skeleton_computed(models[0].bytes, (const void *)0x10);
+    widgets_after_skeleton(models[0].bytes, 0);
     CHECK(state.noted[0].model == NULL);
     view_states_pointer = view_states;
-    // no tag in use, or not ready: nothing, not even a note
+    // no model (the plugin's half does nothing for none), no tag in use, or not ready: nothing, not even a note
+    widgets_after_skeleton(NULL, 0);
+    CHECK(state.noted[0].model == NULL);
     uint64_t active = state.active[0];
     state.active[0] = 0;
-    skeleton_computed(models[0].bytes, (const void *)0x10);
+    widgets_after_skeleton(models[0].bytes, 0);
     CHECK(state.noted[0].model == NULL);
     state.active[0] = active;
     ready = false;
-    skeleton_computed(models[0].bytes, (const void *)0x10);
+    widgets_after_skeleton(models[0].bytes, 1);
     CHECK(state.noted[0].model == NULL);
     ready = true;
-    // the hook hands every argument on and gives back what the game's function gave
-    orig_DObjCalcSkel = fake_calc_skel;
-    CHECK(fake_DObjCalcSkel(models[0].bytes, 0x1234, 0x5678) == 0x5555 &&
-          skeleton_arguments[0] == (uint64_t)models[0].bytes && skeleton_arguments[1] == 0x1234 &&
-          skeleton_arguments[2] == 0x5678);
+    widgets_after_skeleton(models[0].bytes, 1);
+    CHECK(state.noted[0].model == models[0].bytes);    // a tag in use only beyond the first 64: the work is done all the same
+    fresh();
+    for (uint32_t name = 0x700; state.tag_count < 70 && name < 0x800; name++)
+        aae_vmwidget_tag(&state, name);
+    aae_vmwidget_tag_t *far = &state.tag[69], *user = NULL;
+    aae_vmwidget_move(&state, &user, far);
+    CHECK(state.active[0] == 0 && state.active[1] != 0);
+    set_model(&models[0], trees[0], 8, true);
+    set_bone(&models[0], 3, far->name, turned, at);
+    set_weapon_model(0, &models[0]);
+    widgets_after_skeleton(models[0].bytes, 0);
+    CHECK(kept_as(far, 0, turned, at));
 }
 
 static void test_init(void) {
     const uint64_t base = 0x100000000;
     ready = false;
     hooks = 0;
+    skeleton_asked.asks = 0;
     aae_vmwidget_init(base, 0);
-    CHECK(hooks == 0 && !ready);
+    CHECK(hooks == 0 && !ready && skeleton_asked.asks == 0);
     aae_vmwidget_init(base, 1);
-    CHECK(ready && hooks == 2);
+    CHECK(ready && hooks == 1);
     CHECK(was_hooked(ADDR_LUI_Startup, (void *)fake_LUI_Startup, (void **)&orig_LUI_Startup));
-    CHECK(was_hooked(ADDR_DObjCalcSkel, (void *)fake_DObjCalcSkel, (void **)&orig_DObjCalcSkel));
+    // the bones' work after the view model's skeleton, through the hook shared with the grenade line, second of two
+    CHECK(skeleton_asked.asks == 1 && skeleton_asked.base == base && skeleton_asked.piece == AAE_SKELETON_WIDGETS &&
+          skeleton_asked.work == widgets_after_skeleton);
     CHECK(LUI_ToElement == (void *)(base + ADDR_LUI_ToElement) &&
           hks_obj_tolstring == (void *)(base + ADDR_hks_obj_tolstring) &&
           SL_GetStringOfSize == (void *)(base + ADDR_SL_GetStringOfSize) &&
@@ -1568,8 +1584,6 @@ static void test_init(void) {
           DObjGetBoneIndex == (void *)(base + ADDR_DObjGetBoneIndex));
     CHECK(generic_method == (void *)(base + ADDR_LUI_Generic3DMethod) &&
           generic_function == (lua_CFunction)(base + ADDR_Lua_SetupGeneric3DWidget) &&
-          skeleton_returns[0] == (void *)(base + ADDR_DObjCalcSkel_ViewReturn) &&
-          skeleton_returns[1] == (void *)(base + ADDR_DObjCalcSkel_PoseReturn) &&
           view_weapon_states == (void *)(base + ADDR_cgViewWeaponStates) &&
           local_client_count == (void *)(base + ADDR_LOCAL_CLIENT_COUNT));
     // the places in the game's own structures, as they were read from its code, and the plugin's sizes
@@ -1726,7 +1740,7 @@ int main(void) {
     test_widget_update();
     test_line_update();
     test_startup();
-    test_skeleton_hook();
+    test_after_skeleton();
     test_like_the_plugin();
 
     snprintf(command, sizeof(command), "rm -rf '%s'", template);
