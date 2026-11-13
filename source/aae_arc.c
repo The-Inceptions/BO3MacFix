@@ -136,10 +136,12 @@ static bool weapon_name_character(unsigned char c) {
            c == '_' || (unsigned char)(c - '-') <= 2;
 }
 
+// (the plugin checks the length with strnlen first; one loop that stops at the size gives the same answers and
+// can't run past the name, whatever the text does meanwhile)
 bool aae_arc_weapon_name(const char *text, char name[Name_Size]) {
-    if (text == NULL || strnlen(text, Name_Size) >= Name_Size)
+    if (text == NULL)
         return false;
-    for (size_t i = 0;; i++) {
+    for (size_t i = 0; i < Name_Size; i++) {
         unsigned char c = (unsigned char)text[i];
         if (c == '\0') {
             name[i] = '\0';
@@ -149,6 +151,7 @@ bool aae_arc_weapon_name(const char *text, char name[Name_Size]) {
             return false;
         name[i] = (char)c;
     }
+    return false;
 }
 
 const char *aae_arc_definition_problem(const uint8_t *original, const uint8_t *replacement) {
@@ -420,15 +423,38 @@ static const char *dvar_text(const char *name) {
     return dvar != NULL && as_int(dvar + Dvar_Type) == Dvar_Type_String ? Dvar_GetString((void *)dvar) : NULL;
 }
 
+// A dvar's text, copied out whole, as free aim does it (cf4d919). The mod's script sets these dvars on the client's
+// thread; the job thread and the view model's skeleton read them, so a text can be replaced while it is read. The game
+// puts the new text into the dvar before it lets go of the old one (0x100fa114f, then 0x100fa1190), so a copy is whole
+// when the dvar still hands out the same text after the copy was made; when it doesn't, the copy is made again from
+// the new one. False for no text, for one that doesn't fit, and for one that was replaced every time.
+#define Text_Copy_Size 192
+#define Text_Copy_Tries 4
+static bool dvar_text_copy(const char *name, char copy[Text_Copy_Size]) {
+    for (int tries = 0; tries < Text_Copy_Tries; tries++) {
+        const char *text = dvar_text(name);
+        size_t length = 0;
+        if (text == NULL)
+            return false;
+        while (length < Text_Copy_Size && (copy[length] = text[length]) != '\0')
+            length++;
+        if (dvar_text(name) == text)
+            return length < Text_Copy_Size;
+    }
+    return false;
+}
+
 // One of T7Overcharged's two bool dvars. On the Mac the mod's script makes them with setdvar, as dvars with text; a
-// dvar of another kind counts by the game's own reading of it as a number.
+// dvar of another kind counts by the game's own reading of it as a number. A text that can't be copied whole (too
+// long, or replaced every time it was read) counts as none: T7Overcharged's default.
 static int switch_dvar(const char *name) {
     void *dvar = Dvar_FindByHash(gsc_hash(name));
     if (dvar == NULL)
         return Aae_Arc_No_Dvar;
-    if (as_int((const uint8_t *)dvar + Dvar_Type) == Dvar_Type_String)
-        return aae_arc_dvar_switch(Dvar_GetString(dvar));
-    return Dvar_GetInt(dvar) != 0;
+    if (as_int((const uint8_t *)dvar + Dvar_Type) != Dvar_Type_String)
+        return Dvar_GetInt(dvar) != 0;
+    char text[Text_Copy_Size];
+    return dvar_text_copy(name, text) ? aae_arc_dvar_switch(text) : Aae_Arc_No_Dvar;
 }
 
 static uint8_t *arc_block(int local_client) {
@@ -519,7 +545,8 @@ detour_with_registers(Arc_Weapon_Definition) {
     if (!active())
         return;
     const uint8_t *original = (const uint8_t *)registers->rax;
-    const char *text = dvar_text("aae_arc_weapondef");
+    char copy[Text_Copy_Size];
+    const char *text = dvar_text_copy("aae_arc_weapondef", copy) ? copy : NULL;
     const uint8_t *used = aae_arc_prediction_definition(original, text, definition_named);
     registers->rax = (uint64_t)used;
     if (debug) {
@@ -536,6 +563,12 @@ detour_with_registers(Arc_Weapon_Definition) {
 }
 
 // ---- the plugin (b): the view model's bone
+
+// the bone the mod's script names in aae_arc_tag (none: the right hand's), and the key the anchor is kept under
+static uint64_t tag_key_now(char tag[Tag_Size]) {
+    char copy[Text_Copy_Size];
+    return aae_arc_tag(dvar_text_copy("aae_arc_tag", copy) ? copy : NULL, tag);
+}
 
 // what is kept of each local client's view model, its bone and the anchor: as the plugin keeps it
 typedef struct {
@@ -628,7 +661,7 @@ static void find_anchor(const uint8_t *object) {
             atomic_store(&right_name, right);
     }
     char tag[Tag_Size];
-    uint64_t key = aae_arc_tag(dvar_text("aae_arc_tag"), tag);
+    uint64_t key = tag_key_now(tag);
     if (key != atomic_load(&tag_key)) {
         pthread_mutex_lock(&tag_lock);
         if (key != atomic_load(&tag_key)) {
@@ -749,7 +782,7 @@ static void draw_segment(detour_registers_t *registers) {
     char tag[Tag_Size];
     float anchor[3], end[3];
     int last = as_int(command + Command_Last);
-    if (!anchor_now(which, aae_arc_tag(dvar_text("aae_arc_tag"), tag), anchor)) {
+    if (!anchor_now(which, tag_key_now(tag), anchor)) {
         say_drawn(which, false, last, anchor);
         return;
     }

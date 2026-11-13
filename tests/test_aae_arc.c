@@ -138,6 +138,10 @@ static struct {
     bool there;
     int kind;
     char text[200];
+    // the script replacing the text while it is read: at the ask counted down to 0 by replace_in, or at every ask
+    int replace_in;
+    bool replace_always, on_other;
+    char other[200];
 } dvars[] = { { .name = "force_arc" }, { .name = "arc_requires_tmode" }, { .name = "aae_arc_weapondef" },
               { .name = "aae_arc_tag" } };
 static void *game_find_dvar(uint32_t hash) {
@@ -151,7 +155,9 @@ static const char *game_dvar_string(void *dvar) {
     typeof(dvars[0]) *d = dvar;
     if (d->kind != Dvar_Type_String)
         wrong_asks++;
-    return d->text;
+    if (d->replace_always || (d->replace_in > 0 && --d->replace_in == 0))
+        d->on_other = !d->on_other;
+    return d->on_other ? d->other : d->text;
 }
 static int game_dvar_int(void *dvar) {
     typeof(dvars[0]) *d = dvar;
@@ -162,6 +168,7 @@ static void set_dvar_kind(const char *name, bool there, int kind, const char *te
     for (size_t i = 0; i < sizeof(dvars) / sizeof(dvars[0]); i++) {
         if (strcmp(dvars[i].name, name) == 0) {
             dvars[i].there = there, dvars[i].kind = kind;
+            dvars[i].replace_in = 0, dvars[i].replace_always = dvars[i].on_other = false;
             snprintf(dvars[i].text, sizeof(dvars[i].text), "%s", text);
             memcpy(dvars[i].game_side + Dvar_Type, &kind, sizeof(kind));
         }
@@ -172,6 +179,16 @@ static void set_text(const char *name, const char *text) {
 }
 static void no_dvar(const char *name) {
     set_dvar_kind(name, false, Dvar_Type_String, "");
+}
+// a text dvar whose text the script replaces by `other` while it is read: at the ask number `at`, or at every ask (0)
+static void set_replaced_text(const char *name, const char *text, const char *other, int at) {
+    set_text(name, text);
+    for (size_t i = 0; i < sizeof(dvars) / sizeof(dvars[0]); i++) {
+        if (strcmp(dvars[i].name, name) == 0) {
+            snprintf(dvars[i].other, sizeof(dvars[i].other), "%s", other);
+            dvars[i].replace_in = at, dvars[i].replace_always = at == 0;
+        }
+    }
 }
 
 // weapon definitions, as big as the code reads them
@@ -865,6 +882,28 @@ static void test_test_hook(void) {
     set_dvar_kind("arc_requires_tmode", true, 1, "1");
     CHECK(fake_CG_ShouldPredictArc(0, 0x12b) && wrong_asks == 0);
     no_dvar("force_arc"), no_dvar("arc_requires_tmode");
+    // a text replaced while it is read: the new one is copied and taken; one replaced every time it is read, or too
+    // long to copy, counts as none (T7Overcharged's defaults: not forced, Tactical Mode not asked for)
+    set_replaced_text("arc_requires_tmode", "1", "0", 2);
+    CHECK(!fake_CG_ShouldPredictArc(0, 0x12b));
+    set_replaced_text("arc_requires_tmode", "0", "1", 2);
+    CHECK(fake_CG_ShouldPredictArc(0, 0x12b));
+    set_replaced_text("arc_requires_tmode", "0", "0", 0);
+    CHECK(fake_CG_ShouldPredictArc(0, 0x12b));
+    char long_text[200];
+    memset(long_text, '0', sizeof(long_text) - 1), long_text[sizeof(long_text) - 1] = '\0';
+    set_text("arc_requires_tmode", long_text);
+    CHECK(fake_CG_ShouldPredictArc(0, 0x12b));
+    long_text[190] = '\0';
+    set_text("arc_requires_tmode", long_text);
+    CHECK(!fake_CG_ShouldPredictArc(0, 0x12b));
+    put_int(ps + Ps_Weapon_State, 0x2f);
+    set_replaced_text("force_arc", "0", "1", 2);
+    CHECK(fake_CG_ShouldPredictArc(0, 0x12b));
+    set_replaced_text("force_arc", "1", "1", 0);
+    CHECK(!fake_CG_ShouldPredictArc(0, 0x12b));
+    put_int(ps + Ps_Weapon_State, 0x2a);
+    no_dvar("force_arc"), no_dvar("arc_requires_tmode");
     // the job's own Tactical Mode test: always the branch for it being on, with the mod
     CHECK(handler_Arc_No_Tactical_Mode(1, 2));
     set_mod(false);
@@ -935,14 +974,27 @@ static void test_definition_detour(void) {
     set_mod(true);
     handler_Arc_Weapon_Definition(&registers);
     CHECK(registers.rax == (uint64_t)bow4);
+    // the name replaced while it is read: the new one; replaced every time it is read: the weapon's own
+    set_replaced_text("aae_arc_weapondef", "nothing_zm", "elemental_bow4_zm", 2);
+    registers.rax = (uint64_t)frag;
+    handler_Arc_Weapon_Definition(&registers);
+    CHECK(registers.rax == (uint64_t)bow4 && strcmp(last_name_asked, "elemental_bow4_zm") == 0);
+    set_replaced_text("aae_arc_weapondef", "elemental_bow4_zm", "nothing_zm", 2);
+    registers.rax = (uint64_t)frag;
+    handler_Arc_Weapon_Definition(&registers);
+    CHECK(registers.rax == (uint64_t)frag);
+    set_replaced_text("aae_arc_weapondef", "elemental_bow4_zm", "elemental_bow4_zm", 0);
+    registers.rax = (uint64_t)frag;
+    handler_Arc_Weapon_Definition(&registers);
+    CHECK(registers.rax == (uint64_t)frag);
+    set_text("aae_arc_weapondef", "elemental_bow4_zm");
 }
 
 // the anchor as the draw code would read it now: after noting the view models, as it does
 static bool anchor_of(int which, float anchor[3]) {
     note_view_models();
     char tag[Tag_Size];
-    const char *text = game_find_dvar(gsc_hash("aae_arc_tag")) != NULL ? dvars[3].text : NULL;
-    return anchor_now(which, aae_arc_tag(text, tag), anchor);
+    return anchor_now(which, tag_key_now(tag), anchor);
 }
 static void reset_views(void) {
     for (int which = 0; which < Local_Clients; which++) {
@@ -1004,6 +1056,11 @@ static void test_anchor(void) {
     CHECK(skeleton_done(view_model) && anchor_of(0, anchor) && anchor[0] == 11.0f && bone_asks == 0);
     // text the plugin doesn't take: as none
     set_text("aae_arc_tag", "tag flash");
+    CHECK(skeleton_done(view_model) && anchor_of(0, anchor) && anchor[0] == 11.0f);
+    // the name replaced while it is read: the new one; replaced every time it is read: as none
+    set_replaced_text("aae_arc_tag", "tag_nothing", "tag_flash", 2);
+    CHECK(skeleton_done(view_model) && anchor_of(0, anchor) && anchor[0] == 21.0f);
+    set_replaced_text("aae_arc_tag", "tag_flash", "tag_flash", 0);
     CHECK(skeleton_done(view_model) && anchor_of(0, anchor) && anchor[0] == 11.0f);
     // no bone of either name: none
     set_bone(7, 11.0f, 12.0f, 13.0f, false);
