@@ -18,6 +18,7 @@
 #include "dobby.h"
 #include "offsets.h"
 #include "script_errors.h"
+#include "thread_stats.h"
 
 static uint64_t base_address;
 
@@ -110,6 +111,9 @@ install_hook_name(Scr_ErrorInternal, void, int inst) {
         return;
     }
     atomic_fetch_add_explicit(&thrown[inst], 1, memory_order_relaxed);
+    // FrameStats' detail: the thread that runs this instance's scripts (thread_stats.h)
+    if (thread_stats_phases_on)
+        thread_stats_note_role(inst == 0 ? Thread_Role_Server_Scripts : Thread_Role_Client_Scripts);
     uint8_t *var = var_pub(inst), *vm = vm_pub(inst);
     const char *message = *(const char **)(var + VarPub_ErrorMessage);
     // only the case where it prints "throwing script exception" and throws: not terminal, inside a script function

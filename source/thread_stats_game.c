@@ -14,9 +14,9 @@
 
 bool thread_stats_phases_on = false;
 static bool on = false;
-static _Atomic uint64_t role_ids[3]; // the thread seen in each role (Thread_Role_* bit index), 0 not yet
+static _Atomic uint64_t role_ids[Thread_Roles]; // the thread seen in each role (Thread_Role_* bit index), 0 not yet
 static struct {
-    _Atomic uint64_t calls, wall_ns, cpu_ns;
+    _Atomic uint64_t calls, wall_ns;
 } phases[Phase_Count];
 
 void thread_stats_init(void) {
@@ -33,7 +33,7 @@ static uint64_t current_thread_id(void) {
 void thread_stats_note_role(int role) {
     if (!on)
         return;
-    for (int bit = 0; bit < 3; bit++) {
+    for (int bit = 0; bit < Thread_Roles; bit++) {
         if ((role & (1 << bit)) == 0)
             continue;
         // a role moves to another thread only when it really does (a map restart can start threads anew)
@@ -44,14 +44,13 @@ void thread_stats_note_role(int role) {
 }
 
 phase_start_t thread_stats_phase_begin(void) {
-    return (phase_start_t){ clock_gettime_nsec_np(CLOCK_UPTIME_RAW), clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) };
+    return (phase_start_t){ clock_gettime_nsec_np(CLOCK_UPTIME_RAW) };
 }
 
 void thread_stats_phase_end(int phase, phase_start_t start) {
-    uint64_t wall = clock_gettime_nsec_np(CLOCK_UPTIME_RAW), cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
+    uint64_t wall = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     atomic_fetch_add_explicit(&phases[phase].calls, 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&phases[phase].wall_ns, wall - start.wall_ns, memory_order_relaxed);
-    atomic_fetch_add_explicit(&phases[phase].cpu_ns, cpu - start.cpu_ns, memory_order_relaxed);
     // the first call of a window tells which thread runs the phase (cheap: a compare most of the time)
     if (phase != Phase_Library && atomic_load_explicit(&phases[phase].calls, memory_order_relaxed) == 1)
         thread_stats_note_role(phase == Phase_Server ? Thread_Role_Server : Thread_Role_Client);
@@ -104,13 +103,13 @@ void thread_stats_window(double seconds, int frames) {
     if (since > seconds * 1.25 + 0.5)
         window_first = true;
     sampled_at = now;
-    uint64_t roles[3];
-    for (int i = 0; i < 3; i++)
+    uint64_t roles[Thread_Roles];
+    for (int i = 0; i < Thread_Roles; i++)
         roles[i] = atomic_load_explicit(&role_ids[i], memory_order_relaxed);
     char line[1600];
     // the first window has no sample before it: its threads' times would be since they started
     if (!window_first) {
-        thread_stats_format(samples[current], counts[current], samples[next], counts[next], roles, 3, seconds, frames,
+        thread_stats_format(samples[current], counts[current], samples[next], counts[next], roles, Thread_Roles, seconds, frames,
                             Threads_Shown, line, sizeof(line));
         printf("frame stats: threads %s\n", line);
     }
@@ -118,7 +117,6 @@ void thread_stats_window(double seconds, int frames) {
     for (int phase = 0; phase < Phase_Count; phase++) {
         sums[phase].calls = atomic_exchange_explicit(&phases[phase].calls, 0, memory_order_relaxed);
         sums[phase].wall_ns = atomic_exchange_explicit(&phases[phase].wall_ns, 0, memory_order_relaxed);
-        sums[phase].cpu_ns = atomic_exchange_explicit(&phases[phase].cpu_ns, 0, memory_order_relaxed);
     }
     if (!window_first) {
         thread_stats_format_phases(sums, frames, line, sizeof(line));

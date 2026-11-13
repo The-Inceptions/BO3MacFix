@@ -45,7 +45,7 @@ static void after_skeleton(const uint8_t *object, const void *from) {
                    works[AAE_SKELETON_WIDGETS] != NULL ? "done" : "not asked for");
     }
     // FrameStats' detail times this work (thread_stats.h); without it nothing else happens here
-    phase_start_t start = { 0, 0 };
+    phase_start_t start = { 0 };
     if (thread_stats_phases_on)
         start = thread_stats_phase_begin();
     for (int piece = 0; piece < AAE_SKELETON_PIECES; piece++)

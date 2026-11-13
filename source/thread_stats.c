@@ -44,7 +44,8 @@ static void append(char *out, size_t size, int *used, const char *format, ...) {
 int thread_stats_format(const thread_sample_t *before, int before_count, const thread_sample_t *now, int now_count,
                         const uint64_t *role_ids, int role_count, double seconds, int frames, int shown, char *out,
                         size_t size) {
-    static const char *const role_names[] = { "present", "server", "client" };
+    static const char *const role_names[Thread_Roles] = { "present", "server", "client", "server scripts",
+                                                          "client scripts" };
     if (size > 0)
         out[0] = '\0';
     if (now_count > Most_Threads)
@@ -69,7 +70,10 @@ int thread_stats_format(const thread_sample_t *before, int before_count, const t
     int rest = 0;
     for (int i = 0; i < now_count; i++) {
         const thread_sample_t *thread = &now[use[i].index];
-        if (listed >= shown || use[i].used_ns == 0) {
+        bool has_role = false;
+        for (int role = 0; role < role_count && role < Thread_Roles; role++)
+            has_role |= role_ids[role] != 0 && role_ids[role] == thread->id;
+        if (!has_role && (listed >= shown || use[i].used_ns == 0)) {
             rest_ns += use[i].used_ns;
             rest += use[i].used_ns > 0;
             continue;
@@ -80,7 +84,7 @@ int thread_stats_format(const thread_sample_t *before, int before_count, const t
         else
             append(out, size, &used, "; unnamed %llu", (unsigned long long)thread->id);
         int tags = 0;
-        for (int role = 0; role < role_count && role < 3; role++) {
+        for (int role = 0; role < role_count && role < Thread_Roles; role++) {
             if (role_ids[role] == 0 || role_ids[role] != thread->id)
                 continue;
             append(out, size, &used, "%s%s", tags++ == 0 ? " [" : " ", role_names[role]);
@@ -91,7 +95,8 @@ int thread_stats_format(const thread_sample_t *before, int before_count, const t
     }
     if (rest > 0)
         append(out, size, &used, "; %i more %.0f%% %.2f ms", rest, rest_ns * percent_per_ns, rest_ns * ms_per_ns);
-    // a role whose thread has no time in the window (it ended, or the library hasn't seen the role yet) says so
+    // a frame role whose thread isn't there (it ended, or the library hasn't seen the role yet) says so (the scripts'
+    // roles are only seen once a script error is thrown)
     for (int role = 0; role < role_count && role < 3; role++) {
         bool found = false;
         for (int i = 0; i < now_count && role_ids[role] != 0; i++)
@@ -108,12 +113,11 @@ int thread_stats_format_phases(const phase_sum_t sums[Phase_Count], int frames, 
     if (size > 0)
         out[0] = '\0';
     int used = 0;
-    append(out, size, &used, "(ms a frame, CPU in brackets, calls a frame)");
+    append(out, size, &used, "(ms a frame, calls a frame)");
     double per_frame = frames > 0 ? 1.0 / frames : 0;
     for (int phase = 0; phase < Phase_Count; phase++) {
-        append(out, size, &used, "%s %s %.2f ms (%.2f) %.2f", phase == 0 ? "" : ";", names[phase],
-               sums[phase].wall_ns * 1e-6 * per_frame, sums[phase].cpu_ns * 1e-6 * per_frame,
-               sums[phase].calls * per_frame);
+        append(out, size, &used, "%s %s %.2f ms %.2f", phase == 0 ? "" : ";", names[phase],
+               sums[phase].wall_ns * 1e-6 * per_frame, sums[phase].calls * per_frame);
     }
     return used;
 }

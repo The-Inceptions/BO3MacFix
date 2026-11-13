@@ -570,8 +570,9 @@ tests/test_t7o_small: tests/test_t7o_small.c source/t7o_small.c source/t7o_small
 # script_errors.c's QuietScriptErrors: which script errors it shows, against made-up script engine memory (the test
 # includes the source itself)
 tests/test_script_errors: tests/test_script_errors.c source/script_errors.c source/script_errors.h source/offsets.h \
-		source/dobby.h
-	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_script_errors.c
+		source/dobby.h source/thread_stats.h source/thread_stats.c source/thread_stats_game.c
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_script_errors.c \
+		source/thread_stats.c source/thread_stats_game.c
 
 # zm_inventory.c's pass through the game's cheat check for BO3MacFix's give and take commands, against a made-up
 # g_entities (the test includes the source)

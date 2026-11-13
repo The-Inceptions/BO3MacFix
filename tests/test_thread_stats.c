@@ -48,6 +48,15 @@ static void test_threads_line(void) {
     CHECK(strcmp(line, "(% of a core, ms a frame) all 6 threads 139% 13.90 ms; Main [server client] 80% 8.00 ms; "
                        "Win (WinID 3) [present] 40% 4.00 ms; 3 more 19% 1.90 ms") == 0);
 
+    // a thread with a role is named even when it is past the ones shown: the one that presents uses little CPU
+    uint64_t small_present[Thread_Roles] = { 15, 10, 10, 11, 10 };
+    thread_stats_format(before, 5, now, 6, small_present, Thread_Roles, 5.0, 500, 1, line, sizeof(line));
+    CHECK(strcmp(line, "(% of a core, ms a frame) all 6 threads 139% 13.90 ms; Main [server client client scripts] 80% "
+                       "8.00 ms; Win (WinID 3) [server scripts] 40% 4.00 ms; started in the window [present] 1% 0.10 "
+                       "ms; 2 more 18% 1.80 ms") == 0);
+    if (failures)
+        printf("%s\n", line);
+
     // a role whose thread isn't there (not seen yet, or it ended)
     uint64_t missing[3] = { 0, 13, 10 };
     thread_stats_format(before, 5, now, 6, missing, 3, 5.0, 500, 1, line, sizeof(line));
@@ -74,19 +83,16 @@ static void test_threads_line(void) {
 }
 
 static void test_phases_line(void) {
-    phase_sum_t sums[Phase_Count] = { { 500, 1500 * Ms, 1400 * Ms }, { 1000, 2000 * Ms, 1900 * Ms },
-                                      { 1500, 50 * Ms, 45 * Ms } };
+    phase_sum_t sums[Phase_Count] = { { 500, 1500 * Ms }, { 1000, 2000 * Ms }, { 1500, 50 * Ms } };
     char line[400];
     int n = thread_stats_format_phases(sums, 500, line, sizeof(line));
     CHECK(n == (int)strlen(line));
-    CHECK(strcmp(line, "(ms a frame, CPU in brackets, calls a frame) server frame (SV_Frame) 3.00 ms (2.80) 1.00; "
-                       "client frame (CL_Frame) 4.00 ms (3.80) 2.00; library's view model work 0.10 ms (0.09) 3.00")
-          == 0);
-    phase_sum_t empty[Phase_Count] = { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } };
+    CHECK(strcmp(line, "(ms a frame, calls a frame) server frame (SV_Frame) 3.00 ms 1.00; client frame (CL_Frame) "
+                       "4.00 ms 2.00; library's view model work 0.10 ms 3.00") == 0);
+    phase_sum_t empty[Phase_Count] = { { 0, 0 }, { 0, 0 }, { 0, 0 } };
     thread_stats_format_phases(empty, 0, line, sizeof(line));
-    CHECK(strcmp(line, "(ms a frame, CPU in brackets, calls a frame) server frame (SV_Frame) 0.00 ms (0.00) 0.00; "
-                       "client frame (CL_Frame) 0.00 ms (0.00) 0.00; library's view model work 0.00 ms (0.00) 0.00")
-          == 0);
+    CHECK(strcmp(line, "(ms a frame, calls a frame) server frame (SV_Frame) 0.00 ms 0.00; client frame (CL_Frame) "
+                       "0.00 ms 0.00; library's view model work 0.00 ms 0.00") == 0);
 }
 
 static volatile int burning = 1;
@@ -145,13 +151,15 @@ static void test_in_process(void) {
             self_after = second[i].cpu_ns;
     CHECK(self_after >= self_before + 90 * Ms);
 
-    // a phase: its calls, wall clock and CPU time, and the role of the thread that ran it
+    // a phase: its calls and wall clock, and the role of the thread that ran it
     phase_start_t start = thread_stats_phase_begin();
-    spin(20 * Ms);
+    uint64_t wall_start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    while (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - wall_start < 20 * Ms)
+        ;
     thread_stats_phase_end(Phase_Client, start);
     CHECK(atomic_load(&phases[Phase_Client].calls) == 1);
-    CHECK(atomic_load(&phases[Phase_Client].cpu_ns) >= 19 * Ms);
-    CHECK(atomic_load(&phases[Phase_Client].wall_ns) >= atomic_load(&phases[Phase_Client].cpu_ns) - 1 * Ms);
+    CHECK(atomic_load(&phases[Phase_Client].wall_ns) >= 20 * Ms);
+    CHECK(atomic_load(&phases[Phase_Client].wall_ns) < 2000 * Ms);
     CHECK(atomic_load(&role_ids[2]) == self);
     CHECK(atomic_load(&role_ids[1]) == 0);
     // the library's own work notes no role: it isn't the server's frame
