@@ -69,6 +69,8 @@ TEST_TARGETS += tests/test_aae_vmwidget
 TEST_TARGETS += tests/test_aae_vmwidget_tsan
 # the one hook on DObjCalcSkel for both pieces that work after the view model's skeleton (aae_skeleton.c)
 TEST_TARGETS += tests/test_aae_skeleton
+# T7Overcharged's smaller pieces: customkeymap (t7o_small.c)
+TEST_TARGETS += tests/test_t7o_small
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -171,6 +173,8 @@ SOURCES += source/t7o_subtitle.c
 SOURCES += source/t7o_guards.c
 # ClientFieldGuard: a script error instead of a crash for a client field nobody registered (clientfield_guard.c)
 SOURCES += source/clientfield_guard.c
+# T7Overcharged's smaller pieces: customkeymap (t7o_small.c)
+SOURCES += source/t7o_small.c
 # saving a zombies game and resuming it through AAE's starting options (checkpoint.c, checkpoint.lua), and giving its
 # weapons back with their camo, attachments and ammo types, and its perks (zm_inventory.c, zm_loadout.c)
 SOURCES += source/checkpoint.c source/zm_inventory.c source/zm_loadout.c
@@ -512,6 +516,12 @@ tests/test_aae_cheats: tests/test_aae_cheats.c source/aae_cheats.c source/aae_ch
 tests/test_t7o_subtitle: tests/test_t7o_subtitle.c source/t7o_subtitle.c source/t7o_subtitle.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_t7o_subtitle.c \
 		source/t7o_subtitle.c
+
+# t7o_small.c: T7Overcharged's rules, and its game side against a made-up game (the test includes the source)
+tests/test_t7o_small: tests/test_t7o_small.c source/t7o_small.c source/t7o_small.h source/offsets.h source/dobby.h \
+		source/havok.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_t7o_small.c
 
 # script_errors.c's QuietScriptErrors: which script errors it shows, against made-up script engine memory (the test
 # includes the source itself)

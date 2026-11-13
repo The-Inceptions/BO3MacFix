@@ -595,4 +595,9 @@
 #define ADDR_ClientField_GetFloat_Read 0x13b9e24 // in the float value getter 0x13b9dfd; Windows 0x140133ec1 in 0x140133ea0, T7O ClientFieldFault_NullRip1
 #define ADDR_ClientField_GetFloat_ReadBits 0x13b9e4c // its second lookup, for the bits; Windows 0x140133eeb, T7O ClientFieldFault_NullRip2
 // -- end client fields
+// T7Overcharged's smaller pieces (t7o_small.c); Windows addresses from T7Overcharged's own patterns for its names
+#define ADDR_Sys_QueEvent 0xd62e06 // func - void (int time, int type, int value, int value2, int, int, void *): the window's key and mouse messages into the game's event queue (256 of 32 bytes, critical section 0x31); type 1 is a key, value2 1 down and 0 up; mouse buttons are keys 200-204 (Windows 0x1422882e0, T7Overcharged's OFF_sys_que_event: the same body and callers)
+#define ADDR_playerKeys 0x1a1cd770 // PlayerKeyState[] (0x1940 bytes each): keys[256] of 24 bytes at +0x138, int down first (Key_SetBinding 0x101546a78; Windows 0x14531d850)
+#define ADDR_com_quitInProgress 0x118dfaac // int, Com_Quit (text "quitting...") sets it to 1 (Windows 0x15686e93c)
+#define ADDR_UI_luaVM 0x119c6b88 // lua_State *, the UI's Lua VM: the "close_hud" event function reads it (0x100e1c8ce; Windows UI_luaVM 0x159bf7e08)
 // -- END OFFSETS

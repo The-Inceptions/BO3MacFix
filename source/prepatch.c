@@ -194,6 +194,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Storage_Request, Push_R15 },
     { ADDR_SV_ExecuteClientCommand, Push_R15 },
     { ADDR_Sys_CheckSumPacketCopy, 10, 0, { 0x66, 0xB8, 0xFF, 0xFF, 0x81, 0xFA, 0xE8, 0x04, 0x00, 0x00 } }, // mov ax, 0xFFFF; cmp edx, 0x4E8
+    { ADDR_Sys_QueEvent, Push_R15 },
     { ADDR_Sys_VerifyPacketChecksum, Push_R15 },
     { ADDR_TRM_CanStart, Push_R15 },
     { ADDR_TRM_Init, Push_R15 },

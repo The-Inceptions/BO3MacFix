@@ -12,5 +12,8 @@ void t7o_set_online(int enabled);
 // T7Overcharged's script natives (GSC/CSC calls through isprofilebuild), see t7overcharged.c
 void t7o_install_script_functions(bool weapon_anims);
 // at start-up, before the game's threads run: T7Overcharged's printsubtitle console command, which prints AAE's game
-// messages, see t7overcharged.c
+// messages, see t7overcharged.c, and the ones of t7o_small.c
 void t7o_install_commands(void);
+// the words of the console command being run, as the game's own commands read them (argv[0] is the command), NULL when
+// they can't be read
+const char *const *t7o_command_args(int *argc);

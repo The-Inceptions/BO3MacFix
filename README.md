@@ -116,6 +116,12 @@ AAE's key binds (the pause menu's "Enhanced Controls": flashlight, ping, third p
 the HUD...) run a `SendMenuResponse` console command the Mac build doesn't have either. BO3MacFix adds it, so those
 keys work.
 
+AAE's loading screen lets you skip the map's loading movie with Escape or a left click, through T7Overcharged's
+`customkeymap` command; on the Mac only the controller's A button did that. BO3MacFix adds the command, with
+T7Overcharged's rules: a mapped key counts when it comes up, only when no other key is held with it, not while the
+console is open, and at most once a second for all of them together. `BO3MACFIX_T7ODEBUG=1` in the environment logs
+every key that comes up while the mod has keys mapped.
+
 ## Credits
 
 - [Alyssa / alltheamps](https://github.com/shiversoftdev) - guidance, help, t7patch and the cod2map64 patch DLL.

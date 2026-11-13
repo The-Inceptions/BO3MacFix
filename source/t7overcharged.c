@@ -17,6 +17,7 @@
 #include "offsets.h"
 #include "t7overcharged.h"
 #include "t7overcharged_lua.h"
+#include "t7o_small.h"
 #include "t7o_subtitle.h"
 #include "weapon_anim.h"
 #include "utilities.h"
@@ -511,17 +512,22 @@ static atomic_bool printsubtitle_logged;
 #define CmdArgs_Argv 0x88
 #define CmdArgs_Nesting_Max 8
 
-static void printsubtitle_f(void) {
+const char *const *t7o_command_args(int *argc) {
     // the arguments of the command being run, read like the game's own commands do
     uint8_t *tls = Sys_GetTLS();
     const uint8_t *args = tls != NULL ? *(const uint8_t *const *)(tls + TLS_CmdArgs) : NULL;
     if (args == NULL)
-        return;
+        return NULL;
     int nesting = *(const int *)args;
     if (nesting < 0 || nesting >= CmdArgs_Nesting_Max)
-        return;
-    int argc = *(const int *)(args + CmdArgs_Argc + 4 * (size_t)nesting);
-    const char *const *argv = *(const char *const *const *)(args + CmdArgs_Argv + 8 * (size_t)nesting);
+        return NULL;
+    *argc = *(const int *)(args + CmdArgs_Argc + 4 * (size_t)nesting);
+    return *(const char *const *const *)(args + CmdArgs_Argv + 8 * (size_t)nesting);
+}
+
+static void printsubtitle_f(void) {
+    int argc = 0;
+    const char *const *argv = t7o_command_args(&argc);
     t7o_subtitle message;
     if (argv == NULL ||
         !t7o_parse_printsubtitle(argc, argv, *(const int *)(game_base_address + ADDR_LOCAL_CLIENT_COUNT), &message))
@@ -550,15 +556,8 @@ static _Alignas(8) uint8_t sendmenuresponse_command[0x30];
 static atomic_bool sendmenuresponse_logged;
 
 static void sendmenuresponse_f(void) {
-    uint8_t *tls = Sys_GetTLS();
-    const uint8_t *args = tls != NULL ? *(const uint8_t *const *)(tls + TLS_CmdArgs) : NULL;
-    if (args == NULL)
-        return;
-    int nesting = *(const int *)args;
-    if (nesting < 0 || nesting >= CmdArgs_Nesting_Max)
-        return;
-    int argc = *(const int *)(args + CmdArgs_Argc + 4 * (size_t)nesting);
-    const char *const *argv = *(const char *const *const *)(args + CmdArgs_Argv + 8 * (size_t)nesting);
+    int argc = 0;
+    const char *const *argv = t7o_command_args(&argc);
     t7o_menu_response response;
     if (argv == NULL || !t7o_parse_sendmenuresponse(argc, argv, &response))
         return;
@@ -595,4 +594,6 @@ void t7o_install_commands(void) {
         Cmd_AddCommandInternal("printsubtitle", printsubtitle_f, printsubtitle_command);
     if (Cmd_FindCommand("SendMenuResponse") == NULL)
         Cmd_AddCommandInternal("SendMenuResponse", sendmenuresponse_f, sendmenuresponse_command);
+    // and the smaller ones of t7o_small.c: customkeymap
+    t7o_small_install(game_base_address);
 }

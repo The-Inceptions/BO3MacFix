@@ -70,6 +70,7 @@ tests/test_lua_unref
 tests/test_pmem_spill
 tests/test_aae_mantle
 tests/test_aae_hostmig
+tests/test_t7o_small
 tests/test_aae_breath
 tests/test_aae_move_fastjump
 tests/test_aae_move_fastjump_tsan

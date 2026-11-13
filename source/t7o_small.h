@@ -1,0 +1,82 @@
+// T7Overcharged's smaller pieces that All-around Enhancement uses, done the way T7Overcharged does them (see
+// t7o_small.c): its customkeymap command, keys that call a function of the mod's Lua. The rules are plain functions
+// here, so they can be tested without the game; the game's side is at the end.
+#pragma once
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+// ---- numbers as T7Overcharged reads them, with std::stoi: strtol in base 10 (blanks first, a sign, and anything
+// after the digits are allowed), on Windows, where a long is an int
+
+typedef enum {
+    T7o_Number_Ok,
+    T7o_Number_Invalid, // no digits: std::stoi throws std::invalid_argument
+    T7o_Number_Range,   // beyond an int: std::stoi throws std::out_of_range
+} t7o_number;
+t7o_number t7o_stoi(const char *text, int *value);
+
+// ---- customkeymap <name> <keys> [debounce ms]
+
+#define T7o_Keys 256          // the game's key numbers: 27 is ESCAPE, 200 MOUSE1 (its keynames table, in both games)
+#define T7o_Keymap_Max 32     // mappings kept; T7Overcharged's map has no limit, All-around Enhancement makes two
+#define T7o_Keymap_Name_Max 64
+#define T7o_Keymap_Debounce_Ms 1000 // without a third number
+
+// a set of the game's key numbers, as T7Overcharged's std::bitset<256>
+typedef struct {
+    uint64_t bits[T7o_Keys / 64];
+} t7o_keyset;
+void t7o_keyset_add(t7o_keyset *set, int key); // a key from 0 to 255; others are left out
+bool t7o_keyset_has(const t7o_keyset *set, int key);
+bool t7o_keyset_equal(const t7o_keyset *a, const t7o_keyset *b);
+
+typedef struct {
+    t7o_keyset keys;
+    char name[T7o_Keymap_Name_Max];
+    int debounce_ms;
+} t7o_keymapping;
+
+// T7Overcharged's debounce: a function-local static, set up at the first call, so one for all mappings
+typedef struct {
+    bool started, first;
+    int debounce_ms;
+    int64_t last_ns;
+} t7o_debounce;
+
+typedef struct {
+    t7o_keymapping mappings[T7o_Keymap_Max];
+    int count;
+    t7o_debounce debounce;
+} t7o_keymap;
+
+typedef enum {
+    T7o_Keymap_Added,
+    T7o_Keymap_Replaced,   // the same keys again: the new name and debounce take the old one's place
+    T7o_Keymap_Usage,      // fewer than three words: T7Overcharged prints its usage
+    T7o_Keymap_Bad_Number, // a key or the debounce that isn't a number std::stoi reads: T7Overcharged throws
+    T7o_Keymap_Bad_Name,   // a name that would end the quoted string of the Lua it goes into
+    T7o_Keymap_Full,
+} t7o_keymap_result;
+
+// argv[0] is the command's name, argv[1] the name, argv[2] the keys: numbers joined by '+' (an empty part is not a
+// number; a trailing '+' ends the list, as std::getline does), argv[3] the debounce. Keys above 255, and negative
+// ones, are left out; a mapping without keys is kept and never fires, as in T7Overcharged.
+t7o_keymap_result t7o_keymap_command(t7o_keymap *map, int argc, const char *const *argv);
+
+// whether a queued input event can fire a mapping: a key event (type 1, SE_KEY), the key's release (value2 is 1 when
+// it goes down, 0 when it comes up), the game not quitting, local client 0's console closed (key catcher 1), a key
+// below 256
+bool t7o_keymap_event_counts(int type, int value2, int key, int quit_in_progress, int key_catchers);
+// the mapping whose keys are exactly the held ones plus the key, NULL for none
+const t7o_keymapping *t7o_keymap_find(const t7o_keymap *map, const t7o_keyset *held, int key);
+// whether a mapping that was found fires now: the debounce is the one of the first mapping that ever fired, and
+// counts from the last time any mapping fired
+bool t7o_keymap_debounce_passes(t7o_debounce *debounce, int mapping_debounce_ms, int64_t now_ns);
+// the Lua T7Overcharged runs for a mapping (its text exactly, with the name); false when it doesn't fit
+bool t7o_keymap_lua(char *buffer, size_t size, const char *name);
+
+// ---- the game's side
+
+// at start-up: the console command and the hook on the game's input events
+void t7o_small_install(uint64_t base_address);
