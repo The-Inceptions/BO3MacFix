@@ -148,6 +148,28 @@
 #define ADDR_Prompt_Placed 0x1304895 // "movups xmm0, [r14 + 0x34]" in the placing code: the prompt (element r14) has its place on the screen (two floats at rbp - 0x70) and its rectangle is about to be written; the time for moves is in xmm7, the frame's ms in r15d, the screen's width over its height at rbp - 0x54 (Windows 0x14275e372)
 #define ADDR_Prompt_NotPlaced 0x1304789 // "movss xmm5, [rbp - 0x54]": the other branch, the prompt is kept at a fixed place of the screen (Windows 0x14275e3b8)
 #define ADDR_Prompt_IsFarAwayText 0x1742145 // "isFarAway"
+// the grenade's prediction line (aae_arc.c): T7Overcharged's names in quotes
+#define ADDR_CG_ShouldPredictArc 0x11f5450 // func - bool (int localClientNum, Weapon): whether the job predicts an arc this frame; its only caller is the job (Windows 0x1405f8790, "OFF_CG_ArcPrediction_ShouldDraw")
+#define ADDR_CG_ArcPrediction_NoTacticalMode 0x11f29a5 // "movss xmm0, [rbp - 0x2c]" in the job (it starts at 0x11f255f): the branch for Tactical Mode (0x11f187c) being off; only the je at 0x11f2975 comes here, right behind the test's call (Windows: the call at 0x1405fbf3e, "OFF_CG_ArcPrediction_TmodeNop2")
+#define ADDR_CG_ArcPrediction_TacticalMode 0x11f2977 // the branch for it being on: at most 3000 ms ahead, in steps of a 50th of that, at least 3
+#define ADDR_CG_ArcPrediction_WeaponDef 0x11f2643 // "mov [rbp - 0xa0], rax" in the job right behind its BG_GetWeaponDef: the definition in rax, the weapon in rbx (Windows: the call at 0x1405fbbd3)
+#define ADDR_CG_ArcPrediction_AddSegment 0x11f531b // func - void (int localClientNum, trace *): adds a segment to the arc; the job's two calls (Windows 0x1405f11b0)
+#define ADDR_CG_ArcBlocks 0x148a13e0 // per local client, 0xeec bytes: 5 segments of 60 points (vec3), their point counts at +0xe10, the number of segments at +0xe60, the end marker's byte at +0xee9 (Windows 0x1447992b0)
+#define ADDR_CG_DrawArc_FirstLine 0x11f4b37 // "lea rdi, [rbp - 0xa8] ; call" in the arc's draw function (it starts at 0x11f4926 with the local client at rbp - 0xac): the first loop over the segments hands the game a draw command (start +4, end +0x10, last point +0x40, points +0x68) (Windows: the call at 0x1405f684d)
+#define ADDR_CG_DrawArc_SecondLine 0x11f4c4a // the same in its second loop (Windows: the call at 0x1405f697c)
+#define ADDR_CG_DrawArc_MarkerTest 0x11f4c8b // "cmp byte [r15 + rsi + 0xee9], 0 ; je": whether the end marker is drawn, rsi the arcs, r15 the local client's offset (Windows 0x1405f69a7)
+#define ADDR_CG_ArcMaterials 0x1536c4f8 // 4 Material *: what the draw function gives its commands (+0x38), copied from the client's media (+0x258 to +0x270) at 0x12ba85e
+#define ADDR_R_AddCodeMeshDrawSurf 0xe8a35d // func - void (Material *, ... 9 arguments): reads material + 0x278 first (Windows 0x141c92ce0, "OFF_R_AddCodeMeshDrawSurf")
+#define ADDR_DObjCalcSkel 0xe398de // func - (DObj *, part bits, origin): works out a model's skeleton (Windows 0x1422c0480)
+#define ADDR_DObjCalcSkel_ViewModelReturn 0x10b55ea // where the view model's two calls of it return to (Windows: the calls at 0x1401abb5c and 0x14099da09)
+#define ADDR_DObjCalcSkel_ViewModelReturn2 0x14bb2c5
+#define ADDR_DObjGetBoneIndex 0xf74d4f // func - int (DObj *, scr_string_t name, uint16_t *index, int model): 0xffff as the index makes it say no (Windows 0x1422c4240)
+#define ADDR_SL_GetStringOfSize 0x11b6d8d // func - scr_string_t (const char *, int user, int length + 1, int type) (Windows 0x1412d8830)
+#define ADDR_BG_GetWeaponDef 0x12362cd // func - WeaponDef * (Weapon) (Windows 0x142670e50)
+#define ADDR_BG_WeaponAmmo 0xf5354d // func - int (playerState_s *, Weapon): the ammo of the weapon's slot (ps + 0x378, 15 of 0x30) (Windows 0x14266e850, "BG_WeaponAmmo")
+#define ADDR_BG_FindWeaponIndexByName 0x1236c1b // func - int (const char *, the two below): the djb2 of the lowered name looked up, the index & 0x1ff, 0 for none (Windows 0x142670d80, with its tables built in)
+#define ADDR_bg_weaponNameHashes 0x5e901d0 // {hash, index} for each weapon, sorted the first time
+#define ADDR_bg_weaponNameHashesSorted 0x5e911d0 // a byte: they are
 #define ADDR_UIModel_Child 0x10365c3 // func - uint16_t (uint16_t model, const char *name): the model's child of that name, made if it isn't there (0x1036418 doesn't make it)
 #define ADDR_UIModel_SetBool 0x1036a60 // func - bool (uint16_t model, bool value): whether that changed it
 

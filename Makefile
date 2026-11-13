@@ -42,6 +42,8 @@ TEST_TARGETS += tests/test_aae_freeaim_net
 TEST_TARGETS += tests/test_t7o_guards
 # the pause for everybody in a co-op game: the plugin's packets and rules, machines playing together (aae_coop_pause.c)
 TEST_TARGETS += tests/test_aae_coop_pause
+# the grenade's prediction line: T7Overcharged's test, the plugin's sums and the hooks (aae_arc.c)
+TEST_TARGETS += tests/test_aae_arc
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -114,6 +116,8 @@ SOURCES += source/aae_freeaim.c source/aae_freeaim_net.c
 SOURCES += source/aae_linkcam.c
 # AAECoopPause: the pause for everybody in a co-op game, as the mod's plugin does it (aae_coop_pause.c)
 SOURCES += source/aae_coop_pause.c
+# AAEGrenadeArc: the line that shows where a held grenade will fly (aae_arc.c)
+SOURCES += source/aae_arc.c
 # the arguments of T7Overcharged's printsubtitle command, which prints AAE's game messages (t7overcharged.c)
 SOURCES += source/t7o_subtitle.c
 # T7OCrashGuards: two of T7Overcharged's guards against crashes of the game itself (t7o_guards.c)
@@ -279,6 +283,13 @@ tests/test_aae_coop_pause: tests/test_aae_coop_pause.c source/aae_coop_pause.c s
 		source/dobby.h source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_coop_pause.c source/gsc_obj.c
+
+# aae_arc.c: T7Overcharged's arc test, the plugin's checks and sums, and the hooks against a made-up game
+tests/test_aae_arc: tests/test_aae_arc.c tests/arc_bend_cases.h source/aae_arc.c source/aae_arc.h source/aae_plugin.c \
+		source/aae_plugin.h source/detour.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/dobby.h \
+		source/prepatch.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_arc.c source/gsc_obj.c
 
 # settings_ini.c's reading and writing, against odd settings.ini files
 tests/test_settings_ini: tests/test_settings_ini.c source/settings_ini.c source/settings_ini.h

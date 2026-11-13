@@ -31,6 +31,7 @@
 #include "aae_hostmig.h"
 #include "aae_prompt.h"
 #include "aae_coop_pause.h"
+#include "aae_arc.h"
 #include "gsc_detours.h"
 #include "script_vars.h"
 #include "font_resolution.h"
@@ -1205,6 +1206,9 @@ __attribute__((constructor)) static void dylib_main() {
     // a crosshair in All-around Enhancement 4's third person view, as its Windows plugin gives it one (AAEFreeAim, on
     // by default), see aae_freeaim.c
     aae_freeaim_init(game_base_address, read_int_setting_or_env("AAEFreeAim", 1));
+    // the line that shows where a held grenade will fly, as All-around Enhancement 4's T7Overcharged and Windows
+    // plugin draw it (AAEGrenadeArc, on by default), see aae_arc.c
+    aae_arc_init(game_base_address, read_int_setting_or_env("AAEGrenadeArc", 1));
 
     // All-around Enhancement 4's left-hand gestures at the camera, as its Windows plugin puts them there (AAEGestures,
     // on by default), see aae_linkcam.c

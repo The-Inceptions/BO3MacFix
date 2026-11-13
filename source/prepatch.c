@@ -84,10 +84,17 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Bullet_Endpos, Push_R15 },
     { ADDR_Bullet_Fire, Push_R15 },
     { ADDR_Bullet_QueuedShots_Loop, 7, 0, { 0x48, 0x69, 0xCE, 0xB0, 0x08, 0x00, 0x00 } }, // imul rcx, rsi, 0x8b0 (a detour)
+    { ADDR_CG_ArcPrediction_AddSegment, Push_R15 },
+    { ADDR_CG_ArcPrediction_NoTacticalMode, 5, 0, { 0xF3, 0x0F, 0x10, 0x45, 0xD4 } }, // movss xmm0, [rbp-0x2c] (a detour)
+    { ADDR_CG_ArcPrediction_WeaponDef, 7, 0, { 0x48, 0x89, 0x85, 0x60, 0xFF, 0xFF, 0xFF } }, // mov [rbp-0xa0], rax (a detour)
+    { ADDR_CG_DrawArc_FirstLine, 7, 0, { 0x48, 0x8D, 0xBD, 0x58, 0xFF, 0xFF, 0xFF } }, // lea rdi, [rbp-0xa8] (a detour)
+    { ADDR_CG_DrawArc_MarkerTest, 9, 0, { 0x41, 0x80, 0xBC, 0x37, 0xE9, 0x0E, 0x00, 0x00, 0x00 } }, // cmp byte [r15+rsi+0xee9], 0 (a detour)
+    { ADDR_CG_DrawArc_SecondLine, 7, 0, { 0x48, 0x8D, 0xBD, 0x58, 0xFF, 0xFF, 0xFF } }, // lea rdi, [rbp-0xa8] (a detour)
     { ADDR_CG_DrawCrosshair_Gap, 10, 0, { 0xF3, 0x41, 0x0F, 0x10, 0x84, 0x24, 0x0C, 0x0E, 0x00, 0x00 } }, // movss xmm0, [r12+0xe0c] (a detour)
     { ADDR_CG_DrawCrosshair_Tests, 5, 4, { 0x80, 0xFB, 0x00, 0x75, 0x1B } }, // cmp bl, 0; jne +0x1b (a detour)
     { ADDR_CG_DrawCrosshairTest, Push_R15 },
     { ADDR_CG_DrawMantleHint, Push_R15 },
+    { ADDR_CG_ShouldPredictArc, Push_R15 },
     { ADDR_CG_UpdateViewWeaponAnim, Push_R15 },
     { ADDR_CheatsOk, Push_R14 },
     { ADDR_CL_FirstSnapshot, Push_R15 },
@@ -99,6 +106,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Com_LocalClient_GetControllerIndex, 7, 0, { 0x55, 0x48, 0x89, 0xE5, 0x48, 0x63, 0xF7 } }, // ...; movsxd rsi, edi
     { ADDR_CSteamAPIContext_Init, Push_R15 },
     { ADDR_DB_GetStreamFraction, Push_R15 },
+    { ADDR_DObjCalcSkel, Push_R15 },
     { ADDR_Dvar_SetBool, 8, 0, { 0x55, 0x48, 0x89, 0xE5, 0x40, 0x0F, 0xB6, 0xF6 } }, // ...; movzx esi, sil
     { ADDR_dwInstantMessageDispatch, Push_R15 },
     { ADDR_FontCache_Allocate, Push_R15 },
@@ -132,6 +140,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Prompt_NotFarTest, 5, 0, { 0xBF, 0x02, 0x00, 0x00, 0x00 } }, // mov edi, 2
     { ADDR_Prompt_NotPlaced, 5, 0, { 0xF3, 0x0F, 0x10, 0x6D, 0xAC } }, // movss xmm5, [rbp-0x54]
     { ADDR_Prompt_Placed, 5, 0, { 0x41, 0x0F, 0x10, 0x46, 0x34 } },    // movups xmm0, [r14+0x34]
+    { ADDR_R_AddCodeMeshDrawSurf, Push_R15 },
     { ADDR_R_CheckVidRestart, Push_R15 },
     { ADDR_R_SetWndParms, Push_R15 },
     { ADDR_Rocket_Spawn, Push_R15 },
