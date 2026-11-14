@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "checkpoint.h"
 #include "checkpoint_autosave.h"
 #include "controllers.h"
 #include "cpu_tuning.h"
@@ -134,6 +135,7 @@ static const setting_t settings[] = {
     { "ModWarningDialog", "Mod warning as a dialog", "Warns about a mod's Windows DLL in a dialog that stops the game until it's closed, instead of an on-screen notice.", "Advanced", Toggle_Live(0, Live_Always) },
     // last, so the settings page shows them with the saved game's rows (checkpoint.lua)
     { "QuickSave", "Quick save key", "Saves a solo zombies game like Save game: this key, or L3 + R3 held for a second in the pause menu. A game saved at a higher round takes two presses, and isn't replaced this way with Notices off.", "Saved game", false, 6, { 0, 96, 97, 98, 100, 101 }, { "Off", "F5", "F6", "F7", "F8", "F9" }, 96, Live_Always },
+    { "ResumeKeepsBank", "Resume keeps the bank", "A resumed game starts with 500 points and gets the rest of its saved points with the first points you earn. All-around Enhancement switches its bank and weapon locker off for a game that starts with more; this is a way round that check of the mod's.", "Saved game", Toggle_Live(0, Live_Always) },
     { "AutoSave", "AutoSave", "Saves a solo zombies game by itself as each new round starts, like Save game. A game saved at a higher round stays unless this one resumed it.", "Saved game", Toggle_Live(1, Live_Always) },
 };
 #define Setting_Count (sizeof(settings) / sizeof(settings[0]))
@@ -216,6 +218,8 @@ static bool apply_live(const setting_t *t, int value) {
         checkpoint_autosave_set_enabled(value != 0);
     else if (strcmp(n, "QuickSave") == 0)
         quick_save_set_key(value);
+    else if (strcmp(n, "ResumeKeepsBank") == 0)
+        checkpoint_set_keep_bank(value != 0);
     else if (strcmp(n, "ModWarningDialog") == 0)
         ; // read when a mod's DLL doesn't load (bo3macfix.c)
     else

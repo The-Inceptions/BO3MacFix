@@ -23,7 +23,7 @@
 -- game's Saved time as text ("3 h ago").
 local save_fn, read_fn, apply_fn, clear_fn, resume_fn, weapons_fn, weapon_commands_fn, allow_cheats_fn, notice_fn,
     save_after, give_test, report_after, autosave_fn, delete_fn, autosave_start, loadout_fn, restore_fn,
-    restore_result_fn, test_loadout_fn, perks_test, restore_switch_fn, quick_save_fn, saved_when_fn = ...
+    restore_result_fn, test_loadout_fn, perks_test, restore_switch_fn, quick_save_fn, saved_when_fn, points_later_fn = ...
 local bo3macfix = BO3MacFix
 if bo3macfix == nil or read_fn == nil then return end
 bo3macfix.SaveCheckpoint, bo3macfix.ReadCheckpoint, bo3macfix.ApplyCheckpoint = save_fn, read_fn, apply_fn
@@ -34,6 +34,7 @@ bo3macfix.CheckpointLoadout, bo3macfix.CheckpointRestoreLoadout = loadout_fn, re
 bo3macfix.CheckpointRestoreResult, bo3macfix.CheckpointTestLoadout = restore_result_fn, test_loadout_fn
 bo3macfix.CheckpointRestoreSwitch = restore_switch_fn
 bo3macfix.CheckpointTakeQuickSave, bo3macfix.CheckpointSavedWhen = quick_save_fn, saved_when_fn
+bo3macfix.CheckpointPointsLater = points_later_fn
 local log = bo3macfix.Log or function() end
 
 local POLL_MS = 500
@@ -181,6 +182,9 @@ end
 -- "resume" from when a resumed game's give command for its loadout runs until the game says what it did ("test" for
 -- the test switch's): the player holds the starting guns meanwhile
 local loadout_pending = nil
+-- ResumeKeepsBank: the saved points a resumed game hasn't had yet (it starts with 500, see points_later_tick). A save
+-- made meanwhile counts them in, so they aren't lost with it.
+local points_owed = 0
 -- true from when a resumed game sends the give and take commands for its saved guns (an older save, without a Guns
 -- line) until the game has run them: it holds them while it's paused (the pause menu open), the starting guns in hand.
 -- Ones that still haven't run at the next round, or after five minutes out of the pause menu, are given up on (poll).
@@ -238,6 +242,7 @@ local function collect(controller)
         points = tonumber(model_value(root, player .. ".playerScoreShown") or model_value(global, player .. ".playerScoreShown"))
     end
     if round == nil or round < 1 or points == nil then return nil end
+    points = points + points_owed
     local perks = {}
     for _, perk in ipairs(PERKS) do
         local value = tonumber(model_value(root, "hudItems.perks." .. perk[1]))
@@ -532,8 +537,15 @@ local function show_resume(checkpoint)
     elseif #perks == 1 then
         perk_text = ", Quick Revive"
     end
-    notice("Resumed round " .. tostring(checkpoint.AppliedRound or checkpoint.Round) .. " with " ..
-        number_text(checkpoint.AppliedPoints or checkpoint.Points) .. " points" .. perk_text)
+    local later = tonumber(checkpoint.PointsLater) or 0
+    if later > 0 and points_later_fn ~= nil then
+        notice("Resumed round " .. tostring(checkpoint.AppliedRound or checkpoint.Round) .. " with " ..
+            number_text(checkpoint.Points) .. " points" .. perk_text .. ": " .. number_text(later) ..
+            " of them come with the first points you earn, which keeps the mod's bank open")
+    else
+        notice("Resumed round " .. tostring(checkpoint.AppliedRound or checkpoint.Round) .. " with " ..
+            number_text(checkpoint.AppliedPoints or checkpoint.Points) .. " points" .. perk_text)
+    end
     local shown = {}
     if checkpoint.Character ~= nil and checkpoint.Character ~= "" then
         table.insert(shown, "character " .. checkpoint.Character)
@@ -576,6 +588,143 @@ local function give_weapons(controller, checkpoint)
     bo3macfix.CheckpointAllowCheats(commands)
     run_commands(controller, commands)
     match.given_at, guns_pending = match.polls, true
+end
+
+-- ---- ResumeKeepsBank: a resumed game's points above the mod's 500 (checkpoint.h)
+-- All-around Enhancement switches its bank and weapon locker off for a game in which a player has more than 500 points
+-- before the first points are earned. So the resume starts the game with 500 (checkpoint_apply), and the rest of the
+-- saved points come here: once the points have risen for the first time (the first ones earned, which ends the mod's
+-- watch: zm_inventory.c reads the flag it sets then), a moment later, through the game's own function for adding
+-- points (zm_inventory.c's give command). Until then points_owed has them for any save. A map that starts over (its
+-- round goes back) is owed them again.
+local POINTS_START_POLLS = 10       -- the match's first 5 s only set the points it starts with,
+local POINTS_START_WAIT_POLLS = 60  -- and so does the time until it shows the resume's, for 30 s at most (an intro)
+local POINTS_AFTER_EARNED_POLLS = 3 -- 1.5 s after the first points earned,
+local POINTS_WATCH_POLLS = 120      -- and for up to a minute more while the mod says its watch of the scores is still on
+local POINTS_SENDS = 5              -- the command is sent again if the game didn't run it (paused, or the player down),
+local POINTS_RETRY_POLLS = 10       -- 5 s later, this often at most
+local BANK_REPORT_POLLS = 20        -- 10 s after the points came: has the mod switched its bank off anyway
+
+-- the player's points now, as a save reads them
+local function points_now(controller)
+    local client = call(Engine.GetClientNum, controller) or 0
+    for column = 0, 4 do
+        local header = call(Engine.GetScoreboardColumnHeader, controller, column)
+        local value = call(Engine.GetScoreboardColumnForClient, client, column)
+        if type(header) == "string" and header ~= "" and value ~= nil and tostring(value) ~= "" and
+            (string.find(string.lower(header), "score", 1, true) or string.lower(localized(header)) == "score") then
+            return tonumber(value)
+        end
+    end
+    local root, global = Engine.GetModelForController(controller), call(Engine.GetGlobalModel)
+    local player = "PlayerList.client" .. tostring(client)
+    return tonumber(model_value(root, player .. ".playerScoreShown") or model_value(global, player .. ".playerScoreShown"))
+end
+
+local function bank_report(why)
+    local banned = tonumber(call(points_later_fn, 2))
+    log("checkpoint: the mod's bank and locker in this resumed game, " .. why .. ": " ..
+        (banned == 1 and "switched off by the mod" or banned == 0 and "open" or "not known"))
+    return banned
+end
+
+local function points_later_tick(controller, state, played)
+    if points_later_fn == nil or state < 2 then return end
+    local notice = bo3macfix.CheckpointNotice or function() end
+    local owed = match.points_later
+    -- the map started over: its points start again, and so does what it is owed
+    if owed ~= nil and played < owed.played then owed = nil end
+    if owed == nil then
+        local rest = tonumber(call(points_later_fn, 0)) or 0
+        -- what the resume starts the game with: the saved points without the rest (491 to 500, checkpoint.h); a map
+        -- that starts over starts with the same
+        local start = match.points_start
+        if start == nil and rest > 0 then
+            start = (tonumber(read_checkpoint().Points) or 0) - rest
+            match.points_start = start
+        end
+        owed = { rest = rest, start = start, played = played, since = match.polls, sends = 0 }
+        match.points_later = owed
+        points_owed = rest > 0 and rest or 0
+        if rest > 0 then
+            log("checkpoint: this game starts with the mod's own points; the saved game's other " .. tostring(rest) ..
+                " come with the first points earned (ResumeKeepsBank)")
+        end
+    end
+    if played > owed.played then owed.played = played end
+    local age = match.polls - owed.since
+    if owed.rest <= 0 or owed.gave_up then
+        -- a resume without points to hand over: what the mod made of it, once
+        if not owed.reported and age >= 80 then
+            owed.reported = true
+            bank_report("40 s in")
+        end
+        return
+    end
+    if owed.given_at ~= nil then
+        if not owed.reported and match.polls >= owed.given_at + BANK_REPORT_POLLS then
+            owed.reported = true
+            if bank_report("10 s after its other points came") == 1 then
+                notice("All-around Enhancement has switched its bank off for this game")
+            end
+        end
+        return
+    end
+    if age < POINTS_START_POLLS then return end
+    local points = points_now(controller)
+    if points == nil then return end
+    if owed.sent_at ~= nil then
+        -- 1 the game hasn't run the command yet (paused?), 2 it has and the points are there, 0 it never ran in time
+        local sent = tonumber(call(points_later_fn, 3)) or 0
+        if sent == 2 then
+            owed.given_at, points_owed = match.polls, 0
+            log("checkpoint: the saved game's other " .. tostring(owed.rest) .. " points are back (" ..
+                tostring(owed.before) .. " before, " .. tostring(points) .. " now)")
+            notice("Your other " .. number_text(owed.rest) .. " points are back")
+        elseif sent == 0 then
+            owed.sent_at, owed.retry_at = nil, match.polls + POINTS_RETRY_POLLS
+            if owed.sends >= POINTS_SENDS then
+                owed.gave_up = true
+                log("checkpoint: gave up on the saved game's other " .. tostring(owed.rest) ..
+                    " points: the game didn't run the command " .. tostring(owed.sends) .. " times")
+                notice("Saved points not given back: the game didn't run the command. A save keeps them.")
+            end
+        end
+        return
+    end
+    -- the first points earned: any rise above the least the game has had since it showed the points it starts with
+    if owed.least == nil and points ~= owed.start and age < POINTS_START_WAIT_POLLS then return end
+    if owed.least == nil or points < owed.least then owed.least = points end
+    if owed.earned_at == nil then
+        if points > owed.least then
+            owed.earned_at = match.polls
+            log("checkpoint: the first points were earned (" .. tostring(owed.least) .. " -> " .. tostring(points) .. ")")
+        end
+        return
+    end
+    if match.polls < owed.earned_at + POINTS_AFTER_EARNED_POLLS or
+        (owed.retry_at ~= nil and match.polls < owed.retry_at) then
+        return
+    end
+    -- the mod sets level.is_earned_points at the first points earned, which ends its watch. Not set although the
+    -- points rose: that rise wasn't points earned (or the mod's bank isn't running at all, which a minute settles)
+    if tonumber(call(points_later_fn, 4)) == 0 and match.polls < owed.earned_at + POINTS_WATCH_POLLS then
+        if not owed.watch_logged then
+            owed.watch_logged = true
+            log("checkpoint: the mod's watch of the scores is still on, waiting for it (a minute at most)")
+        end
+        return
+    end
+    local command = call(points_later_fn, 1)
+    if type(command) ~= "string" or command == "" then
+        owed.gave_up = true
+        log("checkpoint: couldn't set up the saved game's other points")
+        return
+    end
+    owed.sends, owed.sent_at, owed.before = owed.sends + 1, match.polls, points
+    log("checkpoint: giving the saved game's other " .. tostring(owed.rest) .. " points" ..
+        (owed.sends > 1 and " (again)" or ""))
+    run_commands(controller, command)
 end
 
 -- ---- AutoSave: each new round of a solo zombies game saves it by itself
@@ -728,6 +877,7 @@ local function poll(controller)
     end
     if not in_match() then
         match, loadout_pending, guns_pending = nil, nil, nil
+        points_owed = 0
         pause_held, pause_seen = {}, false
         -- back in the menus after a resumed game: the player's own AAE options again (which ends the resume, so
         -- this happens once)
@@ -749,6 +899,7 @@ local function poll(controller)
         state = bo3macfix.CheckpointResume(1)
         show_resume(read_checkpoint())
     end
+    points_later_tick(controller, state, played)
     if state == 2 and match.polls >= 6 then
         local checkpoint = read_checkpoint()
         if (checkpoint.Weapons == nil or checkpoint.Weapons == "") and not has_loadout(checkpoint) then

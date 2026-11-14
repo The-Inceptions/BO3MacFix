@@ -38,6 +38,13 @@ static const option_t options[] = {
 };
 #define Option_Count (sizeof(options) / sizeof(options[0]))
 
+// ResumeKeepsBank, see checkpoint.h
+static _Atomic bool keep_bank;
+
+void checkpoint_set_keep_bank(bool on) {
+    keep_bank = on;
+}
+
 // ---- files
 
 // the file at path into buf; a missing file reads as empty. False if it's there but can't be read, or is too big.
@@ -487,6 +494,18 @@ checkpoint_resume_t checkpoint_resume_state(const checkpoint_paths_t *paths) {
     return in_use != NULL && strcmp(in_use, "1") == 0 ? Checkpoint_Resume_In_Use : Checkpoint_Resume_Set_Up;
 }
 
+long checkpoint_points_later(const checkpoint_paths_t *paths) {
+    static store_t store;
+    long later = 0;
+    if (!load_store(paths->checkpoint, &store))
+        return 0;
+    const char *applied = store_get(&store, "Applied");
+    if (applied == NULL || strcmp(applied, "1") != 0 || !parse_number(store_get(&store, "PointsLater"), &later) ||
+        later <= 0)
+        return 0;
+    return later > Checkpoint_Max_Points ? Checkpoint_Max_Points : later;
+}
+
 bool checkpoint_mark_in_use(const checkpoint_paths_t *paths) {
     static store_t store;
     if (checkpoint_resume_state(paths) != Checkpoint_Resume_Set_Up)
@@ -519,12 +538,20 @@ static void add_command(char *commands, size_t size, const char *dvar, const cha
 // perk but Quick Revive (AAE gives every perk or none), and Quick Revive for that one. A checkpoint with the exact
 // perks (PerkList) gets them back from zm_perks::give_perk instead (zm_inventory.c), so the player's own perk options
 // stay as they are.
-static bool resume_values(store_t *store, char text[2][16], const char *values[Option_Count]) {
+// With ResumeKeepsBank the points are at most Checkpoint_Bank_Points and *later gets the rest (0 otherwise).
+static bool resume_values(store_t *store, char text[2][16], const char *values[Option_Count], long *later) {
     long round, points;
     if (!parse_number(store_get(store, "Round"), &round) || !parse_number(store_get(store, "Points"), &points))
         return false;
     round = round < 1 ? 1 : round > Checkpoint_Max_Round ? Checkpoint_Max_Round : round;
     points = points < 0 ? 0 : points > Checkpoint_Max_Points ? Checkpoint_Max_Points : points;
+    *later = 0;
+    if (keep_bank && points > Checkpoint_Bank_Points) {
+        // the game's zm_score::add_to_player_score rounds what it adds up to a multiple of 10, so what comes later is
+        // one, and the game starts with the rest: 491 to 500 points
+        *later = (points - Checkpoint_Bank_Points + 9) / 10 * 10;
+        points -= *later;
+    }
     snprintf(text[0], sizeof(text[0]), "%ld", round);
     snprintf(text[1], sizeof(text[1]), "%ld", points);
     const char *perks = store_get(store, "PerkList") != NULL ? NULL : store_get(store, "Perks");
@@ -566,7 +593,8 @@ bool checkpoint_apply(const checkpoint_paths_t *paths, const char *preset, char 
     commands[0] = '\0';
     char text[2][16];
     const char *values[Option_Count];
-    if (!resume_values(&store, text, values))
+    long later = 0;
+    if (!resume_values(&store, text, values, &later))
         return false;
     const char *applied = store_get(&store, "Applied");
     bool again = applied != NULL && strcmp(applied, "1") == 0;
@@ -614,6 +642,11 @@ bool checkpoint_apply(const checkpoint_paths_t *paths, const char *preset, char 
             return false;
         add_command(commands, commands_size, options[i].dvar, values[i]);
     }
+    // the points the game gets after its first earned ones (ResumeKeepsBank); none from a resume without it
+    char later_text[16];
+    snprintf(later_text, sizeof(later_text), "%ld", later);
+    if (later > 0 ? !store_change(&store, "PointsLater", later_text) : !store_set(&store, "PointsLater", NULL))
+        return false;
     if (!store_change(&store, "Applied", "1") || !store_change(&store, "AppliedPreset", preset_copy))
         return false;
     bool changed = strcmp(before, after) != 0;
@@ -688,6 +721,7 @@ bool checkpoint_clear(const checkpoint_paths_t *paths, const char *current, char
     store_set(&store, "Applied", NULL);
     store_set(&store, "AppliedPreset", NULL);
     store_set(&store, "InUse", NULL);
+    store_set(&store, "PointsLater", NULL);
     for (size_t i = 0; i < Option_Count; i++) {
         char key[Key_Size];
         option_key(key, "Applied", &options[i]);

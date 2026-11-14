@@ -58,3 +58,20 @@ const char *zm_inventory_switch_poll(void);
 // at a map change (HKAI_InitMapData, a restart too): a shield's health the last restore set up and still waits to
 // set, for the shield it gave, is dropped, so a shield held in the next game doesn't get it
 void zm_inventory_new_map(void);
+
+// ResumeKeepsBank: sets up the points a resumed game still gets (checkpoint.h's PointsLater) for the give command this
+// returns ("" for none), which hands them to the local player on the server thread through the game's own
+// zm_score::add_to_player_score, once, within 30 s.
+const char *zm_inventory_set_points(int points);
+
+// what became of the points set up last: 1 the game hasn't run the command yet, 2 it has and the player has them,
+// 0 nothing is set up, the 30 s passed without the command, or it ran for a player who wasn't alive
+int zm_inventory_points_state(void);
+
+// whether All-around Enhancement has switched its bank and weapon locker off for this game (its level field is
+// defined): 1 yes, 0 no, -1 if no game runs or the level can't be read. Reads the server's script variables.
+int zm_inventory_bank_banned(void);
+
+// whether the mod's watch of the players' scores is over (its level.is_earned_points is defined, which it sets at the
+// first points earned): 1 yes, 0 not yet, -1 not known
+int zm_inventory_bank_watch_over(void);

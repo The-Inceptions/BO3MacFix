@@ -334,6 +334,81 @@ static void test_apply_and_clear(void) {
     CHECK(strcmp(read_text(mutations), "") == 0);
 }
 
+// ResumeKeepsBank: a resume with more points than the mod's bank allows starts with 500 and keeps the rest for later
+static void test_keep_bank(void) {
+    char commands[512], text[4096];
+    write_text(mutations, user_mutations); // the player's own starting points are 500, the round 7
+    unlink(checkpoint_path);
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=23\nPoints=12340\n", 1));
+    CHECK(checkpoint_points_later(&paths) == 0); // no resume set up
+    checkpoint_set_keep_bank(true);
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    // the points option already is 500, the player's own: left alone, and only the round is set
+    CHECK(strcmp(commands, "modvar tfoption_starting_round 23\n") == 0);
+    CHECK(checkpoint_points_later(&paths) == 12340 - 500);
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "PointsLater=11840\n") != NULL && strstr(text, "Points=12340\n") != NULL);
+    CHECK(strstr(text, "AppliedPoints") == NULL);
+    // again: the same
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(checkpoint_points_later(&paths) == 11840);
+    // a save in the resumed game keeps what the resume owes; back in the menus it's gone with the resume
+    CHECK(checkpoint_mark_in_use(&paths));
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=24\nPoints=14000\n", 2));
+    CHECK(checkpoint_points_later(&paths) == 11840);
+    CHECK(checkpoint_clear(&paths, game_values, commands, sizeof(commands)));
+    CHECK(checkpoint_points_later(&paths) == 0);
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "PointsLater") == NULL && strstr(text, "Points=14000\n") != NULL);
+    CHECK(strcmp(read_text(mutations), user_mutations) == 0);
+
+    // other starting points of the player's own: set to 500 for the resume, and back afterwards
+    write_text(mutations, "modvar tfoption_starting_points 1500\n");
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strcmp(commands, "modvar tfoption_starting_round 24\nmodvar tfoption_starting_points 500\n") == 0);
+    CHECK(checkpoint_points_later(&paths) == 13500);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+    CHECK(strcmp(read_text(mutations), "modvar tfoption_starting_points 1500\n") == 0);
+
+    // 500 or fewer saved points: nothing for later, the game starts with them
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=3\nPoints=500\n", 3));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(checkpoint_points_later(&paths) == 0);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=3\nPoints=510\n", 4));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(checkpoint_points_later(&paths) == 10);
+    // points that aren't a multiple of 10: what comes later is one (the game rounds what it adds up to one), and the
+    // game starts with the rest, 491 to 500
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=4\nPoints=4321\n", 4));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strstr(commands, "modvar tfoption_starting_points 491\n") != NULL);
+    CHECK(checkpoint_points_later(&paths) == 3830);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=4\nPoints=501\n", 4));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strstr(commands, "modvar tfoption_starting_points 491\n") != NULL && checkpoint_points_later(&paths) == 10);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=3\nPoints=510\n", 4));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    // a resume set up with the setting, then set up again without it: nothing is owed and the points are the saved ones
+    checkpoint_set_keep_bank(false);
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(checkpoint_points_later(&paths) == 0);
+    checkpoint_read(&paths, text, sizeof(text));
+    CHECK(strstr(text, "PointsLater") == NULL && strstr(text, "AppliedPoints=510\n") != NULL);
+    CHECK(checkpoint_clear(&paths, NULL, commands, sizeof(commands)));
+
+    // off (the default): as before, whatever the points
+    write_text(mutations, user_mutations);
+    CHECK(checkpoint_save(&paths, "Map=zm_theater\nRound=23\nPoints=12340\n", 5));
+    CHECK(checkpoint_apply(&paths, "_Default", commands, sizeof(commands)));
+    CHECK(strcmp(commands, "modvar tfoption_starting_round 23\nmodvar tfoption_starting_points 12340\n") == 0);
+    CHECK(checkpoint_points_later(&paths) == 0);
+    CHECK(checkpoint_clear(&paths, game_values, commands, sizeof(commands)));
+}
+
 static void test_perks(void) {
     char commands[512];
     // perks but Perkaholic off: it goes on, with Quick Revive for that one, and both go back after
@@ -583,6 +658,7 @@ int main(void) {
     test_save();
     test_store_room();
     test_apply_and_clear();
+    test_keep_bank();
     test_perks();
     test_weapon_commands();
     test_loadout();

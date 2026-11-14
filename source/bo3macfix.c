@@ -1053,6 +1053,8 @@ __attribute__((constructor)) static void dylib_main() {
     char checkpoint_commands[512];
     if (checkpoint_clear(&checkpoint_paths, NULL, checkpoint_commands, sizeof(checkpoint_commands)))
         printf("BO3MacFix: checkpoint: undid the resume set up last time\n");
+    // a resume that keeps All-around Enhancement's bank usable (ResumeKeepsBank, off by default), see checkpoint.h
+    checkpoint_set_keep_bank(read_int_setting_or_env("ResumeKeepsBank", 0) != 0);
     // for testing: BO3MACFIX_CHECKPOINT_RESUME=1 sets the resume up now, as the settings page would in the menus, so a
     // game started from the command line resumes the checkpoint
     const char *resume_test = getenv("BO3MACFIX_CHECKPOINT_RESUME");

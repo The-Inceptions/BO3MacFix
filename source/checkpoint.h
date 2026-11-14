@@ -70,6 +70,21 @@ void checkpoint_saved_when(const char *saved, long now, char *out, size_t out_si
 // nothing, if there's no checkpoint, the preset is malformed or a file can't be written.
 bool checkpoint_apply(const checkpoint_paths_t *paths, const char *preset, char *commands, size_t commands_size);
 
+// ResumeKeepsBank (off by default): All-around Enhancement switches its bank and weapon locker off for a game in
+// which a player has more than 500 points before the first points are earned (its "Illegal Scores Detected"), which
+// every resume with more points was. With this on, checkpoint_apply starts the game with at most
+// Checkpoint_Bank_Points (491 to 500: what comes later is a multiple of 10, as the game's function for adding points
+// makes it one) and keeps the rest as PointsLater in checkpoint.ini; the game gets them once its first points are
+// earned (checkpoint.lua, zm_inventory_set_points). Set before a resume is set up.
+// What the mod does (4.1.7's zmsavedata.gsc, read in wip/night/bank-resume-rules.md): from the end of the map's
+// black screen it looks every 0.048 s whether any player's score is over 500, until level.is_earned_points is set,
+// which a thread of its own does at the first "earned_points" notify (zm_score::add_to_player_score sends it).
+#define Checkpoint_Bank_Points 500
+void checkpoint_set_keep_bank(bool on);
+
+// the points the resume that's set up or in use still has to hand to its game (PointsLater), 0 for none
+long checkpoint_points_later(const checkpoint_paths_t *paths);
+
 // whether a resume is set up, whether a game has started with it since (checkpoint_mark_in_use), and whether that game
 // got the saved weapons back (checkpoint_mark_weapons_given)
 typedef enum {

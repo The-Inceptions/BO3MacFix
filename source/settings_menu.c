@@ -274,6 +274,29 @@ static int locked_checkpoint_restore_loadout(lua_State *s) {
     return results;
 }
 
+// CheckpointPointsLater(what), ResumeKeepsBank's points (checkpoint.h). 0: how many the resume set up or in use still
+// has to hand to its game (0 for none). 1: sets them up for the server and returns the give command that hands them
+// over ("" for none). 2: whether All-around Enhancement has switched its bank off for this game (1 yes, 0 no, -1 not
+// known). 3: what became of the command (zm_inventory_points_state). 4: whether the mod's watch of the scores is over
+// (1 yes, 0 not yet, -1 not known).
+static int lua_checkpoint_points_later(lua_State *s) {
+    float what = 0;
+    hks_number_arg(s, 1, &what);
+    if (what >= 2) {
+        hks_push_number(s, (float)(what == 2 ? zm_inventory_bank_banned() : what == 3 ? zm_inventory_points_state() :
+                                                                           zm_inventory_bank_watch_over()));
+        return 1;
+    }
+    checkpoint_lock();
+    long later = checkpoint_points_later(&checkpoint_paths);
+    checkpoint_unlock();
+    if (what == 1)
+        hks_push_string(s, zm_inventory_set_points((int)later));
+    else
+        hks_push_number(s, (float)later);
+    return 1;
+}
+
 // CheckpointSavedWhen(saved): the checkpoint's Saved time as the page shows it ("3 h ago"), "" without one
 static int lua_checkpoint_saved_when(lua_State *s) {
     char text[32];
@@ -348,7 +371,7 @@ static int lua_load_menu(lua_State *s) {
     // so many seconds in. Then AutoSave's writer and deleting the save, and its test switch: how many seconds of a
     // match only set the round it starts at. Then the full loadout's functions, and its test switch: give these perks
     // first. Then the gun in hand after a restore made during a map's intro. Then the quick save's request (the key,
-    // or L3 + R3; quick_save.m) and the saved game's time as the page shows it.
+    // or L3 + R3; quick_save.m) and the saved game's time as the page shows it. Then ResumeKeepsBank's points.
     checkpoint_autosave_init(&checkpoint_paths, Autosave_Interval_Ms, autosave_report);
     if (hks_load_source(s, (const char *)checkpoint_lua, checkpoint_lua_len, "=BO3MacFix checkpoint")) {
         hks_push_cfunction(s, locked_checkpoint_save, "CheckpointSave");
@@ -374,7 +397,8 @@ static int lua_load_menu(lua_State *s) {
         hks_push_cfunction(s, lua_checkpoint_restore_switch, "CheckpointRestoreSwitch");
         hks_push_cfunction(s, quick_save_lua_take, "CheckpointTakeQuickSave");
         hks_push_cfunction(s, lua_checkpoint_saved_when, "CheckpointSavedWhen");
-        hks_pcall(s, 23, 0);
+        hks_push_cfunction(s, lua_checkpoint_points_later, "CheckpointPointsLater");
+        hks_pcall(s, 24, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;

@@ -211,6 +211,10 @@ static bool let_through(void *ent, uint64_t return_address, long long *held) {
 #define Switch_Command "bo3macfix_switch" // the gun in hand again, after a restore during a map's intro
 #define Switch_Ms 10000                   // how long its command is waited for
 #define Shield_Command "bo3macfix_shield" // the shield's health, once the shield given by the restore is held
+#define Points_Command "bo3macfix_points" // a resumed game's points above the mod's 500 (ResumeKeepsBank)
+#define Points_Ms 30000                   // how long its command is waited for
+#define Aae_BankBan 0x3c40c482            // level.elmg_bank_banned: defined once the mod has switched its bank off
+#define Aae_EarnedPoints 0x41b62535       // level.is_earned_points: defined once the mod's watch of the scores is over
 #define Shield_Wait_Ms 30000              // how long after the restore the shield is waited for
 #define Shield_Resend_Ms 3000             // and its command, before it's sent again
 #define Aae_ShieldHud 0x70c029fa          // riotshield::?70c029fa(health, full): the HUD's zmInventory.shield_health
@@ -833,7 +837,7 @@ static void finish_restore(const char *text) {
 }
 
 // which of BO3MacFix's give commands the client command CheatsOk was asked for (returning to return_address) is:
-// 1 "give bo3macfix_restore", 2 "give bo3macfix_switch", 3 "give bo3macfix_shield", 0 none
+// 1 "give bo3macfix_restore", 2 "give bo3macfix_switch", 3 "give bo3macfix_shield", 4 "give bo3macfix_points", 0 none
 static int restore_command(uint64_t return_address) {
     if (return_address != base + ADDR_CheatsOk_From_Give || SV_Cmd_ArgvBuffer == NULL)
         return 0;
@@ -841,7 +845,7 @@ static int restore_command(uint64_t return_address) {
     arg[0] = '\0';
     SV_Cmd_ArgvBuffer(1, arg, sizeof(arg));
     return strcmp(arg, Restore_Command) == 0 ? 1 : strcmp(arg, Switch_Command) == 0 ? 2 :
-           strcmp(arg, Shield_Command) == 0  ? 3 : 0;
+           strcmp(arg, Shield_Command) == 0  ? 3 : strcmp(arg, Points_Command) == 0 ? 4 : 0;
 }
 
 // the restore set up last, for the local player, while it's alive; in the give command, on the server thread, where
@@ -1045,6 +1049,78 @@ const char *zm_inventory_switch_poll(void) {
     return shield != NULL && shield[0] != '\0' ? shield : action == Loadout_Switch_Done ? shield : "";
 }
 
+// ---- a resumed game's points above the mod's 500 (ResumeKeepsBank, checkpoint.h): checkpoint.lua sets them up once
+// the game's first points are earned, and the give command hands them over on the server thread through the game's
+// own zm_score::add_to_player_score, as any points come
+
+static os_unfair_lock points_lock = OS_UNFAIR_LOCK_INIT;
+static int points_waiting;        // what the next Points_Command gives, 0 for nothing set up
+static long long points_until;    // and until when
+static bool points_were_given;    // the last one set up was handed over
+
+const char *zm_inventory_set_points(int points) {
+    os_unfair_lock_lock(&points_lock);
+    points_waiting = points > 0 ? points : 0;
+    points_until = now_ms() + Points_Ms;
+    points_were_given = false;
+    os_unfair_lock_unlock(&points_lock);
+    return points > 0 ? "give " Points_Command : "";
+}
+
+int zm_inventory_points_state(void) {
+    os_unfair_lock_lock(&points_lock);
+    int state = points_were_given ? 2 : points_waiting > 0 && now_ms() < points_until ? 1 : 0;
+    os_unfair_lock_unlock(&points_lock);
+    return state;
+}
+
+static void run_points(void *ent) {
+    os_unfair_lock_lock(&points_lock);
+    int points = now_ms() < points_until ? points_waiting : 0;
+    // once: a second command (sent again while the game held the first) finds nothing
+    points_waiting = 0;
+    os_unfair_lock_unlock(&points_lock);
+    uint64_t first = entities(), client = 0;
+    int alive = 0;
+    if (points <= 0 || ent == NULL || (uint64_t)ent != first ||
+        !safe_read((uint64_t)ent + gentity_Client, &client, sizeof(client)) || client == 0 ||
+        !safe_read((uint64_t)ent + gentity_Health, &alive, sizeof(alive)) || alive <= 0) {
+        printf("BO3MacFix: zm inventory: a points command with nothing set up, or not for the local player alive\n");
+        return;
+    }
+    script_handle_t handle;
+    if (!script_function(&handle, "scripts/zm/_zm_score", "zm_score", "add_to_player_score")) {
+        printf("BO3MacFix: zm inventory: the resumed game's other %d points NOT given: the game's scripts have no "
+               "zm_score::add_to_player_score\n", points);
+        return;
+    }
+    Scr_AddInt(Script_Server, points);
+    Scr_FreeThread(Script_Server, Scr_ExecEntThread(ent, 1, handle));
+    os_unfair_lock_lock(&points_lock);
+    points_were_given = true;
+    os_unfair_lock_unlock(&points_lock);
+    printf("BO3MacFix: zm inventory: gave the resumed game's other %d points (zm_score::add_to_player_score)\n", points);
+}
+
+// whether the level object has the field with this name hash: 1 yes, 0 no, -1 if no game runs or it can't be read
+static int level_has(uint32_t field) {
+    if (!server_running())
+        return -1;
+    loadout_vm_t vm = server_vm();
+    uint32_t level = loadout_vm_level(&vm);
+    if (level == 0)
+        return -1;
+    return loadout_vm_find(&vm, level, field) != 0 ? 1 : 0;
+}
+
+int zm_inventory_bank_banned(void) {
+    return level_has(Aae_BankBan);
+}
+
+int zm_inventory_bank_watch_over(void) {
+    return level_has(Aae_EarnedPoints);
+}
+
 // CheatsOk(ent): whether ent may use cheat commands (sv_cheats is on and it's alive). BO3MacFix's own give and take
 // commands for the local player get through as zm_inventory_allow_commands says; "give bo3macfix_restore"
 // restores the loadout zm_inventory_set_restore set up, and then tells give it's done; everything else is the game's.
@@ -1058,6 +1134,8 @@ install_hook_name(CheatsOk, int, void *ent) {
         run_switch(ent);
     else if (command == 3)
         run_shield(ent);
+    else if (command == 4)
+        run_points(ent);
     if (command != 0)
         return 0;
     long long held = 0;

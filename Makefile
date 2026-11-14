@@ -245,6 +245,8 @@ test: $(TEST_TARGETS)
 	if command -v lua >/dev/null; then lua tests/test_t7overcharged.lua; else echo "no lua, skipping tests/test_t7overcharged.lua"; fi
 	@# checkpoint.lua (saving and resuming a zombies game) against a made-up Engine and AAE
 	if command -v lua >/dev/null; then lua tests/test_checkpoint.lua; else echo "no lua, skipping tests/test_checkpoint.lua"; fi
+	@# ResumeKeepsBank: a resumed game's points above the mod's 500, handed over after the first points earned
+	if command -v lua >/dev/null; then lua tests/test_resume_bank.lua; else echo "no lua, skipping tests/test_resume_bank.lua"; fi
 	@# AutoSave's round trigger and the Delete saved game row in checkpoint.lua
 	if command -v lua >/dev/null; then lua tests/test_autosave.lua; else echo "no lua, skipping tests/test_autosave.lua"; fi
 	@# the quick save (a key, or L3 + R3 in the pause menu) and the saved game's details on the settings page
