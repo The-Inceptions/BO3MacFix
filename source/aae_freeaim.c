@@ -733,7 +733,7 @@ static const char *weapon_name(uint64_t weapon) {
     uint32_t index = (uint32_t)(weapon & Weapon_Index);
     const uint8_t *variant;
     const char *name;
-    if (weapon_variants == NULL || index == 0 || (int32_t)index > *last_weapon)
+    if (weapon_variants == NULL || last_weapon == NULL || index == 0 || (int32_t)index > *last_weapon)
         return NULL;
     variant = weapon_variants[index];
     if (variant == NULL)
@@ -1126,11 +1126,12 @@ void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     DobbyHook((void *)(base_address + ADDR_CG_DrawCrosshairTest), (void *)fake_CG_DrawCrosshairTest,
               (void **)&orig_CG_DrawCrosshairTest);
     install_hook_Bullet_Fire((void *)(base_address + ADDR_Bullet_Fire));
+    // (before the hooks that read them)
+    weapon_variants = (const uint8_t *const *)(base_address + ADDR_bg_weaponVariantDefs);
+    last_weapon = (const int32_t *)(base_address + ADDR_bg_lastWeaponIndex);
     install_hook_Grenade_Spawn((void *)(base_address + ADDR_Grenade_Spawn));
     install_hook_Rocket_Spawn((void *)(base_address + ADDR_Rocket_Spawn));
     install_hook_Projectile_Spawn((void *)(base_address + ADDR_Projectile_Spawn));
-    weapon_variants = (const uint8_t *const *)(base_address + ADDR_bg_weaponVariantDefs);
-    last_weapon = (const int32_t *)(base_address + ADDR_bg_lastWeaponIndex);
     CL_AddReliableCommand = (void *)(base_address + ADDR_CL_AddReliableCommand);
     net_game.server_state = (const int32_t *)(base_address + ADDR_sv_state);
     net_game.client_connections = (uint8_t *const *)(base_address + ADDR_clientConnections);
