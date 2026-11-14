@@ -183,8 +183,9 @@ end
 -- the test switch's): the player holds the starting guns meanwhile
 local loadout_pending = nil
 -- ResumeKeepsBank: the saved points a resumed game hasn't had yet (it starts with 500, see points_later_tick). A save
--- made meanwhile counts them in, so they aren't lost with it.
-local points_owed = 0
+-- made meanwhile counts them in, so they aren't lost with it; points_sent_from is what the game showed when their
+-- command was sent.
+local points_owed, points_sent_from = 0, nil
 -- true from when a resumed game sends the give and take commands for its saved guns (an older save, without a Guns
 -- line) until the game has run them: it holds them while it's paused (the pause menu open), the starting guns in hand.
 -- Ones that still haven't run at the next round, or after five minutes out of the pause menu, are given up on (poll).
@@ -242,7 +243,14 @@ local function collect(controller)
         points = tonumber(model_value(root, player .. ".playerScoreShown") or model_value(global, player .. ".playerScoreShown"))
     end
     if round == nil or round < 1 or points == nil then return nil end
-    points = points + points_owed
+    if points_owed > 0 then
+        if points_later_fn ~= nil and tonumber(call(points_later_fn, 3)) == 2 then
+            -- the server has handed them over since the last poll: the score has them, or will in a moment
+            points = math.max(points, (points_sent_from or 0) + points_owed)
+        else
+            points = points + points_owed
+        end
+    end
     local perks = {}
     for _, perk in ipairs(PERKS) do
         local value = tonumber(model_value(root, "hudItems.perks." .. perk[1]))
@@ -628,12 +636,16 @@ local function bank_report(why)
     return banned
 end
 
-local function points_later_tick(controller, state, played)
+local function points_later_tick(controller, state, played, paused)
     if points_later_fn == nil or state < 2 then return end
+    -- a game with other players isn't a resume's (a save is refused there too), and a game joined runs elsewhere
+    if not_solo() ~= nil then return end
     local notice = bo3macfix.CheckpointNotice or function() end
     local owed = match.points_later
-    -- the map started over: its points start again, and so does what it is owed
-    if owed ~= nil and played < owed.played then owed = nil end
+    -- the map started over (zm_inventory.c counts its starts; or its round went back): its points start again, and
+    -- so does what it is owed. zm_inventory.c hands them over once for each start of the map, whatever is asked here.
+    local starts = tonumber(call(points_later_fn, 5))
+    if owed ~= nil and (starts ~= owed.starts or played < owed.played) then owed = nil end
     if owed == nil then
         local rest = tonumber(call(points_later_fn, 0)) or 0
         -- what the resume starts the game with: the saved points without the rest (491 to 500, checkpoint.h); a map
@@ -643,10 +655,13 @@ local function points_later_tick(controller, state, played)
             start = (tonumber(read_checkpoint().Points) or 0) - rest
             match.points_start = start
         end
-        owed = { rest = rest, start = start, played = played, since = match.polls, sends = 0 }
+        owed = { rest = rest, start = start, played = played, since = match.polls, sends = 0, starts = starts }
         match.points_later = owed
-        points_owed = rest > 0 and rest or 0
-        if rest > 0 then
+        points_owed, points_sent_from = rest > 0 and rest or 0, nil
+        if rest > 0 and tonumber(call(points_later_fn, 3)) == 2 then
+            -- this start of the map has had them already (this is a new look at the same game)
+            owed.given_at, owed.reported, points_owed = match.polls, true, 0
+        elseif rest > 0 then
             log("checkpoint: this game starts with the mod's own points; the saved game's other " .. tostring(rest) ..
                 " come with the first points earned (ResumeKeepsBank)")
         end
@@ -702,7 +717,8 @@ local function points_later_tick(controller, state, played)
         end
         return
     end
-    if match.polls < owed.earned_at + POINTS_AFTER_EARNED_POLLS or
+    -- (a paused game holds commands back: none is sent into a pause, so a long one doesn't use the sends up)
+    if paused or match.polls < owed.earned_at + POINTS_AFTER_EARNED_POLLS or
         (owed.retry_at ~= nil and match.polls < owed.retry_at) then
         return
     end
@@ -722,6 +738,7 @@ local function points_later_tick(controller, state, played)
         return
     end
     owed.sends, owed.sent_at, owed.before = owed.sends + 1, match.polls, points
+    points_sent_from = points
     log("checkpoint: giving the saved game's other " .. tostring(owed.rest) .. " points" ..
         (owed.sends > 1 and " (again)" or ""))
     run_commands(controller, command)
@@ -877,7 +894,7 @@ local function poll(controller)
     end
     if not in_match() then
         match, loadout_pending, guns_pending = nil, nil, nil
-        points_owed = 0
+        points_owed, points_sent_from = 0, nil
         pause_held, pause_seen = {}, false
         -- back in the menus after a resumed game: the player's own AAE options again (which ends the resume, so
         -- this happens once)
@@ -899,7 +916,7 @@ local function poll(controller)
         state = bo3macfix.CheckpointResume(1)
         show_resume(read_checkpoint())
     end
-    points_later_tick(controller, state, played)
+    points_later_tick(controller, state, played, paused)
     if state == 2 and match.polls >= 6 then
         local checkpoint = read_checkpoint()
         if (checkpoint.Weapons == nil or checkpoint.Weapons == "") and not has_loadout(checkpoint) then

@@ -64,9 +64,14 @@ void zm_inventory_new_map(void);
 // zm_score::add_to_player_score, once, within 30 s.
 const char *zm_inventory_set_points(int points);
 
-// what became of the points set up last: 1 the game hasn't run the command yet, 2 it has and the player has them,
-// 0 nothing is set up, the 30 s passed without the command, or it ran for a player who wasn't alive
+// what became of them: 2 this start of the map has had them (then zm_inventory_set_points sets nothing up, so a game
+// gets them once whatever asks), 1 the game hasn't run the command yet or is running it, 0 nothing is set up: the
+// 30 s passed without the command, or it ran for a player who wasn't alive
 int zm_inventory_points_state(void);
+
+// how many times a map has started or started over (zm_inventory_new_map): a change means a new game, which hasn't
+// had its points
+unsigned zm_inventory_map_starts(void);
 
 // whether All-around Enhancement has switched its bank and weapon locker off for this game (its level field is
 // defined): 1 yes, 0 no, -1 if no game runs or the level can't be read. Reads the server's script variables.

@@ -278,13 +278,13 @@ static int locked_checkpoint_restore_loadout(lua_State *s) {
 // has to hand to its game (0 for none). 1: sets them up for the server and returns the give command that hands them
 // over ("" for none). 2: whether All-around Enhancement has switched its bank off for this game (1 yes, 0 no, -1 not
 // known). 3: what became of the command (zm_inventory_points_state). 4: whether the mod's watch of the scores is over
-// (1 yes, 0 not yet, -1 not known).
+// (1 yes, 0 not yet, -1 not known). 5: how many times a map has started or started over.
 static int lua_checkpoint_points_later(lua_State *s) {
     float what = 0;
     hks_number_arg(s, 1, &what);
     if (what >= 2) {
         hks_push_number(s, (float)(what == 2 ? zm_inventory_bank_banned() : what == 3 ? zm_inventory_points_state() :
-                                                                           zm_inventory_bank_watch_over()));
+                                   what == 4 ? zm_inventory_bank_watch_over() : (int)(zm_inventory_map_starts() & 0xffff)));
         return 1;
     }
     checkpoint_lock();

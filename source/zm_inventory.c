@@ -719,8 +719,24 @@ static void drop_shield_health(const char *why) {
         printf("BO3MacFix: zm inventory: %s: the shield's health from the last restore isn't set any more\n", why);
 }
 
+// ResumeKeepsBank's points: their state, kept here because a new start of a map resets it (the rest is further down)
+static os_unfair_lock points_lock = OS_UNFAIR_LOCK_INIT;
+static int points_waiting;        // what the next Points_Command gives, 0 for nothing set up
+static long long points_until;    // and until when
+static bool points_running;       // run_points is handing them over right now
+// This start of the map has had them. Only a new start of a map clears it (zm_inventory_new_map), so whatever the
+// Lua asks for, a game gets them once.
+static bool points_given;
+static unsigned map_starts;       // how many times a map has started or started over
+
 void zm_inventory_new_map(void) {
     drop_shield_health("a new map");
+    // and this start of the map hasn't had a resume's other points (ResumeKeepsBank, below)
+    os_unfair_lock_lock(&points_lock);
+    points_given = false;
+    points_waiting = 0;
+    map_starts++;
+    os_unfair_lock_unlock(&points_lock);
 }
 
 static bool op_set_shield_health(void *context, uint64_t weapon, int health) {
@@ -1053,52 +1069,69 @@ const char *zm_inventory_switch_poll(void) {
 // the game's first points are earned, and the give command hands them over on the server thread through the game's
 // own zm_score::add_to_player_score, as any points come
 
-static os_unfair_lock points_lock = OS_UNFAIR_LOCK_INIT;
-static int points_waiting;        // what the next Points_Command gives, 0 for nothing set up
-static long long points_until;    // and until when
-static bool points_were_given;    // the last one set up was handed over
-
 const char *zm_inventory_set_points(int points) {
     os_unfair_lock_lock(&points_lock);
-    points_waiting = points > 0 ? points : 0;
-    points_until = now_ms() + Points_Ms;
-    points_were_given = false;
+    bool arm = points > 0 && !points_given && !points_running;
+    if (arm) {
+        points_waiting = points;
+        points_until = now_ms() + Points_Ms;
+    }
     os_unfair_lock_unlock(&points_lock);
-    return points > 0 ? "give " Points_Command : "";
+    return arm ? "give " Points_Command : "";
 }
 
 int zm_inventory_points_state(void) {
     os_unfair_lock_lock(&points_lock);
-    int state = points_were_given ? 2 : points_waiting > 0 && now_ms() < points_until ? 1 : 0;
+    int state = points_given ? 2 : points_running || (points_waiting > 0 && now_ms() < points_until) ? 1 : 0;
     os_unfair_lock_unlock(&points_lock);
     return state;
 }
 
+unsigned zm_inventory_map_starts(void) {
+    os_unfair_lock_lock(&points_lock);
+    unsigned starts = map_starts;
+    os_unfair_lock_unlock(&points_lock);
+    return starts;
+}
+
+// the hand-over is over: given or not
+static void points_done(bool given) {
+    os_unfair_lock_lock(&points_lock);
+    points_running = false;
+    if (given)
+        points_given = true;
+    os_unfair_lock_unlock(&points_lock);
+}
+
 static void run_points(void *ent) {
     os_unfair_lock_lock(&points_lock);
-    int points = now_ms() < points_until ? points_waiting : 0;
-    // once: a second command (sent again while the game held the first) finds nothing
+    int points = now_ms() < points_until && !points_given && !points_running ? points_waiting : 0;
+    // once: a second command (sent again while the game held the first) finds nothing. While this runs the state
+    // reads "not run yet", so nobody takes the gap for a command the game dropped.
     points_waiting = 0;
+    points_running = points > 0;
     os_unfair_lock_unlock(&points_lock);
+    if (points <= 0)
+        return (void)printf("BO3MacFix: zm inventory: a points command with nothing set up\n");
     uint64_t first = entities(), client = 0;
     int alive = 0;
-    if (points <= 0 || ent == NULL || (uint64_t)ent != first ||
+    if (ent == NULL || (uint64_t)ent != first ||
         !safe_read((uint64_t)ent + gentity_Client, &client, sizeof(client)) || client == 0 ||
         !safe_read((uint64_t)ent + gentity_Health, &alive, sizeof(alive)) || alive <= 0) {
-        printf("BO3MacFix: zm inventory: a points command with nothing set up, or not for the local player alive\n");
+        points_done(false);
+        printf("BO3MacFix: zm inventory: a points command that isn't for the local player alive\n");
         return;
     }
     script_handle_t handle;
     if (!script_function(&handle, "scripts/zm/_zm_score", "zm_score", "add_to_player_score")) {
+        points_done(false);
         printf("BO3MacFix: zm inventory: the resumed game's other %d points NOT given: the game's scripts have no "
                "zm_score::add_to_player_score\n", points);
         return;
     }
     Scr_AddInt(Script_Server, points);
     Scr_FreeThread(Script_Server, Scr_ExecEntThread(ent, 1, handle));
-    os_unfair_lock_lock(&points_lock);
-    points_were_given = true;
-    os_unfair_lock_unlock(&points_lock);
+    points_done(true);
     printf("BO3MacFix: zm inventory: gave the resumed game's other %d points (zm_score::add_to_player_score)\n", points);
 }
 
