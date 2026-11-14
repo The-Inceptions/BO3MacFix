@@ -796,6 +796,10 @@ static void test_projectile(void) {
     CHECK(!flies(along, (float[3]){ 10, 20, 30 }) && !flies(along, (float[3]){ NAN, 20, 30 }));
 }
 
+// the made-up game's table of weapons (by a Weapon's low nine bits; none of them known unless a test puts one in) and
+// the number of its last one
+static const uint8_t *game_weapons[0x200];
+static int32_t game_last_weapon = 0x50;
 // what the server made, and the game's three functions that make such things
 static uint8_t made[0x4f8];
 static const float made_from[3] = { -239.0f, -1208.0f, 140.0f }, made_with[3] = { 900.0f, 0.0f, 0.0f },
@@ -850,12 +854,114 @@ static bool makes(int kind, uint8_t *owner) {
     return turned;
 }
 
+// The mod's PhD Flopper makes its landing explosion as a missile of one of two weapons, straight down: that, and
+// nothing else, is no shot.
+static void test_landing_blast(void) {
+    const float down[3] = { 0, 0, -2250 };
+    // what the game was seen to make on a landing, for either weapon the mod's script uses
+    CHECK(aae_freeaim_landing_blast("launcher_standard_upgraded", down) &&
+          aae_freeaim_landing_blast("pistol_standard_upgraded", down));
+    // any other weapon going the same way, and none
+    CHECK(!aae_freeaim_landing_blast("launcher_standard", down) && !aae_freeaim_landing_blast("ray_gun", down) &&
+          !aae_freeaim_landing_blast("launcher_standard_upgraded_zm", down) &&
+          !aae_freeaim_landing_blast("pistol_standard", down) && !aae_freeaim_landing_blast("", down) &&
+          !aae_freeaim_landing_blast(NULL, down));
+    // slower or faster, as long as it is straight down
+    CHECK(aae_freeaim_landing_blast("launcher_standard_upgraded", (float[3]){ 0, 0, -0.5f }) &&
+          aae_freeaim_landing_blast("pistol_standard_upgraded", (float[3]){ -0.0f, 0, -10000 }));
+    // up, or not moving
+    CHECK(!aae_freeaim_landing_blast("launcher_standard_upgraded", (float[3]){ 0, 0, 2250 }) &&
+          !aae_freeaim_landing_blast("launcher_standard_upgraded", (float[3]){ 0, 0, 0 }));
+    // up to a thousandth of the way down to either side is straight down still, more isn't
+    for (int side = 0; side < 2; side++)
+        for (float sign = -1; sign <= 1; sign += 2) {
+            float within[3] = { 0, 0, -2250 }, beyond[3] = { 0, 0, -2250 }, slow[3] = { 0, 0, -100 };
+            within[side] = sign * 2.2f, beyond[side] = sign * 2.3f, slow[side] = sign * 0.11f;
+            CHECK(aae_freeaim_landing_blast("launcher_standard_upgraded", within));
+            CHECK(!aae_freeaim_landing_blast("launcher_standard_upgraded", beyond));
+            CHECK(!aae_freeaim_landing_blast("pistol_standard_upgraded", slow));
+            slow[side] = sign * 0.09f;
+            CHECK(aae_freeaim_landing_blast("pistol_standard_upgraded", slow));
+        }
+    // the player's own shot with that weapon, looking as far down as a view goes (85 degrees) and level
+    CHECK(!aae_freeaim_landing_blast("launcher_standard_upgraded", (float[3]){ 196.1f, 0, -2241.4f }) &&
+          !aae_freeaim_landing_blast("launcher_standard_upgraded", (float[3]){ 0, -196.1f, -2241.4f }) &&
+          !aae_freeaim_landing_blast("launcher_standard_upgraded", (float[3]){ 2250, 0, 0 }));
+    // what isn't a number
+    CHECK(!aae_freeaim_landing_blast("launcher_standard_upgraded", (float[3]){ NAN, 0, -2250 }) &&
+          !aae_freeaim_landing_blast("launcher_standard_upgraded", (float[3]){ 0, NAN, -2250 }) &&
+          !aae_freeaim_landing_blast("launcher_standard_upgraded", (float[3]){ 0, 0, NAN }));
+}
+
+// The server makes one of the three with this weapon, flying this way: whether it was turned. A rocket's and a
+// projectile's weapon is the game function's second argument, a grenade's its fourth. What isn't turned is exactly as
+// the game made it.
+static bool flies_as(int kind, uint64_t weapon, const float velocity[3]) {
+    uint8_t before[sizeof(made)];
+    memset(made, 0x6b, sizeof(made));
+    memcpy(made + Entity_Origin, made_from, sizeof(made_from));
+    memcpy(made + Entity_Velocity, velocity, 3 * sizeof(float));
+    memcpy(made + Entity_Angles, made_at, sizeof(made_at));
+    memcpy(before, made, sizeof(made));
+    making.calls = 0, making.gives = made;
+    uint8_t *given = kind == 0   ? fake_Grenade_Spawn(shooter, 0x22, 0x33, weapon, 0x55, 0x66, 0x77)
+                     : kind == 1 ? fake_Rocket_Spawn(shooter, weapon, 0x33, 0x44, 0x55, 0x66, 0x77)
+                                 : fake_Projectile_Spawn(shooter, weapon, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88);
+    CHECK(given == made && making.calls == 1 && making.kind == kind && making.rest[kind == 0 ? 2 : 0] == weapon);
+    bool turned = memcmp(made + Entity_Velocity, velocity, 3 * sizeof(float)) != 0;
+    CHECK(turned || memcmp(before, made, sizeof(made)) == 0);
+    return turned;
+}
+
+// PhD Flopper's landing explosion goes through the hooks: left as the game made it, and only it.
+static void test_landing_blast_made(void) {
+    static uint8_t launcher[0x20], pistol[0x20], other[0x20];
+    const uint8_t **table = game_weapons;
+    const char *names[3] = { "launcher_standard_upgraded", "pistol_standard_upgraded", "launcher_standard" };
+    const float down[3] = { 0, 0, -2250 }, level[3] = { 900, 0, 0 }, steep[3] = { 196.1f, 0, -2241.4f };
+    memcpy(launcher + WeaponVariantDef_ScriptName, &names[0], sizeof(names[0]));
+    memcpy(pistol + WeaponVariantDef_ScriptName, &names[1], sizeof(names[1]));
+    memcpy(other + WeaponVariantDef_ScriptName, &names[2], sizeof(names[2]));
+    table[0] = launcher, table[0x22] = launcher, table[0x23] = pistol, table[0x24] = other, table[0x50] = pistol;
+    table[0x51] = launcher;
+    set_mod(true);
+    memset(clients, 0, sizeof(clients));
+    set_view(0, true, 0, 0);
+    orig_Grenade_Spawn = game_grenade, orig_Rocket_Spawn = game_rocket, orig_Projectile_Spawn = game_projectile;
+    set_text("aae_freeaim_target", "-239 -1108 140");
+    set_dvar_kind("aae_freeaim_nonbullet", false, "", Dvar_Type_String);
+    set_shooter(0, true, true);
+    CHECK(after_a_while(0, false));
+    // before the game's table of weapons is known every missile is a shot
+    weapon_variants = NULL, last_weapon = NULL;
+    CHECK(flies_as(1, 0x22, down) && flies_as(2, 0x22, down));
+    weapon_variants = game_weapons, last_weapon = &game_last_weapon;
+    // a missile of either weapon straight down, made as a rocket or as a projectile: left alone
+    CHECK(!flies_as(1, 0x22, down) && !flies_as(2, 0x22, down) && !flies_as(1, 0x23, down) && !flies_as(2, 0x23, down));
+    // only a Weapon's low nine bits say which weapon it is, and the table's last one is one too
+    CHECK(!flies_as(2, 0x7fffffffffffe022, down) && !flies_as(2, 0x50, down) && !flies_as(2, 0x250, down));
+    // the same weapons fired by the player, level or as far down as a view looks: shots, turned as before
+    CHECK(flies_as(1, 0x22, level) && flies_as(2, 0x22, level) && flies_as(2, 0x23, level) &&
+          flies_as(1, 0x22, steep) && flies_as(2, 0x23, steep));
+    // another weapon straight down; no weapon; one beyond the table's last; one the table has nothing for
+    CHECK(flies_as(1, 0x24, down) && flies_as(2, 0x24, down));
+    CHECK(flies_as(2, 0, down) && flies_as(2, 0x200, down));
+    CHECK(flies_as(2, 0x51, down) && flies_as(1, 0x51, down) && flies_as(2, 0x122, down));
+    CHECK(flies_as(2, 0x25, down));
+    // a grenade's weapon isn't looked at (neither where a grenade has it nor where a missile has it)
+    table[0x33] = launcher;
+    CHECK(flies_as(0, 0x22, down) && flies_as(0, 0x23, down));
+    memset(game_weapons, 0, sizeof(game_weapons));
+    memset(clients, 0, sizeof(clients));
+}
+
 static void test_projectiles(void) {
     set_mod(true);
     memset(clients, 0, sizeof(clients));
     set_view(0, true, 0, 0);
     set_view(1, true, 0, 1);
     orig_Grenade_Spawn = game_grenade, orig_Rocket_Spawn = game_rocket, orig_Projectile_Spawn = game_projectile;
+    weapon_variants = game_weapons, last_weapon = &game_last_weapon;
     set_text("aae_freeaim_target", "-239 -1108 140");
     set_dvar_kind("aae_freeaim_target_1", false, "", Dvar_Type_String);
     set_dvar_kind("aae_freeaim_nonbullet", false, "", Dvar_Type_String);
@@ -1018,6 +1124,7 @@ static void test_other_machines(void) {
     net_for_tests();
     orig_Bullet_Fire = game_bullet, orig_SV_ExecuteClientCommand = game_execute, orig_CL_FinishMove = game_finish_move;
     orig_Grenade_Spawn = game_grenade, orig_Rocket_Spawn = game_rocket, orig_Projectile_Spawn = game_projectile;
+    weapon_variants = game_weapons, last_weapon = &game_last_weapon;
     set_view(0, true, 0, 0);
     set_view(1, true, 0, 1);
     set_text("aae_freeaim_target", "-239 -1208 500");
@@ -1980,6 +2087,8 @@ static void test_init(void) {
           Client_Size == 0xe5270);
     CHECK(Dvar_FindByHash == (void *)(base + ADDR_Dvar_FindByHash) &&
           Dvar_GetString == (void *)(base + ADDR_Dvar_GetString) && cg_clients == (void *)(base + ADDR_cgArray) &&
+          weapon_variants == (void *)(base + ADDR_bg_weaponVariantDefs) &&
+          last_weapon == (void *)(base + ADDR_bg_lastWeaponIndex) &&
           crosshair_asks_from == (const void *)(base + ADDR_CG_DrawCrosshair_TestReturn) && now_ms == uptime_ms);
     // a pre-patched executable without the stub at the queued shots: everything but that
     stub_missing_for = ADDR_Bullet_QueuedShots_Loop;
@@ -2028,6 +2137,8 @@ int main(void) {
     test_shots();
     test_projectile();
     test_projectiles();
+    test_landing_blast();
+    test_landing_blast_made();
     test_other_machines();
     test_client_shots();
     test_flash();

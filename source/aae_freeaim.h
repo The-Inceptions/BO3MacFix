@@ -43,6 +43,14 @@ bool aae_freeaim_turn(const float muzzle[3], const float directions[9], const fl
 // False when it flies slower than 0.0001 or the turn can't be made.
 bool aae_freeaim_projectile(const float origin[3], const float velocity[3], const float target[3],
                             float turned_velocity[3], float angles[3]);
+// Whether something that flies is the landing explosion of the mod's PhD Flopper and no shot of the player's. The
+// mod's script (scripts/zm/aae_phd.gsc) makes that explosion with MagicMissile: a missile of one of two weapons, which
+// it asks the game for by these names, from 40 above the player's feet straight down. Such a thing is left as the
+// game made it, so that it goes off around the player. (The plugin turns it like any shot: on Windows the explosion
+// goes off at the point under the crosshair.) The weapon alone doesn't tell, because a player can hold and fire the
+// same weapon; straight down does: downwards with no more than a thousandth of that to either side, which is
+// further down than a view can look, so nothing the player fires is this.
+bool aae_freeaim_landing_blast(const char *weapon, const float velocity[3]);
 
 // ---- the client's side of a shot: its tracer from the gun
 

@@ -325,6 +325,16 @@ bool aae_freeaim_projectile(const float origin[3], const float velocity[3], cons
     return true;
 }
 
+#define Landing_Sideways 0.001f // of the speed downwards: how far to a side "straight down" may be
+
+bool aae_freeaim_landing_blast(const char *weapon, const float velocity[3]) {
+    if (weapon == NULL ||
+        (strcmp(weapon, "launcher_standard_upgraded") != 0 && strcmp(weapon, "pistol_standard_upgraded") != 0))
+        return false;
+    float sideways = -velocity[2] * Landing_Sideways;
+    return velocity[2] < 0.0f && fabsf(velocity[0]) <= sideways && fabsf(velocity[1]) <= sideways;
+}
+
 // ---- the client's side of a shot: what the plugin works out
 
 #define Point_Bound 10000000.0f // the plugin takes a point from the game only with each coordinate below 1e7 either way
@@ -714,9 +724,30 @@ install_hook_name(Bullet_Fire, void, uint8_t *attacker, uint8_t *shot, uint64_t 
     memcpy(shot, own, sizeof(own));
 }
 
-// Something that flies was made for this entity: turned at the point its player aims at, if any.
+// The name the mod's script asks the game for a weapon by (GetWeapon's): the second name in the weapon's entry of
+// the game's table, which a Weapon's low nine bits are the index of. NULL for no weapon.
+#define Weapon_Index 0x1ff
+static const uint8_t *const *weapon_variants;
+static const int32_t *last_weapon;
+static const char *weapon_name(uint64_t weapon) {
+    uint32_t index = (uint32_t)(weapon & Weapon_Index);
+    const uint8_t *variant;
+    const char *name;
+    if (weapon_variants == NULL || index == 0 || (int32_t)index > *last_weapon)
+        return NULL;
+    variant = weapon_variants[index];
+    if (variant == NULL)
+        return NULL;
+    memcpy(&name, variant + WeaponVariantDef_ScriptName, sizeof(name));
+    return name;
+}
+
+// Something that flies was made for this entity: turned at the point its player aims at, if any. Not the landing
+// explosion of the mod's PhD Flopper, which is no shot and belongs where the player lands (weapon: the missile's, 0
+// for a grenade, which that explosion never is).
 enum { Kind_Grenade, Kind_Rocket, Kind_Projectile, Kinds };
-static void turn_projectile(const uint8_t *owner, uint8_t *made, int kind) {
+static void turn_projectile(const uint8_t *owner, uint8_t *made, uint64_t weapon, int kind) {
+    static const char *const names[Kinds] = { "grenade", "rocket", "projectile" };
     uint32_t number;
     float target[3], origin[3], velocity[3], turned[3], angles[3];
     if (owner == NULL || made == NULL || !aae_plugin_loaded_lately() || !third_person_player(owner, &number))
@@ -725,40 +756,50 @@ static void turn_projectile(const uint8_t *owner, uint8_t *made, int kind) {
         return;
     memcpy(origin, made + Entity_Origin, sizeof(origin));
     memcpy(velocity, made + Entity_Velocity, sizeof(velocity));
+    if (aae_freeaim_landing_blast(weapon_name(weapon), velocity)) {
+        if (debug)
+            printf("free aim: a %s of player %u is left alone, PhD Flopper's landing explosion: %s from %.1f %.1f "
+                   "%.1f, velocity %.1f %.1f %.1f, not to %.1f %.1f %.1f\n", names[kind], number, weapon_name(weapon),
+                   origin[0], origin[1], origin[2], velocity[0], velocity[1], velocity[2], target[0], target[1],
+                   target[2]);
+        return;
+    }
     if (!aae_freeaim_projectile(origin, velocity, target, turned, angles))
         return;
     memcpy(made + Entity_Velocity, turned, sizeof(turned));
     memcpy(made + Entity_Angles, angles, sizeof(angles));
     if (debug) {
-        static const char *const names[Kinds] = { "grenade", "rocket", "projectile" };
         static unsigned count[Kinds];
         static float last[Kinds][3];
+        const char *name = weapon_name(weapon);
         if (worth_a_line(&count[kind], last[kind], target))
             printf("free aim: %s %u of player %u goes to %.1f %.1f %.1f: from %.1f %.1f %.1f, velocity %.1f %.1f %.1f "
-                   "instead of %.1f %.1f %.1f, angles %.1f %.1f\n", names[kind], count[kind], number, target[0],
+                   "instead of %.1f %.1f %.1f, angles %.1f %.1f%s%s\n", names[kind], count[kind], number, target[0],
                    target[1], target[2], origin[0], origin[1], origin[2], turned[0], turned[1], turned[2], velocity[0],
-                   velocity[1], velocity[2], angles[0], angles[1]);
+                   velocity[1], velocity[2], angles[0], angles[1], name != NULL ? ", weapon " : "",
+                   name != NULL ? name : "");
     }
 }
 
 // The server makes a grenade, a rocket or another projectile: each of the three functions gets the entity that
-// fires first and gives the new entity. The rest is handed on as it came (in registers and on the stack).
+// fires first and gives the new entity. The rest is handed on as it came (in registers and on the stack); a rocket's
+// and a projectile's second one is the weapon.
 install_hook_name(Grenade_Spawn, uint8_t *, uint8_t *owner, uint64_t second, uint64_t third, uint64_t fourth,
                   uint64_t fifth, uint64_t sixth, uint64_t seventh) {
     uint8_t *made = orig_Grenade_Spawn(owner, second, third, fourth, fifth, sixth, seventh);
-    turn_projectile(owner, made, Kind_Grenade);
+    turn_projectile(owner, made, 0, Kind_Grenade);
     return made;
 }
 install_hook_name(Rocket_Spawn, uint8_t *, uint8_t *owner, uint64_t second, uint64_t third, uint64_t fourth,
                   uint64_t fifth, uint64_t sixth, uint64_t seventh) {
     uint8_t *made = orig_Rocket_Spawn(owner, second, third, fourth, fifth, sixth, seventh);
-    turn_projectile(owner, made, Kind_Rocket);
+    turn_projectile(owner, made, second, Kind_Rocket);
     return made;
 }
 install_hook_name(Projectile_Spawn, uint8_t *, uint8_t *owner, uint64_t second, uint64_t third, uint64_t fourth,
                   uint64_t fifth, uint64_t sixth, uint64_t seventh, uint64_t eighth) {
     uint8_t *made = orig_Projectile_Spawn(owner, second, third, fourth, fifth, sixth, seventh, eighth);
-    turn_projectile(owner, made, Kind_Projectile);
+    turn_projectile(owner, made, second, Kind_Projectile);
     return made;
 }
 
@@ -1088,6 +1129,8 @@ void aae_freeaim_init(uint64_t game_base_address, int enabled) {
     install_hook_Grenade_Spawn((void *)(base_address + ADDR_Grenade_Spawn));
     install_hook_Rocket_Spawn((void *)(base_address + ADDR_Rocket_Spawn));
     install_hook_Projectile_Spawn((void *)(base_address + ADDR_Projectile_Spawn));
+    weapon_variants = (const uint8_t *const *)(base_address + ADDR_bg_weaponVariantDefs);
+    last_weapon = (const int32_t *)(base_address + ADDR_bg_lastWeaponIndex);
     CL_AddReliableCommand = (void *)(base_address + ADDR_CL_AddReliableCommand);
     net_game.server_state = (const int32_t *)(base_address + ADDR_sv_state);
     net_game.client_connections = (uint8_t *const *)(base_address + ADDR_clientConnections);
