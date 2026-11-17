@@ -72,6 +72,9 @@ TEST_TARGETS += tests/test_aae_breath
 TEST_TARGETS += tests/test_aae_viewmodel
 # a client field nobody registered: which places get a script error or a field that reads as 0 (clientfield_guard.c)
 TEST_TARGETS += tests/test_clientfield_guard
+# texture views the game replaces while they may be drawn: which places hand them to the game's delayed release, and
+# the hook against a made-up untrack, delayed release and render thread (texture_swap_guard.c)
+TEST_TARGETS += tests/test_texture_swap_guard
 # a surface whose material isn't in the renderer's sorted table yet is left out of the frame (material_sort_guard.c)
 TEST_TARGETS += tests/test_material_sort_guard
 # the grenade's prediction line: T7Overcharged's test, the plugin's sums and the hooks (aae_arc.c)
@@ -200,6 +203,8 @@ SOURCES += source/t7o_subtitle.c
 SOURCES += source/t7o_guards.c
 # ClientFieldGuard: a script error instead of a crash for a client field nobody registered (clientfield_guard.c)
 SOURCES += source/clientfield_guard.c
+# TextureSwapGuard: views the game replaces while they may be drawn die a few frames later (texture_swap_guard.c)
+SOURCES += source/texture_swap_guard.c
 # MaterialSortGuard: a surface whose material isn't sorted in yet is left out, not a crash (material_sort_guard.c)
 SOURCES += source/material_sort_guard.c
 # AAELanJoin: joining a game of the mod on the local network as its plugin makes it work (aae_lan.c)
@@ -438,6 +443,12 @@ tests/test_aae_viewmodel: tests/test_aae_viewmodel.c source/aae_viewmodel.c sour
 		source/t7overcharged.h source/thread_stats.h source/thread_stats.c source/thread_stats_game.c
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_viewmodel.c source/gsc_obj.c source/thread_stats.c source/thread_stats_game.c
+
+# texture_swap_guard.c: its places and rule, and its hook against a made-up untrack, delayed release and render thread
+tests/test_texture_swap_guard: tests/test_texture_swap_guard.c source/texture_swap_guard.c source/texture_swap_guard.h \
+		source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_texture_swap_guard.c
 
 # clientfield_guard.c: its rules, and its hook against a made-up lookup, script engine and mod
 tests/test_clientfield_guard: tests/test_clientfield_guard.c source/clientfield_guard.c source/clientfield_guard.h \

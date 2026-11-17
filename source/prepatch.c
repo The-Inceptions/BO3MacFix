@@ -190,6 +190,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_R_CheckVidRestart, Push_R15 },
     { ADDR_R_MergeDrawSurfLists, Push_R15 },
     { ADDR_R_SetWndParms, Push_R15 },
+    { ADDR_R_UntrackTextureMemory, Push_R15 }, // TextureSwapGuard (texture_swap_guard.c)
     { ADDR_Rocket_Spawn, Push_R15 },
     { ADDR_Scr_ErrorInternal, Push_R15 },
     { ADDR_Scr_EvalEquality, Push_R15 },

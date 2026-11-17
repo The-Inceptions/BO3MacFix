@@ -623,6 +623,20 @@
 #define ADDR_playerKeys 0x1a1cd770 // PlayerKeyState[] (0x1940 bytes each): keys[256] of 24 bytes at +0x138, int down first (Key_SetBinding 0x101546a78; Windows 0x14531d850)
 #define ADDR_com_quitInProgress 0x118dfaac // int, Com_Quit (text "quitting...") sets it to 1 (Windows 0x15686e93c)
 #define ADDR_DB_FreeUnusedResources 0x13490b7 // func - void (bool), only the second flag of the Windows one (0x141421590, T7Overcharged's pattern): the same text "unloaded inuse" and the branch on it, 3 callers on both sides
+// TextureSwapGuard (texture_swap_guard.c): the texture views the game replaces or drops while the render thread may
+// still read them, read in the Mac game's code (wip/night/crash-render.md); no Windows counterparts looked up
+#define ADDR_R_UntrackTextureMemory 0x126dde1 // func - int (view, category): under critical section 0x67 counts the view's entry in the texture memory table down, removes it at 0 and returns what is left; called right before nearly every release of a texture view (29 calls, all with call)
+#define ADDR_R_CountTextureMemoryAgain 0x126dd76 // func - void (view, category): counts the view's entry up again (for a view stored a second time)
+#define ADDR_R_DelayedReleaseTexture 0x129b485 // func - void (view, bool untrack): under critical section 0x48 queues the view with the frame stamp [0x1151f5768]; 0x129b5af (once per stream update, 0x138f2d7) untracks (if asked) and releases those older than the int dvar 0x275fc2f8 frames (default 4), at most dvar 0x5a051182 (128) a call; R_Shutdown (0xdcef54) releases all of them (0x129b6d5). A full queue (8182) releases its oldest at once. The streamer's mip swap (0x138ecb7) uses it for its old view
+#define ADDR_TextureSwap_PreviewLoadingRet 0xe4a5a1 // untrack's return in the workshop preview swap for img_t7_mod_loading (0xe4a508): then old view->Release(), then the new one stored
+#define ADDR_TextureSwap_PreviewRet 0xe4a68f // the same for img_t7_mod_preview (0xe4a603, Lua's Engine.UpdateModPreviewImage)
+#define ADDR_TextureSwap_StreamerRet 0x138f173 // in the streamer's view swap 0x138ef3a: image view cleared, new view made (0x129b330), stored, then untrack and Release of the old
+#define ADDR_TextureSwap_StreamerRet2 0x138f20d // the same in 0x138f1d5 (its Release is a tail jump)
+#define ADDR_TextureSwap_StreamerRet3 0x138f25b // the same in 0x138f223
+#define ADDR_TextureSwap_ImageFreeRet 0x129b2b3 // in the image release 0x129b297 (the per-asset free 0x13462d4, case 9): untrack and Release of +0xa8, then the field cleared
+#define ADDR_TextureSwap_ImageFreeRet2 0x129b2e8 // the same for +0xb0
+#define ADDR_TextureSwap_ImageAssignRet 0x129c15a // in 0x129c113 (stub, source): an image's own +0xa8 view untracked and released before the source's is stored (the default asset stubs of a zone unload, 0x1349650)
+#define ADDR_TextureSwap_ImageAssignRet2 0x129c19c // the same for +0xb0
 // -- the renderer's sorted material table and the frame's draw lists (material_sort_guard.c, wip/night/crash-main.md)
 #define ADDR_rgp 0x1138a580 // r_global_permanent_t: Material *sortedMaterials[0x5800] at +0 (a draw surface's key holds its material's index in bits 27..42; the readers 0x10ae4a5, 0xfea391, 0xf31174, 0xfea546 take the material from here and its +0x278 at once), needSortMaterials byte +0x2c000, materialCount int +0x2c004 (the slots the last sort filled), world +0x2c320; the sort 0x109b84d (gated in 0xe25ae3: world, needSort, databaseCompletedEvent2 set, +0x2c001) fills it, R_Init 0xdcec47 zeroes all 0x2d300 bytes (Windows 0x14f437980)
 #define ADDR_R_MergeDrawSurfLists 0x100afa1 // func - void (int stage, int stageCount, GfxBackEndData *data): merges the draw surface buckets [stage, stage + stageCount) by key and appends their pointers to data + 0x14fb0 (count int at +0x8a36c, at most 60000) through 0x100af4a; every surface of the frame's lists comes in here, on the main thread (Windows 0x141ccc370: the same stage and count pairs in the same order, 0xf/4, 0x22/4, 0x26/2, 0x2b/1, 0x28/3, 0x2c/1)
