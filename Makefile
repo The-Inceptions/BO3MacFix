@@ -640,9 +640,39 @@ source/checkpoint_lua.h: source/checkpoint.lua
 
 clean:
 	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
-	rm -rf -- tests/san
+	rm -rf -- tests/san tests/fuzz/out
 
-.PHONY: all clean test sanitize
+.PHONY: all clean test sanitize fuzz fuzz-build
+
+# The fuzzers (tests/fuzz, see fuzz_engine.c): each harness feeds what another machine, a mod or a file can give to
+# the parsing functions, under the address and undefined behaviour sanitizers. make fuzz runs each for FUZZ_SECONDS
+# (60) one after the other, niced; each goes on from the corpus its last run left in tests/fuzz/out/<name>/corpus, and
+# an input that brings it down is left there as crash-<hash> (run the fuzzer with that file to repeat it). make fuzz
+# FUZZERS=lan for one. Not part of make test.
+FUZZERS ?= lan freeaim_net coop_pause gsc aae_build text_files commands
+FUZZ_SECONDS ?= 60
+FUZZ_FLAGS = -std=gnu11 -O1 -g -fno-omit-frame-pointer -Wall -Wextra -Wno-unused-function -fsanitize=address,undefined \
+	-fno-sanitize-recover=all
+fuzz-build: $(FUZZERS:%=tests/fuzz/out/bin/fuzz_%)
+fuzz: fuzz-build
+	for name in $(FUZZERS); do \
+		mkdir -p tests/fuzz/out/$$name/corpus; \
+		nice -n 10 ./tests/fuzz/out/bin/fuzz_$$name -seconds=$(FUZZ_SECONDS) -out=tests/fuzz/out/$$name \
+			tests/fuzz/out/$$name/corpus || exit 1; \
+	done
+tests/fuzz/out/bin/fuzz_engine.o: tests/fuzz/fuzz_engine.c
+	mkdir -p tests/fuzz/out/bin
+	$(CLANG) $(FUZZ_FLAGS) -c -o $@ tests/fuzz/fuzz_engine.c
+# a harness includes the sources it feeds, so it depends on all of them
+tests/fuzz/out/bin/fuzz_%: tests/fuzz/fuzz_%.c tests/fuzz/out/bin/fuzz_engine.o $(wildcard source/*.c source/*.h)
+	$(CLANG) $(FUZZ_FLAGS) -fsanitize-coverage=trace-pc-guard -o $@ $< $(FUZZ_SOURCES_$*) tests/fuzz/out/bin/fuzz_engine.o \
+		$(FUZZ_LIBS_$*)
+# sources a harness doesn't include itself (they would clash with the ones it does), and libraries
+FUZZ_SOURCES_freeaim_net = source/aae_freeaim_net.c source/gsc_obj.c
+FUZZ_SOURCES_text_files = source/checkpoint.c source/zm_loadout.c
+FUZZ_SOURCES_commands = source/t7o_small.c source/t7o_subtitle.c source/launch_args.c source/players_cfg.c \
+	source/offline_mode.c source/notice_queue.c source/gsc_obj.c
+FUZZ_LIBS_aae_build = -lz
 
 # every test again under the address and undefined behaviour sanitizers, for arm64 and x86_64 (tests/sanitize.py;
 # SANITIZE_ARCHS=arm64 for one, SANITIZE_ONLY=<regular expression> for some tests); slow, so not part of make test.

@@ -82,5 +82,6 @@ tests/test_aae_move_jump
 tests/test_offline_mode
 tests/test_thread_stats
 tests/test_thread_stats_x86_64
-# make sanitize: its builds and logs
+# make sanitize and make fuzz: their builds, logs and finds
 tests/san/
+tests/fuzz/out/
