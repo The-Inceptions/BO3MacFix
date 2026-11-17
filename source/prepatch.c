@@ -188,6 +188,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Prompt_Placed, 5, 0, { 0x41, 0x0F, 0x10, 0x46, 0x34 } },    // movups xmm0, [r14+0x34]
     { ADDR_R_AddCodeMeshDrawSurf, Push_R15 },
     { ADDR_R_CheckVidRestart, Push_R15 },
+    { ADDR_R_MergeDrawSurfLists, Push_R15 },
     { ADDR_R_SetWndParms, Push_R15 },
     { ADDR_Rocket_Spawn, Push_R15 },
     { ADDR_Scr_ErrorInternal, Push_R15 },

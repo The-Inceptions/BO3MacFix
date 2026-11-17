@@ -40,6 +40,7 @@
 #include "aae_coop_pause.h"
 #include "aae_viewmodel.h"
 #include "clientfield_guard.h"
+#include "material_sort_guard.h"
 #include "aae_arc.h"
 #include "aae_vmwidget.h"
 #include "gsc_detours.h"
@@ -1285,6 +1286,10 @@ __attribute__((constructor)) static void dylib_main() {
     // places T7Overcharged names for that, with or without a mod (ClientFieldGuard, on by default), see
     // clientfield_guard.c
     clientfield_guard_init(game_base_address, read_int_setting_or_env("ClientFieldGuard", 1));
+
+    // a surface whose material the renderer hasn't sorted into its table yet is left out of the frame instead of
+    // crashing the game (MaterialSortGuard, on by default), see material_sort_guard.c
+    material_sort_guard_init(game_base_address, read_int_setting_or_env("MaterialSortGuard", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);

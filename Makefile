@@ -72,6 +72,8 @@ TEST_TARGETS += tests/test_aae_breath
 TEST_TARGETS += tests/test_aae_viewmodel
 # a client field nobody registered: which places get a script error or a field that reads as 0 (clientfield_guard.c)
 TEST_TARGETS += tests/test_clientfield_guard
+# a surface whose material isn't in the renderer's sorted table yet is left out of the frame (material_sort_guard.c)
+TEST_TARGETS += tests/test_material_sort_guard
 # the grenade's prediction line: T7Overcharged's test, the plugin's sums and the hooks (aae_arc.c)
 TEST_TARGETS += tests/test_aae_arc
 # the mod's widgets on the first person weapon: the plugin's tables, sums and methods (aae_vmwidget.c)
@@ -198,6 +200,8 @@ SOURCES += source/t7o_subtitle.c
 SOURCES += source/t7o_guards.c
 # ClientFieldGuard: a script error instead of a crash for a client field nobody registered (clientfield_guard.c)
 SOURCES += source/clientfield_guard.c
+# MaterialSortGuard: a surface whose material isn't sorted in yet is left out, not a crash (material_sort_guard.c)
+SOURCES += source/material_sort_guard.c
 # AAELanJoin: joining a game of the mod on the local network as its plugin makes it work (aae_lan.c)
 SOURCES += source/aae_lan.c
 # T7Overcharged's smaller pieces: customkeymap, SendMenuResponse's debounce, the dvars it changes (t7o_small.c)
@@ -440,6 +444,12 @@ tests/test_clientfield_guard: tests/test_clientfield_guard.c source/clientfield_
 		source/offsets.h source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_clientfield_guard.c
+
+# material_sort_guard.c: its rules, and its hook against a made-up merge, frame and renderer table
+tests/test_material_sort_guard: tests/test_material_sort_guard.c source/material_sort_guard.c \
+		source/material_sort_guard.h source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_material_sort_guard.c
 
 # aae_arc.c: T7Overcharged's arc test, the plugin's checks and sums, and the hooks against a made-up game
 tests/test_aae_arc: tests/test_aae_arc.c tests/arc_bend_cases.h source/aae_arc.c source/aae_arc.h source/aae_skeleton.h \
