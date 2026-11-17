@@ -640,8 +640,16 @@ source/checkpoint_lua.h: source/checkpoint.lua
 
 clean:
 	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
+	rm -rf -- tests/san
 
-.PHONY: all clean test
+.PHONY: all clean test sanitize
+
+# every test again under the address and undefined behaviour sanitizers, for arm64 and x86_64 (tests/sanitize.py;
+# SANITIZE_ARCHS=arm64 for one, SANITIZE_ONLY=<regular expression> for some tests); slow, so not part of make test.
+# SANITIZE_ONLY goes to the script as it was given, a "$" in it too (make would read "$|" and the like as its own
+# variables); only a single quote can't be in it.
+sanitize:
+	SANITIZE_ONLY='$(value SANITIZE_ONLY)' python3 tests/sanitize.py $(TEST_TARGETS)
 
 # FrameStats' detail: the threads' and the phases' lines (thread_stats.c), and this process's own threads read by name
 # with their CPU time (thread_stats_game.c)
