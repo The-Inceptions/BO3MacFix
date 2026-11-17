@@ -696,6 +696,33 @@ int main(void) {
     zm_inventory_allow_commands("");
     G_SetShieldHealth = NULL;
 
+    // BO3MacFix's own give commands sent by another player's game (any client can send "give ..."): refused, with
+    // nothing used up of what was set up for the local player, whose own command then still finds it
+    orig_CheatsOk = game_cheats_ok;
+    game_checks = 0;
+    CHECK(zm_inventory_set_points(2500)[0] != '\0' && zm_inventory_points_state() == 1);
+    argv1 = "bo3macfix_points";
+    CHECK(cheats_ok(other, give) == 0);
+    CHECK(cheats_ok(NULL, give) == 0);
+    CHECK(points_waiting == 2500 && !points_running && zm_inventory_points_state() == 1);
+    argv1 = "bo3macfix_switch";
+    switch_weapon = 77;
+    switch_until = now_ms() + 10000;
+    CHECK(cheats_ok(other, give) == 0);
+    CHECK(switch_weapon == 77);
+    argv1 = "bo3macfix_restore";
+    restore_until = now_ms() + 30000;
+    CHECK(cheats_ok(other, give) == 0);
+    CHECK(restore_until != 0);
+    CHECK(game_checks == 0); // the game's own check isn't asked for them either
+    // the local player's own: used (the made-up game has no scripts, so the points aren't given, but they're taken)
+    argv1 = "bo3macfix_points";
+    CHECK(cheats_ok(player, give) == 0);
+    CHECK(points_waiting == 0);
+    switch_weapon = 0;
+    restore_until = 0;
+    argv1 = "bo3macfix_restore";
+
     test_loadout();
 
     if (failures == 0)

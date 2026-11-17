@@ -1158,9 +1158,17 @@ int zm_inventory_bank_watch_over(void) {
 // commands for the local player get through as zm_inventory_allow_commands says; "give bo3macfix_restore"
 // restores the loadout zm_inventory_set_restore set up, and then tells give it's done; everything else is the game's.
 // The hook is reached by a jump (the pre-patched copy's stub or Dobby's), so the return address is the game's caller.
+static int cheats_ok(void *ent, uint64_t from);
 install_hook_name(CheatsOk, int, void *ent) {
-    uint64_t from = (uint64_t)__builtin_return_address(0);
+    return cheats_ok(ent, (uint64_t)__builtin_return_address(0));
+}
+static int cheats_ok(void *ent, uint64_t from) {
     int command = restore_command(from);
+    // BO3MacFix's own give commands are the local player's. Any client can send "give ...": another player's, in a
+    // co-op game hosted here, mustn't use up what was set up for the local player (a resumed game's loadout or its
+    // points over 500 would be lost). Refused, as the game refuses a give without cheats, and nothing taken.
+    if (command != 0 && (ent == NULL || (uint64_t)ent != entities()))
+        return 0;
     if (command == 1)
         run_restore(ent);
     else if (command == 2)
