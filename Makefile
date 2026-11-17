@@ -82,6 +82,8 @@ TEST_TARGETS += tests/test_aae_vmwidget_tsan
 TEST_TARGETS += tests/test_aae_skeleton
 # T7Overcharged's smaller pieces: customkeymap (t7o_small.c)
 TEST_TARGETS += tests/test_t7o_small
+# the navmesh converter's map names and arguments, against a made-up wine (navmesh_convert.c)
+TEST_TARGETS += tests/test_navmesh_convert
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -124,6 +126,8 @@ SOURCES += source/metalfx.m source/gpu_diag.m
 # FrameStats' detail: the threads' CPU time by name and the frame's phases (thread_stats.c, thread_stats_game.c)
 SOURCES += source/thread_stats.c source/thread_stats_game.c
 
+# running the navmesh converter for a custom map without a shell (navmesh_convert.c)
+SOURCES += source/navmesh_convert.c
 # the pre-patched executable (prepatch.c), the launcher builds it with BO3MacFix_BuildPrepatched
 SOURCES += source/prepatch.c
 # whether the command line starts a map at launch, for SkipIntro (launch_args.c)
@@ -568,6 +572,11 @@ tests/test_t7o_small: tests/test_t7o_small.c source/t7o_small.c source/t7o_small
 		source/havok.h source/t7overcharged.h source/gsc_obj.c source/gsc_obj.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_t7o_small.c source/gsc_obj.c
+
+# navmesh_convert.c: which map names it converts, and its arguments reaching a made-up wine as they are
+tests/test_navmesh_convert: tests/test_navmesh_convert.c source/navmesh_convert.c source/navmesh_convert.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_navmesh_convert.c source/navmesh_convert.c
 
 # script_errors.c's QuietScriptErrors: which script errors it shows, against made-up script engine memory (the test
 # includes the source itself)

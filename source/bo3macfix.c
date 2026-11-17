@@ -61,6 +61,7 @@
 #include "gpu_tweaks.h"
 #include "havok.h"
 #include "utilities.h"
+#include "navmesh_convert.h"
 #include "notch.h"
 #include "notices.h"
 #include "offsets.h"
@@ -486,6 +487,9 @@ install_hook_name(HKAI_InitMapData, void, const char *mapname, char restart) {
     bool shouldFixBees = strcmp(mapname, "cp_mi_cairo_infection2") == 0;
     if ((native_physics_missing || shouldFixBees)
         && access(physicsAltPath, F_OK) != 0) {
+        // the name goes into the converter's paths: only a plain one (navmesh_convert.c)
+        if (!navmesh_map_name_ok(mapname))
+            Com_Error(__FILE__, __LINE__, 2, Error_Prefix "Can't convert the map '^2%s^7': its name has characters a map's name shouldn't have.", mapname);
         if (get_wine_path() == NULL)
             Com_Error(__FILE__, __LINE__, 2, Error_Prefix "You do not have Wine installed, so we can't convert the map '^2%s^7'.", mapname);
         if (!shouldFixBees) {
@@ -543,21 +547,21 @@ install_hook_name(HKAI_InitMapData, void, const char *mapname, char restart) {
         }
         fclose(clumpfile);
 
-        // call Wine with our cod2map64 binary, passing in the clump
+        // call Wine with our cod2map64 binary, passing in the clump; its arguments as they are, no shell in between
         char cwd[1025];
-        char wine_path[3075];
+        char clump_arg[1100], output_arg[1200];
         getcwd(cwd, sizeof(cwd));
-        snprintf(wine_path, sizeof(wine_path), "\"%s\" " C2M_Path " -mac_navmesh \"Z:%s/" Macfix_Path "/Physics/convert.clump\" \"Z:%s/" Macfix_Path "/Physics/%s\"", get_wine_path(), cwd, cwd, mapname);
-        printf("executing: %s\n", wine_path);
+        snprintf(clump_arg, sizeof(clump_arg), "Z:%s/" Macfix_Path "/Physics/convert.clump", cwd);
+        snprintf(output_arg, sizeof(output_arg), "Z:%s/" Macfix_Path "/Physics/%s", cwd, mapname);
+        printf("executing: %s %s -mac_navmesh %s %s\n", get_wine_path(), C2M_Path, clump_arg, output_arg);
         unsetenv("DYLD_INSERT_LIBRARIES"); // stop steam from fucking with our wine
-        FILE *convert = popen(wine_path, "r");
-        if (convert == NULL)
+        char stdoutresult[0x400];
+        int convert_status;
+        if (!navmesh_convert_run(get_wine_path(), C2M_Path, clump_arg, output_arg, stdoutresult, sizeof(stdoutresult),
+                                 &convert_status))
             Com_Error(__FILE__, __LINE__, 2, Error_Prefix "Failed to start map conversion process for '^2%s^7'.", mapname);
-        char stdoutresult[0x400] = {0};
-        fread(stdoutresult, 1, 0x400, convert);
-        pclose(convert);
         printf("%s\n", stdoutresult);
-        printf("conversion complete!\n");
+        printf("conversion complete! (exit status %d)\n", convert_status);
 
         // make sure we have a navmesh file generated
         if (access(physicsAltPath, F_OK) != 0)
