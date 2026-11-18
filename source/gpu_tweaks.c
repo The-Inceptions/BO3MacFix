@@ -705,8 +705,10 @@ static void dynres_tick(int frame_limit_fps) {
         written = 0;
         dynres.base = 0;
     } else if (written != 0 && (reconfigure || !active)) {
-        // turned off or changed in the menu: the user's value back first
+        // turned off or changed in the menu: the user's value back first, and a warm-up in progress ends (it would
+        // otherwise resume when the feature is turned on again, with the base it started with)
         int base = atomic_load(&dynres_base);
+        dynres_prewarm_cancel(&dynres_prewarm);
         scene_multiplier_set(dvar, base);
         atomic_store(&dynres_written, 0);
         printf(!active ? "dynamic resolution off, back to %i%%\n" : "dynamic resolution: back to %i%% for the new setting\n", base);
@@ -725,7 +727,11 @@ static void dynres_tick(int frame_limit_fps) {
         atomic_store(&dynres_base, current);
         window_start = 0;
         dynres_start_low_pending = true;
-        printf("dynamic resolution: between %i%% and %i%%\n", dynres.lowest, dynres.base);
+        if (setting != 0)
+            printf("dynamic resolution: between %i%% and %i%%\n", dynres.lowest, dynres.base);
+        else
+            printf("dynamic resolution: for BatteryResolution only: %i%% plugged in, %i%% at most on battery\n",
+                   dynres.base, dynres_battery_ceiling(dynres.base, battery, true));
     }
     if (dynres_prewarm_tick(dvar, now, view_3d, appeared)) {
         window_start = 0; // the controller's first window starts after it
@@ -776,12 +782,14 @@ static void dynres_tick(int frame_limit_fps) {
         } else {
             // BatteryResolution's ceiling for this window, said in the log when it changes
             dynres_set_ceiling(&dynres, dynres_battery_ceiling(dynres.base, battery, atomic_load(&limits.on_battery)));
-            if (battery != 0 && dynres.ceiling != battery_ceiling_logged) {
-                printf(dynres.ceiling < dynres.base
-                           ? "dynamic resolution: on battery, the 3D scene at %i%% at most (BatteryResolution)\n"
-                           : "dynamic resolution: plugged in, the 3D scene up to %i%% again (BatteryResolution)\n",
-                       dynres.ceiling);
-                battery_ceiling_logged = dynres.ceiling;
+            if (battery != 0) {
+                int news = dynres_ceiling_news(dynres.ceiling, dynres.base, &battery_ceiling_logged);
+                if (news == Dynres_Ceiling_On_Battery)
+                    printf("dynamic resolution: on battery, the 3D scene at %i%% at most (BatteryResolution)\n",
+                           dynres.ceiling);
+                else if (news == Dynres_Ceiling_Plugged_In)
+                    printf("dynamic resolution: plugged in, the 3D scene up to %i%% again (BatteryResolution)\n",
+                           dynres.ceiling);
             }
             percent = dynres_window_limited(&dynres, window_fps, window_busy, target, limit);
         }

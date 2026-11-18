@@ -56,6 +56,7 @@ typedef struct {
     int base;     // the user's ResolutionPercent, the most it goes up to
     int lowest;   // the least it goes down to
     int ceiling;  // the most it goes up to for now (BatteryResolution on battery), base otherwise
+    bool ceiling_rose; // the ceiling went up since the last window (plugged in): that window is held, see dynres.c
     int percent;  // the resolution now
     int windows_since_change;
     int headroom_windows; // windows in a row in which a step up would have fit (under a limit: held the limit)
@@ -87,9 +88,22 @@ void dynres_reset(dynres_t *d, int base, int lowest);
 // steps. No step of any kind goes above it.
 void dynres_set_ceiling(dynres_t *d, int ceiling);
 
+// The window in which the ceiling rises (plugged in, or the setting turned off) holds any step down, as the windows
+// after a change do: its frames were mostly paced to the battery's frame limit, which lifts at the same moment, and
+// judged against the display's rate they look far behind (the GPU reads 87-94% busy at a 40 fps limit even with
+// room), so without the hold the plug-in itself took two steps down (the review of 2026-11-18, finding 1: 70% -> 60%
+// with DynamicResolution 60). The steps up and down after the hold are DynamicResolution's own.
+
 // the ceiling for BatteryResolution's setting (the share of base, in percent, 50 to 95; 0 = off): base while it's off or
 // the Mac isn't on battery, else that share of base as dynres_lowest_for rounds it
 int dynres_battery_ceiling(int base, int setting, bool on_battery);
+
+// BatteryResolution's log line for a window, from the ceiling and the base as in dynres_t and *logged, the ceiling the
+// log last named (0 for none yet), which it updates: on battery (a ceiling under the base) when that's new, plugged in
+// ("up to the base again") only after an on battery line, and nothing when the ceiling didn't change. A game started
+// plugged in names nothing: its first ceiling is the base, which is only remembered.
+enum { Dynres_Ceiling_Nothing, Dynres_Ceiling_On_Battery, Dynres_Ceiling_Plugged_In };
+int dynres_ceiling_news(int ceiling, int base, int *logged);
 
 // the lowest ResolutionPercent for a base and DynamicResolution's setting (the lowest share of base, in percent):
 // a multiple of Dynres_Step, at least 50 (the engine's minimum)
@@ -226,6 +240,11 @@ int dynres_prewarm_frame(dynres_prewarm_t *p, int base, int lowest, bool ready, 
 // down to the ceiling finds that size's set kept; it still goes back to base at the end. At base or above it's
 // dynres_prewarm_frame.
 int dynres_prewarm_frame_up_to(dynres_prewarm_t *p, int base, int lowest, int ceiling, bool ready, bool new_set);
+
+// ends a warm-up in progress without going back anywhere (the caller restores the user's value itself): for the
+// feature turned off in the middle of one, which otherwise resumed later with the sizes and the base of its start
+// (and could undo a Render Resolution change made in between). Doesn't arm it again; a map load does.
+void dynres_prewarm_cancel(dynres_prewarm_t *p);
 
 // the set (1-7) of the size the engine renders at percent, from set 0's size at base (each side scaled and rounded up to
 // 8 by the engine, so within 8 pixels), or -1 for none. Finds a set the warm-up visits that was there before it.

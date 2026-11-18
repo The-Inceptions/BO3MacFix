@@ -7,6 +7,7 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
     d->base = base;
     d->lowest = lowest < base ? lowest : base;
     d->ceiling = base;
+    d->ceiling_rose = false;
     d->percent = base;
     d->windows_since_change = 0;
     d->headroom_windows = 0;
@@ -19,13 +20,26 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
 }
 
 void dynres_set_ceiling(dynres_t *d, int ceiling) {
-    d->ceiling = ceiling < d->base ? ceiling : d->base;
+    int value = ceiling < d->base ? ceiling : d->base;
+    if (value > d->ceiling)
+        d->ceiling_rose = true;
+    d->ceiling = value;
 }
 
 int dynres_battery_ceiling(int base, int setting, bool on_battery) {
     if (setting == 0 || !on_battery)
         return base;
     return dynres_lowest_for(base, setting);
+}
+
+int dynres_ceiling_news(int ceiling, int base, int *logged) {
+    if (ceiling == *logged)
+        return Dynres_Ceiling_Nothing;
+    int named = *logged;
+    *logged = ceiling;
+    if (ceiling < base)
+        return Dynres_Ceiling_On_Battery;
+    return named != 0 ? Dynres_Ceiling_Plugged_In : Dynres_Ceiling_Nothing;
 }
 
 int dynres_lowest_for(int base, int setting) {
@@ -94,7 +108,14 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
         d->trial_from = 0;
         d->trial_watched = false;
         d->event = Dynres_Event_Ceiling;
+        d->ceiling_rose = false;
         return change(d, d->percent > top ? top : least);
+    }
+    // the ceiling rose in this window (plugged in): held like a window right after a change, see dynres.h
+    if (d->ceiling_rose) {
+        d->ceiling_rose = false;
+        d->windows_since_change = 0;
+        d->headroom_windows = 0;
     }
     if (target_fps <= 0 || fps <= 0)
         return d->percent;
@@ -289,6 +310,11 @@ void dynres_prewarm_init(dynres_prewarm_t *p) {
     p->frames = 0;
     p->base = 0;
     p->armed = true;
+}
+
+void dynres_prewarm_cancel(dynres_prewarm_t *p) {
+    p->index = -1;
+    p->frames = 0;
 }
 
 int dynres_prewarm_frame(dynres_prewarm_t *p, int base, int lowest, bool ready, bool new_set) {

@@ -1125,7 +1125,11 @@ static void test_battery_ceiling(void) {
     CHECK(d.ceiling == 100);
 }
 
-// With the ceiling at the base, the controller decides exactly as without one, with and without a frame limit
+// Setting the ceiling to the base every window changes nothing: the same windows give the same sizes, events and
+// failed trials as a controller whose ceiling is never set, with and without a frame limit. (Both run this code: what
+// it shows is that dynres_set_ceiling(base), what the glue does plugged in or with the setting off, is a no-op. That
+// this code decides as the controller before BatteryResolution did was compared outside the tests, by the review of
+// 2026-11-18: the old and the new controller over 6 million windows, identical.)
 static void test_ceiling_at_base_changes_nothing(void) {
     for (int kind = 0; kind < 3; kind++) {
         dynres_t with, without;
@@ -1277,6 +1281,83 @@ static void test_ceiling_and_trials(void) {
     CHECK(dynres_window_limited(&d, 30.0, 0.2, 30, Dynres_Situation_Limit) == 85); // and no further in a pause
 }
 
+// BatteryResolution's log line: a game started plugged in says nothing (gcp3_perfbatt_battresplug said "plugged in,
+// up to 100% again" at its first window, on mains from its first moment); on battery once per change; plugged in
+// again only after that
+static void test_ceiling_news(void) {
+    int logged = 0;
+    CHECK(dynres_ceiling_news(100, 100, &logged) == Dynres_Ceiling_Nothing && logged == 100); // started plugged in
+    CHECK(dynres_ceiling_news(100, 100, &logged) == Dynres_Ceiling_Nothing);
+    CHECK(dynres_ceiling_news(70, 100, &logged) == Dynres_Ceiling_On_Battery && logged == 70); // unplugged
+    CHECK(dynres_ceiling_news(70, 100, &logged) == Dynres_Ceiling_Nothing);
+    CHECK(dynres_ceiling_news(100, 100, &logged) == Dynres_Ceiling_Plugged_In && logged == 100); // plugged in again
+    CHECK(dynres_ceiling_news(100, 100, &logged) == Dynres_Ceiling_Nothing);
+    // started on battery: said at once; another setting on battery: said again
+    logged = 0;
+    CHECK(dynres_ceiling_news(70, 100, &logged) == Dynres_Ceiling_On_Battery);
+    CHECK(dynres_ceiling_news(85, 100, &logged) == Dynres_Ceiling_On_Battery && logged == 85);
+    // a new base (the controller started again, the log's memory cleared) plugged in: nothing
+    logged = 0;
+    CHECK(dynres_ceiling_news(90, 90, &logged) == Dynres_Ceiling_Nothing && logged == 90);
+}
+
+// Plugged in (the ceiling rises and the battery's frame limit lifts in the same window): that window and the holds after
+// it don't step down, though its frames look far behind the display's rate and the GPU reads busy at the slow clock of
+// the limit; a controller without the rise (DynamicResolution alone, at the same size) steps down two in that window,
+// which is what the plug-in did before (the review of 2026-11-18, finding 1). After the holds, a window really behind
+// with the GPU busy steps down as DynamicResolution does.
+static void test_plug_in_hold(void) {
+    dynres_t d, e;
+    dynres_reset(&d, 100, 60);
+    dynres_set_ceiling(&d, 70);
+    CHECK(dynres_window_limited(&d, 40.0, 0.5, 40, Dynres_Match_Limit) == 70); // unplugged: at once
+    for (int i = 0; i < 20; i++)
+        dynres_window_limited(&d, 40.0, 0.92, 40, Dynres_Match_Limit);
+    CHECK(d.percent == 70 && !d.ceiling_rose);
+    dynres_reset(&e, 100, 60); // DynamicResolution alone, settled at 70% (a heavy moment brought it there)
+    e.percent = 70;
+    e.windows_since_change = 20;
+    dynres_set_ceiling(&d, 100); // plugged in
+    CHECK(d.ceiling_rose);
+    CHECK(dynres_window_limited(&d, 45.0, 0.94, 120, Dynres_No_Limit) == 70 && !d.ceiling_rose);
+    CHECK(dynres_window_limited(&e, 45.0, 0.94, 120, Dynres_No_Limit) == 60); // without the rise: two steps down
+    for (int i = 0; i < Dynres_Hold_Down; i++)
+        CHECK(dynres_window_limited(&d, 45.0, 0.94, 120, Dynres_No_Limit) == 70);
+    CHECK(dynres_window_limited(&d, 110.0, 0.99, 120, Dynres_No_Limit) == 65); // then DynamicResolution's own step
+    // a ceiling coming down (unplugged) is no rise; nor a ceiling set to what it is
+    dynres_reset(&d, 100, 60);
+    dynres_set_ceiling(&d, 85);
+    CHECK(!d.ceiling_rose);
+    dynres_set_ceiling(&d, 85);
+    CHECK(!d.ceiling_rose);
+    // a rise that moves the size at once (BatteryResolution under DynamicResolution's floor): the move, and the flag
+    // ends with it (the change's own holds follow)
+    dynres_reset(&d, 100, 85);
+    dynres_set_ceiling(&d, 70);
+    dynres_window_limited(&d, 40.0, 0.5, 40, Dynres_Match_Limit);
+    dynres_set_ceiling(&d, 100);
+    CHECK(dynres_window_limited(&d, 45.0, 0.94, 120, Dynres_No_Limit) == 85 && !d.ceiling_rose &&
+          d.event == Dynres_Event_Ceiling);
+}
+
+// A warm-up ended early (the feature turned off in the middle of it) doesn't resume: nothing more until a map arms it
+// again, and then it starts afresh with the base of then (the review of 2026-11-18, finding 5)
+static void test_prewarm_cancel(void) {
+    dynres_prewarm_t p;
+    dynres_prewarm_init(&p);
+    CHECK(dynres_prewarm_frame(&p, 100, 85, true, false) == 95);
+    CHECK(dynres_prewarm_running(&p));
+    dynres_prewarm_cancel(&p);
+    CHECK(!dynres_prewarm_running(&p));
+    for (int i = 0; i < 20; i++)
+        CHECK(dynres_prewarm_frame(&p, 90, 75, true, true) == 0); // the feature on again, the user's value now 90
+    p.armed = true; // the next map
+    CHECK(dynres_prewarm_frame(&p, 90, 75, true, false) == 85);
+    CHECK(dynres_prewarm_frame(&p, 90, 75, true, true) == 80);
+    CHECK(dynres_prewarm_frame(&p, 90, 75, true, true) == 75);
+    CHECK(dynres_prewarm_frame(&p, 90, 75, true, true) == 90); // back to the base of now, not 100
+}
+
 // The match's warm-up under the ceiling: the ceiling's size first and the steps under it, down to the floor under it;
 // back to the user's value at the end. At the base it's the warm-up without a ceiling.
 static void test_prewarm_under_ceiling(void) {
@@ -1346,6 +1427,9 @@ int main(void) {
     test_ceiling_without_frame_rate();
     test_ceiling_and_trials();
     test_prewarm_under_ceiling();
+    test_ceiling_news();
+    test_plug_in_hold();
+    test_prewarm_cancel();
     if (failures == 0)
         printf("test_dynres: all passed\n");
     return failures != 0;
