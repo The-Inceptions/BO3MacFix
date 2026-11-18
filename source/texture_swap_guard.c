@@ -29,11 +29,12 @@
 //
 // Where nothing can be reading the field the guard stays out of the way, and it never fills the ring:
 // - the stub assignment 0x10129c113 (an image takes the default picture's views and releases its own) runs for
-//   every frontend picture when a zone is unloaded into default stubs (twice in every mod load from the stock MODS
-//   menu, 12,000 views). That unload syncs the render thread first, and while it runs the render thread only draws
-//   the loading icon (its remote-update frames skip the client frame that draws the menus), so the stub maker's call
-//   (return 0x1013497db) gets the game's untrack. Its other caller (0x10129c1e8, an image reset to the default
-//   picture, from another thread's loop) stays guarded.
+//   every frontend picture when a zone is unloaded into default stubs (at every start of a map, and twice in every
+//   mod load from the stock MODS menu, 12,000 views). That unload syncs the render thread first, and while it runs
+//   the render thread only draws the loading screen (its remote-update frames skip the client frame that draws the
+//   menus), so the stub maker's call (return 0x1013497db) gets the game's untrack. The stub maker is also what makes
+//   a default entry for an asset that is missing: a new entry, which nothing can be drawing yet. Its other caller
+//   (0x10129c1e8, an image reset to the default picture, from another thread's loop) stays guarded.
 // - the image release (0x10129b297) is not a place: both unloads that call it sync the render thread first and give
 //   the image struct back to its pool right after (the review's finding).
 // - when the ring holds Ring_Entries - Ring_Room_Kept entries or more, the view goes to the game's own untrack and
