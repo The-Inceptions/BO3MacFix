@@ -71,6 +71,11 @@ bool frame_limit_in_match(frame_limits_t *limits, uint64_t now);
 // whether the UI said the game is in the menus, outside a match, in the last 2 s
 bool frame_limit_in_menus(frame_limits_t *limits, uint64_t now);
 
+// whether nobody can be playing at now, for IdleDisplaySleep: the pause menu is open in a match, the game is in the
+// menus, or it is in the background with the menus or a match up (in_background is only kept with BackgroundFPS or
+// IdleDisplaySleep on). Not while the game starts or a map loads: no UI polls then.
+bool frame_limit_away_from_play(frame_limits_t *limits, uint64_t now);
+
 // from the render thread, for each frame: the frame rate to pace it at, 0 for none. *started gets the Limit_* bits of
 // the limits that start applying with this frame (their situation began, or their setting was turned on in it),
 // *stopped those that stop because their situation ended. A limit turned off while its situation lasts is in neither

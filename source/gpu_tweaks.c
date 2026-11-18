@@ -38,6 +38,8 @@
 
 #include "app_focus.h"
 #include "dynres.h"
+#include "display_sleep.h"
+#include "display_sleep_mac.h"
 #include "frame_limit.h"
 #include "frame_pace.h"
 #include "gpu_tweaks.h"
@@ -1004,6 +1006,13 @@ static bool low_power_mode_on(void) {
     return ((BOOL (*)(id, SEL))objc_msgSend)(info, enabled) != NO;
 }
 
+// IdleDisplaySleep: the situation as the frame limits know it, for display_sleep_mac.c to decide on (nothing to do with
+// the setting off: it returns at once)
+static void display_sleep_tick(void) {
+    display_sleep_update(frame_limit_away_from_play(&limits, clock_gettime_nsec_np(CLOCK_UPTIME_RAW)),
+                         atomic_load(&limits.on_battery));
+}
+
 // checks the power source and Low Power Mode now and then every 5 seconds (once, however often it's asked), for
 // BatteryFPS and LowPowerFPS, and says so when one of them changes while its limit is set
 static void start_power_watch(void) {
@@ -1021,6 +1030,7 @@ static void start_power_watch(void) {
             if (low_power != atomic_exchange(&limits.low_power, low_power) && atomic_load(&limits.low_power_fps) > 0)
                 printf("Low Power Mode %s, %s\n", low_power ? "on" : "off",
                        low_power ? "limiting the frame rate" : "its frame limit is off");
+            display_sleep_tick();
         });
         dispatch_resume(timer);
     });
@@ -1070,6 +1080,7 @@ void gpu_tweaks_pause_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
 
 void gpu_tweaks_pause_menu_open(bool open) {
     frame_limit_set_pause_menu(&limits, open, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+    display_sleep_tick();
 }
 
 void gpu_tweaks_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
@@ -1086,16 +1097,19 @@ void gpu_tweaks_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
 
 void gpu_tweaks_menus_open(bool in_menus) {
     frame_limit_set_menus(&limits, in_menus, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+    display_sleep_tick();
 }
 
 void gpu_tweaks_ui_gone(void) {
     frame_limit_ui_gone(&limits);
+    display_sleep_tick(); // a map loads: play goes on
     atomic_store(&dynres_prewarm_arm, true); // a map loads: warm DynamicResolution's sizes up when its match starts
 }
 
 // from the main thread (app_focus.m)
 static void background_changed(bool background) {
     atomic_store(&limits.in_background, background);
+    display_sleep_tick();
 }
 
 void gpu_tweaks_background_fps_init(int fps, code_patch_fn checked_code_patch) {
@@ -1109,6 +1123,35 @@ void gpu_tweaks_background_fps_init(int fps, code_patch_fn checked_code_patch) {
     atomic_store(&limits.background_fps, fps);
     app_focus_watch(background_changed);
     printf("limiting the frame rate to %i fps in the background\n", fps);
+}
+
+// IdleDisplaySleep (display_sleep.h): it needs the background (app_focus.m) and the power source (the 5 s watch) kept,
+// as BackgroundFPS and BatteryFPS do; no hook
+static void idle_display_sleep_watch(int mode) {
+    if (mode != Display_Sleep_Off)
+        app_focus_watch(background_changed);
+    if (mode == Display_Sleep_On_Battery)
+        start_power_watch();
+}
+
+void gpu_tweaks_idle_display_sleep_init(int mode) {
+    if (mode < 0 || mode > 2)
+        mode = 0;
+    display_sleep_init(mode);
+    idle_display_sleep_watch(mode);
+}
+
+bool gpu_tweaks_set_idle_display_sleep(int mode) {
+    if (mode < 0 || mode > 2)
+        return false;
+    idle_display_sleep_watch(mode);
+    display_sleep_set_mode(mode);
+    display_sleep_tick();
+    printf(mode == 0 ? "display sleep: the game keeps the display on, as it always did\n"
+                     : "display sleep: the display may turn off while the game is paused, in the menus or in the "
+                       "background%s\n",
+           mode == 1 ? ", on battery" : "");
+    return true;
 }
 
 void gpu_tweaks_metal_hud_init(int enabled) {

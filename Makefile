@@ -8,6 +8,8 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag \
 	tests/test_t7o_subtitle
 TEST_TARGETS += tests/test_launch_args
+# IdleDisplaySleep's decisions (display_sleep.c)
+TEST_TARGETS += tests/test_display_sleep
 # StartWithMod: which mods are remembered and when, the launcher's decisions, the marker of a start given the mod, its
 # notices, and the game's half against a made-up loaded mod (start_mod.c, start_mod_game.c)
 TEST_TARGETS += tests/test_start_mod
@@ -138,6 +140,9 @@ SOURCES += source/players_cfg.c
 # which frame rate limit applies to a frame, and the pause menu's and the menus' state for PauseMenuFPS and MenuFPS
 # (frame_limit.c), and whether the game is in the background for BackgroundFPS (app_focus.m)
 SOURCES += source/frame_limit.c source/app_focus.m
+# IdleDisplaySleep: when the game's display sleep assertion goes (display_sleep.c, plain C) and the glue that finds it,
+# lets it go and declares a controller's input as activity (display_sleep_mac.c)
+SOURCES += source/display_sleep.c source/display_sleep_mac.c
 # how many refreshes each frame stayed on screen, for FrameStats with BO3MACFIX_FRAMEPACESTATS=1 (frame_pace.c)
 SOURCES += source/frame_pace.c
 # DynamicResolution's controller (dynres.c), plain C like frame_limit.c
@@ -632,6 +637,10 @@ tests/test_frame_pace: tests/test_frame_pace.c source/frame_pace.c source/frame_
 
 tests/test_frame_limit: tests/test_frame_limit.c source/frame_limit.c source/frame_limit.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_frame_limit.c source/frame_limit.c
+
+# when IdleDisplaySleep lets the display sleep and declares a controller's input (display_sleep.c)
+tests/test_display_sleep: tests/test_display_sleep.c source/display_sleep.c source/display_sleep.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_display_sleep.c source/display_sleep.c
 
 # which players folder a .cfg comes from (players_cfg.c), against made-up folders
 tests/test_players_cfg: tests/test_players_cfg.c source/players_cfg.c source/players_cfg.h

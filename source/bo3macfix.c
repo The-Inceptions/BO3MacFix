@@ -1306,6 +1306,9 @@ __attribute__((constructor)) static void dylib_main() {
     // gpu_tweaks.c and app_focus.m
     gpu_tweaks_menu_fps_init(read_int_setting_or_env("MenuFPS", 40), checked_code_patch);
     gpu_tweaks_background_fps_init(read_int_setting_or_env("BackgroundFPS", 30), checked_code_patch);
+    // let the display turn off after the Mac's own idle time while the game is paused, in the menus or in the
+    // background (IdleDisplaySleep, off unless set: 1 on battery, 2 always), see display_sleep.h
+    gpu_tweaks_idle_display_sleep_init(read_int_setting_or_env("IdleDisplaySleep", 0));
 
     // quitting without Aspyr's shutdown crash, and game audio following the default output device (see qol.c)
     qol_init(read_int_setting("ExitFix", 1), read_int_setting("AudioFollowsDefault", 1));

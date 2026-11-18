@@ -26,6 +26,7 @@
 #include "dobby.h"
 #include "offsets.h"
 #include "controllers.h"
+#include "display_sleep_mac.h"
 #include "gc_bridge.h"
 #include "quick_save.h"
 #include "notices.h"
@@ -423,11 +424,19 @@ void gc_bridge_test_pad(uint16_t buttons, int16_t left_x, int16_t left_y, int16_
 }
 
 // DWORD XInputGetState(DWORD dwUserIndex, XINPUT_STATE *pState)
+// a player's input on any controller the game reads: user activity for IdleDisplaySleep while it lets the display
+// turn off (macOS doesn't count a controller's input as activity by itself)
+static void controller_input(const XINPUT_GAMEPAD *pad) {
+    display_sleep_controller(pad->wButtons, pad->bLeftTrigger, pad->bRightTrigger, pad->sThumbLX, pad->sThumbLY,
+                             pad->sThumbRX, pad->sThumbRY);
+}
+
 install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STATE *state) {
     if (user_index == 0 && state != NULL && atomic_load_explicit(&test_pad_on, memory_order_relaxed)) {
         os_unfair_lock_lock(&pads_lock);
         *state = test_pad;
         os_unfair_lock_unlock(&pads_lock);
+        controller_input(&state->Gamepad);
         return ERROR_SUCCESS;
     }
     if (enabled && user_index < XUSER_MAX_COUNT) {
@@ -450,6 +459,7 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
                 }
                 // L3 + R3 held in the pause menu is a quick save (quick_save.m)
                 quick_save_pad(user_index, state->Gamepad.wButtons);
+                controller_input(&state->Gamepad);
             } else {
                 memset(state, 0, sizeof(*state));
             }
@@ -460,8 +470,10 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
     }
     uint32_t result = orig_ASL_XInputGetState(user_index, state);
     // a controller SDL reads (Aspyr's XInput) can quick save too
-    if (enabled && result == ERROR_SUCCESS && state != NULL)
+    if (enabled && result == ERROR_SUCCESS && state != NULL) {
         quick_save_pad(user_index, state->Gamepad.wButtons);
+        controller_input(&state->Gamepad);
+    }
     return result;
 }
 

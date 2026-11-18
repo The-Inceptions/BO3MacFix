@@ -289,6 +289,37 @@ static void test_in_match(void) {
     CHECK(!frame_limit_in_match(&limits, 20 * Second + Pause_Menu_Timeout_NS)); // its polls stopped
 }
 
+// IdleDisplaySleep's "away from play": the pause menu, the menus, or the background with a UI up; not a match, not a
+// map loading, not the game starting
+static void test_away_from_play(void) {
+    frame_limits_t limits = { 0 };
+    CHECK(!frame_limit_away_from_play(&limits, Second)); // the game starting: no UI yet
+    atomic_store(&limits.in_background, true);
+    CHECK(!frame_limit_away_from_play(&limits, Second)); // starting behind another app: still no UI
+    atomic_store(&limits.in_background, false);
+    frame_limit_set_menus(&limits, true, 2 * Second);
+    CHECK(frame_limit_away_from_play(&limits, 2 * Second)); // the menus
+    frame_limit_ui_gone(&limits);
+    CHECK(!frame_limit_away_from_play(&limits, 3 * Second)); // a map loading
+    frame_limit_set_menus(&limits, false, 20 * Second);
+    CHECK(!frame_limit_away_from_play(&limits, 20 * Second)); // the match
+    frame_limit_set_pause_menu(&limits, true, 21 * Second);
+    CHECK(frame_limit_away_from_play(&limits, 21 * Second)); // paused
+    frame_limit_set_pause_menu(&limits, false, 22 * Second);
+    frame_limit_set_menus(&limits, false, 22 * Second); // the match's UI polls on
+    CHECK(!frame_limit_away_from_play(&limits, 22 * Second)); // play goes on
+    atomic_store(&limits.in_background, true);
+    CHECK(frame_limit_away_from_play(&limits, 22 * Second)); // the match behind another app
+    // its UI stops polling (a load that keeps the old UI state): not away 2 s after the last poll
+    CHECK(frame_limit_away_from_play(&limits, 22 * Second + Pause_Menu_Timeout_NS - 1));
+    CHECK(!frame_limit_away_from_play(&limits, 22 * Second + Pause_Menu_Timeout_NS));
+    // the pause menu that stops saying so ends after its timeout too
+    atomic_store(&limits.in_background, false);
+    frame_limit_set_pause_menu(&limits, true, 30 * Second);
+    CHECK(frame_limit_away_from_play(&limits, 30 * Second + Pause_Menu_Timeout_NS - 1));
+    CHECK(!frame_limit_away_from_play(&limits, 30 * Second + Pause_Menu_Timeout_NS));
+}
+
 // LowPowerFPS applies while macOS's Low Power Mode is on, on battery or not, and the lowest limit still wins. The power
 // watch logs it, so frame_limit_for_frame doesn't.
 static void test_low_power(void) {
@@ -359,6 +390,7 @@ int main(void) {
     test_background();
     test_background_not_loading();
     test_in_match();
+    test_away_from_play();
     test_low_power();
     if (failures == 0)
         printf("test_frame_limit: all passed\n");

@@ -45,6 +45,10 @@ void gpu_tweaks_ui_gone(void);
 // up, 10 to 240 (0 = off)
 void gpu_tweaks_background_fps_init(int fps, code_patch_fn checked_code_patch);
 
+// IdleDisplaySleep (display_sleep.h): 0 the game keeps the display on as it always did, 1 the display may turn off
+// while the game is paused, in the menus or in the background on battery, 2 the same always
+void gpu_tweaks_idle_display_sleep_init(int mode);
+
 // setting: DynamicResolution, the lowest share of ResolutionPercent to go down to while the GPU can't keep up with the
 // display's refresh rate, 50 to 95 (0 = off), see dynres.h
 void gpu_tweaks_dynres_init(int setting, code_patch_fn checked_code_patch);
@@ -69,5 +73,6 @@ bool gpu_tweaks_set_menu_fps(int fps);
 bool gpu_tweaks_set_background_fps(int fps);
 bool gpu_tweaks_set_frame_stats(int seconds);
 bool gpu_tweaks_set_dynamic_resolution(int setting);
+bool gpu_tweaks_set_idle_display_sleep(int mode);
 
 #endif

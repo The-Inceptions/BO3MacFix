@@ -63,6 +63,14 @@ static int quick_save_looks = 0; // the controller states the quick save's L3 + 
 void quick_save_pad(uint32_t user, uint16_t buttons) {
     quick_save_looks++;
 }
+// the controller states IdleDisplaySleep saw, and the last one
+static int display_sleep_looks = 0;
+static XINPUT_GAMEPAD display_sleep_last;
+void display_sleep_controller(uint16_t buttons, uint8_t left_trigger, uint8_t right_trigger, int16_t left_x,
+                              int16_t left_y, int16_t right_x, int16_t right_y) {
+    display_sleep_looks++;
+    display_sleep_last = (XINPUT_GAMEPAD){ buttons, left_trigger, right_trigger, left_x, left_y, right_x, right_y };
+}
 
 // Aspyr's own XInput functions: connected only where SDL has a controller
 static uint32_t aspyr_get_state(uint32_t user_index, XINPUT_STATE *state) {
@@ -298,6 +306,26 @@ int main(void) {
 
     // the quick save looks at the states the game reads, bridged or SDL's (L3 + R3 in the pause menu)
     CHECK(quick_save_looks > 0);
+
+    // IdleDisplaySleep sees each state the game reads of a bridged controller, every field as the game gets it, and
+    // SDL's (Aspyr's) states too; none while the game isn't the active app (a neutral state is no input)
+    os_unfair_lock_lock(&pads_lock);
+    f->state.Gamepad = (XINPUT_GAMEPAD){ 0x1001, 40, 200, -9000, 12000, 300, -32768 };
+    os_unfair_lock_unlock(&pads_lock);
+    int looks = display_sleep_looks;
+    CHECK(get(0) == ERROR_SUCCESS && display_sleep_looks == looks + 1);
+    CHECK(display_sleep_last.wButtons == 0x1001 && display_sleep_last.bLeftTrigger == 40 &&
+          display_sleep_last.bRightTrigger == 200 && display_sleep_last.sThumbLX == -9000 &&
+          display_sleep_last.sThumbLY == 12000 && display_sleep_last.sThumbRX == 300 &&
+          display_sleep_last.sThumbRY == -32768);
+    atomic_store(&app_active, false);
+    looks = display_sleep_looks;
+    CHECK(get(0) == ERROR_SUCCESS && display_sleep_looks == looks);
+    atomic_store(&app_active, true);
+    set_sdl(1, xbox);
+    looks = display_sleep_looks;
+    CHECK(get(1) == ERROR_SUCCESS && display_sleep_looks == looks + 1);
+    set_sdl(1, NULL);
 
     drain_input_queue();
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.2, false); // the player index updates, on the main queue

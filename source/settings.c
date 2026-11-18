@@ -79,6 +79,7 @@ static const setting_t settings[] = {
     { "PauseMenuFPS", "Pause menu frame limit", "Limits the frame rate while the pause menu is open in a match, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 30, Live_Present },
     { "MenuFPS", "Menu frame limit", "Limits the frame rate in the menus outside a match (main menu, lobby, mods), to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 40, Live_Present },
     { "BackgroundFPS", "Background frame limit", "Limits the frame rate while the game isn't the active app, or is hidden or minimized, to save power.", "Graphics", false, 4, { 0, 15, 30, 60 }, { "Off", "15", "30", "60" }, 30, Live_Present },
+    { "IdleDisplaySleep", "Display sleep when idle", "Lets the display turn off after the Mac's own idle time while the game is paused, in the menus or in the background; the game otherwise keeps it on for as long as it runs. A controller's input counts as activity.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "On battery", "Always" }, 0, Live_Always },
     { "DynamicResolution", "Dynamic resolution", "Lowers the 3D scene's resolution a little while the GPU can't keep up with the refresh rate (down to this share of Render Resolution), and raises it again when it can.", "Graphics", false, 6, { 0, 85, 75, 70, 60, 50 }, { "Off", "Down to 85%", "Down to 75%", "Down to 70%", "Down to 60%", "Down to 50%" }, 0, Live_Present },
     { "MetalFXUpscale", "MetalFX upscaling", "Upscales with MetalFX when the game runs below the screen's resolution. \"Panel resolution\" is for scaled monitor modes.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "On", "On, panel resolution" }, 0, Live_Never },
     { "MetalHUD", "Metal performance HUD", "Shows macOS's Metal HUD with the frame rate and GPU time.", "Graphics", Toggle(0) },
@@ -192,6 +193,8 @@ static bool apply_live(const setting_t *t, int value) {
         return gpu_tweaks_set_frame_stats(value);
     if (strcmp(n, "DynamicResolution") == 0)
         return gpu_tweaks_set_dynamic_resolution(value);
+    if (strcmp(n, "IdleDisplaySleep") == 0)
+        return gpu_tweaks_set_idle_display_sleep(value);
     if (strcmp(n, "JobIdleFix") == 0)
         return cpu_tuning_set_wait_fix(Wait_Fix_Job, value);
     if (strcmp(n, "RenderIdleFix") == 0)
