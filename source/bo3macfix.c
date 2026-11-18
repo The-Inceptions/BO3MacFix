@@ -1311,6 +1311,9 @@ __attribute__((constructor)) static void dylib_main() {
     // isn't the active app or can't be seen, with the menus or a match up (BackgroundFPS, 30 by default), see
     // gpu_tweaks.c and app_focus.m
     gpu_tweaks_menu_fps_init(read_int_setting_or_env("MenuFPS", 40), checked_code_patch);
+    // and lower still in the pause menu or the menus left untouched for 10 s (IdleMenuFPS, off unless set), see
+    // gpu_tweaks.c
+    gpu_tweaks_idle_menu_fps_init(read_int_setting_or_env("IdleMenuFPS", 0), checked_code_patch);
     gpu_tweaks_background_fps_init(read_int_setting_or_env("BackgroundFPS", 30), checked_code_patch);
     // let the display turn off after the Mac's own idle time while the game is paused, in the menus or in the
     // background (IdleDisplaySleep, off unless set: 1 on battery, 2 always), see display_sleep.h

@@ -79,6 +79,7 @@ static const setting_t settings[] = {
     { "LowPowerFPS", "Low Power Mode frame limit", "Limits the frame rate while macOS's Low Power Mode is on, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 0, Live_Present },
     { "PauseMenuFPS", "Pause menu frame limit", "Limits the frame rate while the pause menu is open in a match, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 30, Live_Present },
     { "MenuFPS", "Menu frame limit", "Limits the frame rate in the menus outside a match (main menu, lobby, mods), to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 40, Live_Present },
+    { "IdleMenuFPS", "Idle menu frame limit", "Lowers the frame rate to this while the pause menu or the menus have been left untouched for 10 seconds (no key, mouse, trackpad or controller input), to save power while you're away; any input brings the menu's own limit back.", "Graphics", false, 4, { 0, 10, 15, 20 }, { "Off", "10", "15", "20" }, 0, Live_Present },
     { "BackgroundFPS", "Background frame limit", "Limits the frame rate while the game isn't the active app, or is hidden or minimized, to save power.", "Graphics", false, 4, { 0, 15, 30, 60 }, { "Off", "15", "30", "60" }, 30, Live_Present },
     { "VoiceMicrophone", "Microphone for voice chat", "The game has Steam record the microphone from its start to its end for voice chat, whether or not anybody can hear you, so macOS shows the microphone in use the whole time. Off keeps it closed: no voice chat from this Mac, you still hear others. Applies at the next start.", "Game", Toggle(1) },
     { "IdleDisplaySleep", "Display sleep when idle", "Lets the display turn off after the Mac's own idle time while the game is paused, in the menus or in the background; the game otherwise keeps it on for as long as it runs. A controller's input counts as activity.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "On battery", "Always" }, 0, Live_Always },
@@ -193,6 +194,8 @@ static bool apply_live(const setting_t *t, int value) {
         return gpu_tweaks_set_menu_fps(value);
     if (strcmp(n, "BackgroundFPS") == 0)
         return gpu_tweaks_set_background_fps(value);
+    if (strcmp(n, "IdleMenuFPS") == 0)
+        return gpu_tweaks_set_idle_menu_fps(value);
     if (strcmp(n, "FrameStats") == 0)
         return gpu_tweaks_set_frame_stats(value);
     if (strcmp(n, "DynamicResolution") == 0)

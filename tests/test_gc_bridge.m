@@ -71,6 +71,14 @@ void display_sleep_controller(uint16_t buttons, uint8_t left_trigger, uint8_t ri
     display_sleep_looks++;
     display_sleep_last = (XINPUT_GAMEPAD){ buttons, left_trigger, right_trigger, left_x, left_y, right_x, right_y };
 }
+// and the ones IdleMenuFPS saw (gpu_tweaks.c)
+static int idle_menu_looks = 0;
+static XINPUT_GAMEPAD idle_menu_last;
+void gpu_tweaks_controller_input(uint16_t buttons, uint8_t left_trigger, uint8_t right_trigger, int16_t left_x,
+                                 int16_t left_y, int16_t right_x, int16_t right_y) {
+    idle_menu_looks++;
+    idle_menu_last = (XINPUT_GAMEPAD){ buttons, left_trigger, right_trigger, left_x, left_y, right_x, right_y };
+}
 
 // Aspyr's own XInput functions: connected only where SDL has a controller
 static uint32_t aspyr_get_state(uint32_t user_index, XINPUT_STATE *state) {
@@ -312,12 +320,13 @@ int main(void) {
     os_unfair_lock_lock(&pads_lock);
     f->state.Gamepad = (XINPUT_GAMEPAD){ 0x1001, 40, 200, -9000, 12000, 300, -32768 };
     os_unfair_lock_unlock(&pads_lock);
-    int looks = display_sleep_looks;
-    CHECK(get(0) == ERROR_SUCCESS && display_sleep_looks == looks + 1);
+    int looks = display_sleep_looks, idle_looks = idle_menu_looks;
+    CHECK(get(0) == ERROR_SUCCESS && display_sleep_looks == looks + 1 && idle_menu_looks == idle_looks + 1);
     CHECK(display_sleep_last.wButtons == 0x1001 && display_sleep_last.bLeftTrigger == 40 &&
           display_sleep_last.bRightTrigger == 200 && display_sleep_last.sThumbLX == -9000 &&
           display_sleep_last.sThumbLY == 12000 && display_sleep_last.sThumbRX == 300 &&
           display_sleep_last.sThumbRY == -32768);
+    CHECK(memcmp(&idle_menu_last, &display_sleep_last, sizeof(idle_menu_last)) == 0); // the same fields for IdleMenuFPS
     atomic_store(&app_active, false);
     looks = display_sleep_looks;
     CHECK(get(0) == ERROR_SUCCESS && display_sleep_looks == looks);

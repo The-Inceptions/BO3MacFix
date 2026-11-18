@@ -28,6 +28,7 @@
 #include "controllers.h"
 #include "display_sleep_mac.h"
 #include "gc_bridge.h"
+#include "gpu_tweaks.h"
 #include "quick_save.h"
 #include "notices.h"
 #include "prepatch.h"
@@ -429,6 +430,9 @@ void gc_bridge_test_pad(uint16_t buttons, int16_t left_x, int16_t left_y, int16_
 static void controller_input(const XINPUT_GAMEPAD *pad) {
     display_sleep_controller(pad->wButtons, pad->bLeftTrigger, pad->bRightTrigger, pad->sThumbLX, pad->sThumbLY,
                              pad->sThumbRX, pad->sThumbRY);
+    // and for IdleMenuFPS (gpu_tweaks.c): input in a menu lifts its lower rate at once
+    gpu_tweaks_controller_input(pad->wButtons, pad->bLeftTrigger, pad->bRightTrigger, pad->sThumbLX, pad->sThumbLY,
+                                pad->sThumbRX, pad->sThumbRY);
 }
 
 install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STATE *state) {

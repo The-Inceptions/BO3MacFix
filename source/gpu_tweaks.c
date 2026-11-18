@@ -27,6 +27,7 @@
 #include <stdatomic.h>
 #include <dispatch/dispatch.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
 #include <IOKit/ps/IOPowerSources.h>
 #include <IOKit/ps/IOPSKeys.h>
 #include <mach/mach_time.h>
@@ -207,6 +208,7 @@ static void log_limits(int started, int stopped, int fps) {
         { Limit_Pause_Menu, "pause menu open in a match", "pause menu closed" },
         { Limit_Menus, "in the menus", "left the menus" },
         { Limit_Background, "the game is in the background", "the game is in front again" },
+        { Limit_Idle, "nothing pressed in the menu for 10 s", "input in the menu again" },
     };
     for (int i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
         if (started & names[i].bit)
@@ -1114,8 +1116,34 @@ void gpu_tweaks_pause_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
     printf("limiting the frame rate to %i fps in the pause menu\n", fps);
 }
 
+// IdleMenuFPS: when a controller last gave input (the XInput hook, gpu_tweaks_controller_input), 0 never
+static _Atomic uint64_t controller_input_at = 0;
+
+// IdleMenuFPS: whether nothing has been pressed for Idle_Menu_Seconds, looked at with each of notices.lua's polls
+// (four times a second in the menus and in a match); the keyboard, mouse and trackpad from macOS's own event times
+static void idle_menu_tick(uint64_t now) {
+    if (atomic_load(&limits.idle_menu_fps) == 0) {
+        atomic_store(&limits.idle, false);
+        return;
+    }
+    double hid = CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState, kCGAnyInputEventType);
+    uint64_t pad = atomic_load(&controller_input_at);
+    double controller = pad != 0 && now > pad ? (now - pad) / 1e9 : pad != 0 ? 0.0 : 1e9;
+    atomic_store(&limits.idle, frame_limit_idle(hid, controller));
+}
+
+void gpu_tweaks_controller_input(uint16_t buttons, uint8_t left_trigger, uint8_t right_trigger, int16_t left_x,
+                                 int16_t left_y, int16_t right_x, int16_t right_y) {
+    if (atomic_load_explicit(&limits.idle_menu_fps, memory_order_relaxed) == 0 ||
+        !display_sleep_is_input(buttons, left_trigger, right_trigger, left_x, left_y, right_x, right_y))
+        return;
+    atomic_store(&controller_input_at, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+    atomic_store(&limits.idle, false); // the menu's own limit from the next frame, not the next poll
+}
+
 void gpu_tweaks_pause_menu_open(bool open) {
     frame_limit_set_pause_menu(&limits, open, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+    idle_menu_tick(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     display_sleep_tick();
 }
 
@@ -1133,6 +1161,7 @@ void gpu_tweaks_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
 
 void gpu_tweaks_menus_open(bool in_menus) {
     frame_limit_set_menus(&limits, in_menus, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+    idle_menu_tick(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     display_sleep_tick();
 }
 
@@ -1140,6 +1169,18 @@ void gpu_tweaks_ui_gone(void) {
     frame_limit_ui_gone(&limits);
     display_sleep_tick(); // a map loads: play goes on
     atomic_store(&dynres_prewarm_arm, true); // a map loads: warm DynamicResolution's sizes up when its match starts
+}
+
+void gpu_tweaks_idle_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
+    if (fps < 5 || fps > 60)
+        return;
+    if (!redirect_present(checked_code_patch)) {
+        printf("couldn't hook Aspyr's present, no IdleMenuFPS\n");
+        return;
+    }
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    atomic_store(&limits.idle_menu_fps, fps);
+    printf("limiting the frame rate to %i fps in a menu left untouched for %.0f s\n", fps, Idle_Menu_Seconds);
 }
 
 // from the main thread (app_focus.m)
@@ -1299,6 +1340,20 @@ bool gpu_tweaks_set_menu_fps(int fps) {
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
     atomic_store(&limits.menu_fps, fps);
     printf(fps != 0 ? "limiting the frame rate to %i fps in the menus\n" : "not limiting the frame rate in the menus\n", fps);
+    return true;
+}
+
+bool gpu_tweaks_set_idle_menu_fps(int fps) {
+    if (fps != 0 && (fps < 5 || fps > 60))
+        return false;
+    if (fps != 0 && !present_live())
+        return false;
+    sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");
+    atomic_store(&limits.idle_menu_fps, fps);
+    if (fps == 0)
+        atomic_store(&limits.idle, false);
+    printf(fps != 0 ? "limiting the frame rate to %i fps in a menu left untouched for 10 s\n"
+                    : "not limiting the frame rate in a menu left untouched\n", fps);
     return true;
 }
 

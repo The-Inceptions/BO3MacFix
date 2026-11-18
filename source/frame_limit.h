@@ -17,7 +17,12 @@ enum {
     Limit_Menus = 2,      // MenuFPS: in the menus, outside a match (the main menu, the lobby, the mods menu)
     Limit_Background = 4, // BackgroundFPS: the game isn't the active app, or is hidden or minimized, with the menus
                           // or a match up (not while a map loads)
+    Limit_Idle = 8,       // IdleMenuFPS: the pause menu open or the menus up, and nothing pressed for Idle_Menu_Seconds
 };
+
+// how long nothing may be pressed (keyboard, mouse, trackpad, a controller) in the pause menu or the menus before
+// IdleMenuFPS applies
+#define Idle_Menu_Seconds 10.0
 
 // one frame rate limit: its rate (0 = off) and whether it applies right now
 typedef struct {
@@ -41,11 +46,11 @@ int frame_limit_shown(int fps, int display_fps);
 int frame_limit_refreshes(int fps, int display_fps);
 
 typedef struct {
-    // FramePacingFPS, BatteryFPS, PauseMenuFPS, MenuFPS, BackgroundFPS and LowPowerFPS, 0 = off
-    atomic_int pacing_fps, battery_fps, pause_menu_fps, menu_fps, background_fps, low_power_fps;
+    // FramePacingFPS, BatteryFPS, PauseMenuFPS, MenuFPS, BackgroundFPS, LowPowerFPS and IdleMenuFPS, 0 = off
+    atomic_int pacing_fps, battery_fps, pause_menu_fps, menu_fps, background_fps, low_power_fps, idle_menu_fps;
     // on battery, in the background, and macOS's Low Power Mode on (the user asked macOS to save power, which can be
-    // on with the charger in too)
-    atomic_bool on_battery, in_background, low_power;
+    // on with the charger in too); idle: nothing pressed for Idle_Menu_Seconds (the glue says so, gpu_tweaks.c)
+    atomic_bool on_battery, in_background, low_power, idle;
     // when the pause menu stops counting as open, the game as in the menus, and the UI as up (nanoseconds of a clock
     // that only goes forward), 0 while it isn't. The UI is up while notices.lua polls: in the menus and in a match,
     // not while the game starts or a map loads.
@@ -70,6 +75,10 @@ bool frame_limit_in_match(frame_limits_t *limits, uint64_t now);
 
 // whether the UI said the game is in the menus, outside a match, in the last 2 s
 bool frame_limit_in_menus(frame_limits_t *limits, uint64_t now);
+
+// IdleMenuFPS's idle: nothing pressed for Idle_Menu_Seconds, on the keyboard, mouse or trackpad (seconds since macOS
+// saw any such input) and on any controller the game reads (seconds since the last input there)
+bool frame_limit_idle(double hid_seconds, double controller_seconds);
 
 // whether nobody can be playing at now, for IdleDisplaySleep: the pause menu is open in a match, the game is in the
 // menus, or it is in the background with the menus or a match up (in_background is only kept with BackgroundFPS or

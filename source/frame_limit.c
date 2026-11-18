@@ -48,6 +48,10 @@ bool frame_limit_in_menus(frame_limits_t *limits, uint64_t now) {
     return lasts(&limits->menus_until, now);
 }
 
+bool frame_limit_idle(double hid_seconds, double controller_seconds) {
+    return hid_seconds >= Idle_Menu_Seconds && controller_seconds >= Idle_Menu_Seconds;
+}
+
 bool frame_limit_away_from_play(frame_limits_t *limits, uint64_t now) {
     return lasts(&limits->pause_menu_until, now) || lasts(&limits->menus_until, now) ||
            (atomic_load(&limits->in_background) && lasts(&limits->ui_until, now));
@@ -60,12 +64,14 @@ int frame_limit_for_frame(frame_limits_t *limits, uint64_t now, int *started, in
         { atomic_load(&limits->pause_menu_fps), lasts(&limits->pause_menu_until, now) },
         { atomic_load(&limits->menu_fps), lasts(&limits->menus_until, now) },
         { atomic_load(&limits->background_fps), atomic_load(&limits->in_background) && lasts(&limits->ui_until, now) },
+        { atomic_load(&limits->idle_menu_fps), atomic_load(&limits->idle) &&
+                                                   (lasts(&limits->pause_menu_until, now) || lasts(&limits->menus_until, now)) },
         // not one of the situational ones logged here: the power watch (gpu_tweaks.c) logs it, like BatteryFPS
         { atomic_load(&limits->low_power_fps), atomic_load(&limits->low_power) },
     };
     // the situational ones, in Limit_* bit order, from all[2]
     int situations = 0, limiting = 0;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         if (all[2 + i].applies)
             situations |= 1 << i;
         if (all[2 + i].applies && all[2 + i].fps > 0)

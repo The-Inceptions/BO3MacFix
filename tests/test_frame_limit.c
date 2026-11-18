@@ -289,6 +289,69 @@ static void test_in_match(void) {
     CHECK(!frame_limit_in_match(&limits, 20 * Second + Pause_Menu_Timeout_NS)); // its polls stopped
 }
 
+// IdleMenuFPS: in the pause menu or the menus, once nothing has been pressed for a while (the glue's idle flag), the
+// lower idle rate; any input lifts it; never in a match itself, and nothing with the setting off
+static void test_idle_menu(void) {
+    frame_limits_t limits = { 0 };
+    int started, stopped;
+    atomic_store(&limits.pause_menu_fps, 30);
+    atomic_store(&limits.menu_fps, 40);
+    atomic_store(&limits.battery_fps, 40);
+    atomic_store(&limits.on_battery, true);
+    // off: idle in the pause menu changes nothing
+    frame_limit_set_menus(&limits, false, Second);
+    frame_limit_set_pause_menu(&limits, true, Second);
+    atomic_store(&limits.idle, true);
+    CHECK(frame_limit_for_frame(&limits, Second, &started, &stopped) == 30 && started == Limit_Pause_Menu);
+    // turned on while idle in the pause menu: 10, logged as the idle limit starting
+    atomic_store(&limits.idle_menu_fps, 10);
+    CHECK(frame_limit_for_frame(&limits, Second + Frame, &started, &stopped) == 10 && started == Limit_Idle &&
+          stopped == 0);
+    CHECK(frame_limit_for_frame(&limits, Second + 2 * Frame, &started, &stopped) == 10 && started == 0);
+    // input: the pause menu's 30 at once, the idle limit logged as stopping
+    atomic_store(&limits.idle, false);
+    CHECK(frame_limit_for_frame(&limits, Second + 3 * Frame, &started, &stopped) == 30 && stopped == Limit_Idle &&
+          started == 0);
+    // idle again, then the pause menu closes: back to the battery's 40, both logged as stopping
+    atomic_store(&limits.idle, true);
+    CHECK(frame_limit_for_frame(&limits, Second + 4 * Frame, &started, &stopped) == 10 && started == Limit_Idle);
+    frame_limit_set_pause_menu(&limits, false, Second + 5 * Frame);
+    CHECK(frame_limit_for_frame(&limits, Second + 5 * Frame, &started, &stopped) == 40 &&
+          stopped == (Limit_Pause_Menu | Limit_Idle));
+    // in a match, idle (a player standing still, or reading): never, it isn't a menu
+    CHECK(frame_limit_for_frame(&limits, Second + 6 * Frame, &started, &stopped) == 40 && started == 0);
+    // in the menus, idle: 10; the idle limit's 15 instead: 15; with the background's lower 10 too: 10
+    frame_limit_set_menus(&limits, true, 2 * Second);
+    CHECK(frame_limit_for_frame(&limits, 2 * Second, &started, &stopped) == 10 &&
+          started == (Limit_Menus | Limit_Idle));
+    atomic_store(&limits.idle_menu_fps, 15);
+    CHECK(frame_limit_for_frame(&limits, 2 * Second + Frame, &started, &stopped) == 15);
+    atomic_store(&limits.background_fps, 10);
+    atomic_store(&limits.in_background, true);
+    CHECK(frame_limit_for_frame(&limits, 2 * Second + 2 * Frame, &started, &stopped) == 10 &&
+          started == Limit_Background);
+    atomic_store(&limits.in_background, false);
+    // turned off while idle in the menus: the menus' 40 again, and no idle line (the settings page logs that)
+    atomic_store(&limits.idle_menu_fps, 0);
+    CHECK(frame_limit_for_frame(&limits, 2 * Second + 3 * Frame, &started, &stopped) == 40 &&
+          stopped == Limit_Background && started == 0);
+    // on again, then the menus' polls stop (a map loads): idle doesn't keep any limit
+    atomic_store(&limits.idle_menu_fps, 10);
+    CHECK(frame_limit_for_frame(&limits, 2 * Second + 4 * Frame, &started, &stopped) == 10 && started == Limit_Idle);
+    frame_limit_ui_gone(&limits);
+    CHECK(frame_limit_for_frame(&limits, 3 * Second, &started, &stopped) == 40 &&
+          (stopped & (Limit_Menus | Limit_Idle)) == (Limit_Menus | Limit_Idle));
+}
+
+// IdleMenuFPS's idle: nothing on the keyboard, mouse or trackpad and nothing on a controller for 10 s
+static void test_idle_rule(void) {
+    CHECK(frame_limit_idle(Idle_Menu_Seconds, Idle_Menu_Seconds));
+    CHECK(frame_limit_idle(1e9, 1e9));
+    CHECK(!frame_limit_idle(Idle_Menu_Seconds - 0.01, 1e9)); // a key a moment ago
+    CHECK(!frame_limit_idle(1e9, Idle_Menu_Seconds - 0.01)); // a controller's button a moment ago
+    CHECK(!frame_limit_idle(0, 0));
+}
+
 // IdleDisplaySleep's "away from play": the pause menu, the menus, or the background with a UI up; not a match, not a
 // map loading, not the game starting
 static void test_away_from_play(void) {
@@ -391,6 +454,8 @@ int main(void) {
     test_background_not_loading();
     test_in_match();
     test_away_from_play();
+    test_idle_menu();
+    test_idle_rule();
     test_low_power();
     if (failures == 0)
         printf("test_frame_limit: all passed\n");

@@ -36,6 +36,14 @@ void gpu_tweaks_pause_menu_open(bool open);
 // fps: the frame rate limit in the menus outside a match (the main menu, the lobby, the mods menu), 30 to 240 (0 = off)
 void gpu_tweaks_menu_fps_init(int fps, code_patch_fn checked_code_patch);
 
+// fps: IdleMenuFPS, the frame rate limit while the pause menu or the menus have been left untouched for
+// Idle_Menu_Seconds (no key, mouse, trackpad or controller input), 5 to 60 (0 = off)
+void gpu_tweaks_idle_menu_fps_init(int fps, code_patch_fn checked_code_patch);
+
+// from the controller code (gc_bridge.m) for each state the game reads: a player's input there ends IdleMenuFPS's idle
+void gpu_tweaks_controller_input(uint16_t buttons, uint8_t left_trigger, uint8_t right_trigger, int16_t left_x,
+                                 int16_t left_y, int16_t right_x, int16_t right_y);
+
 // from the engine thread (notices.m): whether the game is in the menus, outside a match, four times a second while a
 // UI Lua state polls (notices.lua). It ends 2 s after the last poll that said so; BackgroundFPS waits for the polls too,
 // so it doesn't hold back the game starting or a map loading.
@@ -75,6 +83,7 @@ bool gpu_tweaks_set_low_power_fps(int fps);
 bool gpu_tweaks_set_battery_resolution(int setting);
 bool gpu_tweaks_set_pause_menu_fps(int fps);
 bool gpu_tweaks_set_menu_fps(int fps);
+bool gpu_tweaks_set_idle_menu_fps(int fps);
 bool gpu_tweaks_set_background_fps(int fps);
 bool gpu_tweaks_set_frame_stats(int seconds);
 bool gpu_tweaks_set_dynamic_resolution(int setting);
