@@ -88,7 +88,8 @@ uint64_t get_base_address() {
 // Gets just the filename of a given path
 const char *filename_from_path(const char *path) {
     size_t len = strlen(path);
-    for (size_t i = len - 1; i > 0; i--) {
+    // (an empty path has no last character to start from)
+    for (size_t i = len > 0 ? len - 1 : 0; i > 0; i--) {
         if (path[i] == '/')
             return path + i + 1;
     }
@@ -125,24 +126,19 @@ void replace_vtable_entry(void *entry, void *replacement) {
     DobbyCodePatch(entry, replacement_bytes, 8);
 }
 
-// Checks if a file at a given path is a macOS binary
+// Checks if a file at a given path is a macOS binary (each Lua loadlib asks; the file is closed whatever it is)
 bool is_macos_dylib(const char *path) {
     FILE *fp = fopen(path, "rb");
-    if (fp != NULL) {
-        uint8_t file_magic[4] = {0};
-        if (fread(file_magic, 1, 4, fp) == 4) {
-            // 0xFEEDFACF - 64-bit Mach-O
-            static const uint8_t macho_header_64bit[4] = {0xcf, 0xfa, 0xed, 0xfe};
-            if (memcmp(file_magic, macho_header_64bit, 4) == 0)
-                return true;
-            // 0xCAFEBABE - fat Mach-O
-            static const uint8_t macho_header_fat[4] = {0xca, 0xfe, 0xba, 0xbe};
-            if (memcmp(file_magic, macho_header_fat, 4) == 0)
-                return true;
-        }
-        fclose(fp);
-    }
-    return false;
+    if (fp == NULL)
+        return false;
+    uint8_t file_magic[4] = {0};
+    bool read = fread(file_magic, 1, 4, fp) == 4;
+    fclose(fp);
+    // 0xFEEDFACF - 64-bit Mach-O
+    static const uint8_t macho_header_64bit[4] = {0xcf, 0xfa, 0xed, 0xfe};
+    // 0xCAFEBABE - fat Mach-O
+    static const uint8_t macho_header_fat[4] = {0xca, 0xfe, 0xba, 0xbe};
+    return read && (memcmp(file_magic, macho_header_64bit, 4) == 0 || memcmp(file_magic, macho_header_fat, 4) == 0);
 }
 
 // Gets the SHA-1 hash of a file
@@ -163,12 +159,13 @@ bool get_file_sha1(const char *path, uint8_t *output_hash) {
     return false;
 }
 
+// each byte as two lowercase hex digits (snprintf may not read the text it writes, so each pair goes to its place)
 bool bytes_to_hex(const uint8_t *bytes, size_t bytes_len, char *out_string, size_t out_string_len) {
     if ((bytes_len * 2) >= out_string_len)
         return false;
     out_string[0] = '\0';
     for (size_t i = 0; i < bytes_len; i++) {
-        snprintf(out_string, out_string_len, "%s%02x", out_string, bytes[i]);
+        snprintf(out_string + i * 2, out_string_len - i * 2, "%02x", bytes[i]);
     }
     return true;
 }
