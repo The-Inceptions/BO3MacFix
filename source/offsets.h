@@ -629,6 +629,10 @@
 #define ADDR_playerKeys 0x1a1cd770 // PlayerKeyState[] (0x1940 bytes each): keys[256] of 24 bytes at +0x138, int down first (Key_SetBinding 0x101546a78; Windows 0x14531d850)
 #define ADDR_com_quitInProgress 0x118dfaac // int, Com_Quit (text "quitting...") sets it to 1 (Windows 0x15686e93c)
 #define ADDR_DB_FreeUnusedResources 0x13490b7 // func - void (bool), only the second flag of the Windows one (0x141421590, T7Overcharged's pattern): the same text "unloaded inuse" and the branch on it, 3 callers on both sides
+// ModUnloadFix (mod_unload_fix.c): the lobby's Lua VM, and where the game's Lua file loading can be met
+#define ADDR_LobbyVM_State 0x52fdc60 // lua_State *: the lobby's Lua VM, made once by LobbyVM_Init 0x11c8ebb ("Starting up Lobby Lua VM"; stored at 0x11c8eef, before it requires lua.Lobby.Lobby), closed and made anew only by its restart 0x11c8f1e (the lobby_reload command, LiveStorage_RefetchPubStorageFiles); its frame's LOBBY_LUACALL("Pump") is 0x11c8d8a (Windows: the pointer 0x1556d9960, init 0x141ee2ec0, restart 0x141ee4640)
+#define ADDR_LuaFile_Reader 0x138a6d5 // func - const char *(lua_State *, LuaFile *, size_t *size): the lua_Reader hksL_loadfile (0x147443c, used by require's searcher 0x148482b) hands lua_load: the asset's bytes (+0x10, +8 long) in one piece, no copy, which the parser runs in place; its only reference is 0x147448f (Windows: not looked up)
+#define ADDR_hksi_lua_close 0x1446d26 // func - void (lua_State *): closes a Lua VM and frees all of it; called only by the game's VM closers 0x15297a8 (one VM) and 0x15297ff (all) (Windows: not looked up)
 // MissingMapGuard (missing_map_guard.c): the lobby host's launch task and what its preload stage asks
 // (wip/night/crash-journey.md, sections 12 and 13)
 #define ADDR_LaunchGamePump 0x108830b // func - int (task *): the launch task's step, its callback at +0x28 of its definition 0x1b72320 ("task_lobbyhost_launchGame"; failed callback 0x10882aa); 0 go on, 1 done, 2 failed. Stage 0x1f (at 0x1088484) preloads: LobbyHost_IsHost(1), Com_IsInGame, the map and game type, then Com_KillUILevel, then its two failures (0x108865c, 0x1088709)

@@ -52,6 +52,7 @@
 #include "font_resolution.h"
 #include "lua_heap.h"
 #include "lua_unref.h"
+#include "mod_unload_fix.h"
 #include "t7o_guards.h"
 #include "pmem_spill.h"
 #include "aae_clientfx.h"
@@ -1192,6 +1193,9 @@ __attribute__((constructor)) static void dylib_main() {
     // releasing Lua reference 0 does nothing instead of writing 64 GB behind the table (LuaUnrefFix, on by default),
     // see lua_unref.c
     lua_unref_init(game_base_address, read_int_setting_or_env("LuaUnrefFix", 1));
+    // the lobby's Lua runs from copies of the files it loads, so unloading a mod in the game (or loading another one)
+    // after a start with the mod on the command line doesn't crash (ModUnloadFix, on by default), see mod_unload_fix.c
+    mod_unload_fix_init(game_base_address, read_int_setting_or_env("ModUnloadFix", 1));
     // two of T7Overcharged's guards against crashes of the game itself, once the mod has loaded it, as on Windows
     // (T7OCrashGuards, on by default), see t7o_guards.c
     t7o_guards_init(game_base_address, read_int_setting_or_env("T7OCrashGuards", 1));

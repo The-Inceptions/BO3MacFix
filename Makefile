@@ -29,6 +29,8 @@ TEST_TARGETS += tests/test_lua_heap
 TEST_TARGETS += tests/test_offline_mode
 # releases of Lua reference 0 (lua_unref.c)
 TEST_TARGETS += tests/test_lua_unref
+# the lobby's Lua files kept as copies, and freed with the VM (mod_unload_fix.c)
+TEST_TARGETS += tests/test_mod_unload_fix
 # the second address space for loaded files (pmem_spill.c)
 TEST_TARGETS += tests/test_pmem_spill
 # All-around Enhancement's rules for traversal (aae_mantle.c)
@@ -173,6 +175,9 @@ SOURCES += source/font_resolution.c
 SOURCES += source/lua_heap.c
 # LuaUnrefFix: releasing Lua reference 0 does nothing (lua_unref.c)
 SOURCES += source/lua_unref.c
+# ModUnloadFix: the lobby's Lua runs from copies of its files, so a mod unloaded in the game can't take them away
+# (mod_unload_fix.c)
+SOURCES += source/mod_unload_fix.c
 # MoreMapMemory: 2 GB more address space for loaded files (pmem_spill.c)
 SOURCES += source/pmem_spill.c
 # AAEMantling: mantling by the rules All-around Enhancement 4 gives its Windows plugin (aae_mantle.c)
@@ -345,6 +350,12 @@ tests/test_lua_heap: tests/test_lua_heap.c source/lua_heap.c source/lua_heap.h s
 # lua_unref.c: which releases reach the game's luaL_unref
 tests/test_lua_unref: tests/test_lua_unref.c source/lua_unref.c source/lua_unref.h source/offsets.h source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_lua_unref.c
+
+# mod_unload_fix.c: the copies kept and freed, and the two hooks against a made-up game
+tests/test_mod_unload_fix: tests/test_mod_unload_fix.c source/mod_unload_fix.c source/mod_unload_fix.h \
+		source/havok.h source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_mod_unload_fix.c
 
 # pmem_spill.c against a made-up PMem: stacks, address spaces and the game's own allocation
 tests/test_pmem_spill: tests/test_pmem_spill.c source/pmem_spill.c source/pmem_spill.h source/offsets.h source/dobby.h

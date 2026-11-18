@@ -150,6 +150,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_hks_load_dll, Push_R15 },
     { ADDR_hksf_fopen_internal, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x31, 0xC0 } }, // ...; xor eax, eax
     { ADDR_hksi_luaL_unref, Push_R15 },
+    { ADDR_hksi_lua_close, Push_R15 },
     { ADDR_HostMigration_PickNewHost, Push_R15 },
     { ADDR_HostMigration_SendToNewHost, Push_R15 },
     { ADDR_HostMigrationStart_Decision, 9, 3, { 0x84, 0xC0, 0x74, 0x0E, 0xBF, 0x04, 0x00, 0x00, 0x00 } }, // test al, al; je +0x0e; mov edi, 4 (a detour)
@@ -177,6 +178,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_Lua_GetBuildIntField, 5, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53 } }, // ...; push rbx
     { ADDR_Lua_GetBuildStringField, Push_R14 },
     { ADDR_Lua_HeapCreate, Push_R14 },
+    { ADDR_LuaFile_Reader, Push_R15 },
     { ADDR_PM_Accelerate, Push_R15 },
     { ADDR_PM_CheckJump_DelayCmp, 6, 0, { 0x81, 0xF9, 0xF4, 0x01, 0x00, 0x00 } }, // cmp ecx, 500 (a detour)
     { ADDR_PM_Friction, Push_R15 },

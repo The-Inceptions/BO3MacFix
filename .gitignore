@@ -80,6 +80,7 @@ tests/test_script_vars
 tests/test_font_resolution
 tests/test_lua_heap
 tests/test_lua_unref
+tests/test_mod_unload_fix
 tests/test_pmem_spill
 tests/test_aae_mantle
 tests/test_aae_hostmig
