@@ -114,11 +114,31 @@ static void test_battery_warnings(void) {
     CHECK(battery_warning(&fresh, 20, false) == 20);
 }
 
+static void test_pause_wait(void) {
+    pause_wait_t wait = { false };
+    // in front: the Escape at once, nothing waits
+    CHECK(pause_wait_press(&wait, true) && !wait.waiting);
+    CHECK(!pause_wait_in_front(&wait, true));
+    // behind another app: it waits, until the game's window is key with the game in front, and is asked for once
+    CHECK(!pause_wait_press(&wait, false) && wait.waiting);
+    CHECK(!pause_wait_in_front(&wait, false) && wait.waiting);
+    CHECK(pause_wait_in_front(&wait, true) && !wait.waiting);
+    CHECK(!pause_wait_in_front(&wait, true));
+    // two disconnects behind: still one pause
+    CHECK(!pause_wait_press(&wait, false) && !pause_wait_press(&wait, false));
+    CHECK(pause_wait_in_front(&wait, true) && !pause_wait_in_front(&wait, true));
+    // the asked-for pause comes back in front: pressed, and nothing more waits
+    CHECK(!pause_wait_press(&wait, false));
+    CHECK(pause_wait_in_front(&wait, true));
+    CHECK(pause_wait_press(&wait, true) && !wait.waiting && !pause_wait_in_front(&wait, true));
+}
+
 int main(void) {
     test_queue_order_and_age();
     test_queue_full_and_duplicates();
     test_lasting();
     test_battery_warnings();
+    test_pause_wait();
     if (failures == 0)
         printf("test_notice_queue: all passed\n");
     return failures == 0 ? 0 : 1;

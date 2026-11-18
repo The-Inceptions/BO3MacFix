@@ -76,3 +76,17 @@ int battery_warning(int *warned, int percent, bool charging) {
         *warned = warn;
     return warn;
 }
+
+bool pause_wait_press(pause_wait_t *wait, bool game_in_front) {
+    if (game_in_front)
+        return true;
+    wait->waiting = true;
+    return false;
+}
+
+bool pause_wait_in_front(pause_wait_t *wait, bool game_in_front) {
+    if (!wait->waiting || !game_in_front)
+        return false;
+    wait->waiting = false;
+    return true;
+}

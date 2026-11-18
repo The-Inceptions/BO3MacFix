@@ -12,7 +12,9 @@
 // offline games, and with AAECoopPause a co-op game this Mac hosts with All-around Enhancement 4, which then pauses
 // for everybody, as on Windows with the mod's plugin), the pause menu isn't open already and the last input came
 // from a controller. To pause, this posts an Escape key press to the game's own event queue, so the engine opens its
-// pause menu and pauses exactly as when the player presses Esc.
+// pause menu and pauses exactly as when the player presses Esc. The game takes keys only while it is in front, though
+// (its window has SDL's keyboard focus), so while it is behind another app the Escape waits: when the game's window is
+// key again, the pause is asked for once more and notices.lua checks again that it's a match that can pause.
 //
 // PauseMenuFPS and MenuFPS: notices.lua also tells gpu_tweaks.c when the pause menu is open in a match and when the
 // game is in the menus outside one, which works with Notices and PauseOnDisconnect off too (notices.lua is loaded in
@@ -247,6 +249,13 @@ static void game_window_moved(NSWindow *window) {
 
 #pragma mark - pausing
 
+static pause_wait_t pause_wait; // main thread
+
+// what the game takes for being in front: its window is key, so SDL gives it the keyboard focus (display_testhooks.m)
+static bool game_in_front(void) {
+    return NSApp.isActive && is_game_window(NSApp.keyWindow);
+}
+
 static void post_escape(bool down) {
     NSWindow *window = NSApp.keyWindow ?: NSApp.mainWindow;
     NSEvent *event = [NSEvent keyEventWithType:down ? NSEventTypeKeyDown : NSEventTypeKeyUp location:NSZeroPoint
@@ -256,14 +265,36 @@ static void post_escape(bool down) {
     [NSApp postEvent:event atStart:NO];
 }
 
-// SDL reads the key from the event queue on the main thread like a real one; the engine acts on the key going down
+// SDL reads the key from the event queue on the main thread like a real one; the engine acts on the key going down.
+// Behind another app the game would drop it (journey J5: the match ran on), so then the pause waits, see
+// game_window_became_key.
 static void press_escape(const char *why) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (!pause_wait_press(&pause_wait, game_in_front())) {
+            printf("BO3MacFix: %s, but the game is behind another app: it pauses when it's in front again\n", why);
+            return;
+        }
         printf("BO3MacFix: %s, pressing Escape for the game's pause menu\n", why);
         post_escape(true);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
             post_escape(false);
         });
+    });
+}
+
+// The game's window is key again: a pause that waited for it is asked for once more, a moment later, when SDL has
+// given the window its keyboard focus (its own observer of the same notification) and the frame limit for the
+// background has let go. Forced: the click or key that brought the game back is the last input now, and the check
+// that the last input came from a controller was made when the controller went. notices.lua checks the rest again
+// (a match that can pause, the pause menu not open) before it asks for the Escape.
+static void game_window_became_key(void) {
+    if (!pause_wait.waiting)
+        return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        if (!pause_wait_in_front(&pause_wait, game_in_front()))
+            return;
+        printf("BO3MacFix: the game is in front again: asking for the pause PauseOnDisconnect waited with\n");
+        request_pause(true);
     });
 }
 
@@ -483,6 +514,8 @@ static void setup(bool tests) {
         NSWindow *window = note.object;
         if (shown_display == 0 && is_game_window(window) && window.screen != nil)
             shown_display = display_of(window.screen);
+        if (is_game_window(window))
+            game_window_became_key();
     }];
 
     // the GameController framework only when the bridge uses it, so SDL keeps controllers to itself otherwise

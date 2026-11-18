@@ -1,5 +1,6 @@
-// The plain C half of BO3MacFix's on-screen notices (notices.m): the queue the game's UI takes them from, and when a
-// controller's battery level is worth a warning. No game or macOS calls, so tests/test_notice_queue.c tests it as is.
+// The plain C half of BO3MacFix's on-screen notices (notices.m): the queue the game's UI takes them from, when a
+// controller's battery level is worth a warning, and when PauseOnDisconnect's Escape can be pressed. No game or macOS
+// calls, so tests/test_notice_queue.c tests it as is.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -32,3 +33,16 @@ bool notice_queue_pop(notice_queue_t *queue, double now, double max_age, char *o
 // about (start it at 0). percent < 0 means unknown. Returns the level to warn about now, or 0. Charging, or the level
 // getting back 20 points above the last warning, starts over.
 int battery_warning(int *warned, int percent, bool charging);
+
+// PauseOnDisconnect's Escape while the game is behind another app. The game takes keys only while its window has SDL's
+// keyboard focus (what it takes for being in front), so an Escape posted then is lost and the match runs on. Instead
+// the pause waits for the game's window to be key again and is then asked for once more.
+typedef struct {
+    bool waiting; // a pause was due while the game wasn't in front
+} pause_wait_t;
+
+// the Escape is due: true to press it now (the game is in front); otherwise the pause waits
+bool pause_wait_press(pause_wait_t *wait, bool game_in_front);
+// the game's window became key: true to ask for a waiting pause again now, once; a pause keeps waiting while the game
+// still isn't in front
+bool pause_wait_in_front(pause_wait_t *wait, bool game_in_front);

@@ -51,7 +51,7 @@ right away, mid-match too: changing **Game display** moves the game to that disp
 | `GyroSensitivity` | 100 | How strongly the gyro turns the view with `GyroAim`, in percent. |
 | `GyroInvert` | 0 | Inverts the gyro's direction with `GyroAim`: 1 vertical, 2 horizontal, 3 both. |
 | `AdaptiveTriggers` | 0 | Experimental: gives the DualSense's R2 a weapon-style break and L2 light resistance. With `ControllerBridge`. |
-| `PauseOnDisconnect` | 0 | Opens the pause menu when the controller you're playing with disconnects mid-match (a Bluetooth dropout, a flat battery), in games that can pause: solo and offline, and a co-op game you host with All-around Enhancement 4 (with `AAECoopPause`, which then pauses it for everybody, as on Windows with the mod's plugin). With `ControllerBridge`. |
+| `PauseOnDisconnect` | 0 | Opens the pause menu when the controller you're playing with disconnects mid-match (a Bluetooth dropout, a flat battery), in games that can pause: solo and offline, and a co-op game you host with All-around Enhancement 4 (with `AAECoopPause`, which then pauses it for everybody, as on Windows with the mod's plugin). With `ControllerBridge`. A controller lost while the game is behind another app pauses it when you bring it back, within half a second: the game takes keys only in front, and a match runs on behind. |
 | `RawMouse` | 0 | Experimental: aims with raw mouse counts instead of macOS's accelerated movement. `RawMouseScale` sets the speed. |
 | `RawMouseScale` | 100 | The speed of `RawMouse` aiming, in percent. |
 | `AAEOnline` | 0 | Lets All-around Enhancement fetch its version notes and weather (HTTPS GET only, to raw.githubusercontent.com and wttr.in). |
