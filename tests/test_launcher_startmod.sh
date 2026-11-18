@@ -105,6 +105,32 @@ expect "StartWithMod: off, since NoCodePatches is on" "NoCodePatches"
 forbid "fs_game" "NoCodePatches"
 rm -f "$macfix/settings.ini"
 
+# settings.ini read as the library reads it, for every setting the launcher reads: past a UTF-8 byte order mark on
+# the first line, in quotes, beyond an int (the library takes the most an int holds), the last line that sets it
+printf '\357\273\277StartWithMod = 0\n' > "$macfix/settings.ini"
+run --
+expect "BO3MACFIX_STARTWITHMOD_LAUNCH=off " "byte order mark, StartWithMod"
+printf '\357\273\277NoCodePatches = 1\n' > "$macfix/settings.ini"
+run --
+expect "StartWithMod: off, since NoCodePatches is on" "byte order mark, NoCodePatches"
+expect "NoCodePatches is on, so the game's code stays as shipped" "byte order mark, NoCodePatches"
+gone "$own/lastmod.pending" "byte order mark, NoCodePatches"
+printf '\357\273\277PrePatchedExe = 0\nSkipIntro = 1\n' > "$macfix/settings.ini"
+run --
+expect "PrePatchedExe is off" "byte order mark, PrePatchedExe"
+rm -f "$own/lastmod.pending"
+printf "StartWithMod = '0'\n" > "$macfix/settings.ini"
+run --
+expect "BO3MACFIX_STARTWITHMOD_LAUNCH=off " "quoted"
+printf 'StartWithMod = 4294967296\n' > "$macfix/settings.ini"
+run --
+expect "BO3MACFIX_STARTWITHMOD_LAUNCH=given 2631943123" "beyond an int"
+rm -f "$own/lastmod.pending"
+printf 'StartWithMod = 0\nStartWithMod = 1\n' > "$macfix/settings.ini"
+run --
+expect "BO3MACFIX_STARTWITHMOD_LAUNCH=given 2631943123" "the last line"
+rm -f "$own/lastmod.pending" "$macfix/settings.ini"
+
 # the player's own fs_game or map: nothing added
 run -- "+set" "fs_game" "1234"
 expect "BO3MACFIX_STARTWITHMOD_LAUNCH=busy 2631943123" "own fs_game"

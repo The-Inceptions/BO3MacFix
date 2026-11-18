@@ -188,8 +188,11 @@ start_mod_files_t start_mod_files(const start_mod_paths_t *paths, const char *na
     int length;
     if (!start_mod_name_ok(name))
         return Start_Mod_Files_Missing;
-    // a workshop item: its folder is named by its id. Steam downloads an update next to it and then moves the files
-    // over the old ones, so while it downloads the files may change under the game.
+    // A workshop item: its folder is named by its id. Steam downloads an update into workshop/downloads/311210/<id>
+    // and then moves the files over the old ones, so while that folder is there the files may change under the game.
+    // What this rests on: on this Mac workshop/downloads/311210/ is empty between updates (seen 2026-11-18, its time
+    // that of the 11-10 update of All-around Enhancement). A folder Steam left behind (a download cut off) would make
+    // every start without the mod, with the notice, until Steam finishes or removes it.
     if (all_digits(name) && paths->workshop != NULL) {
         length = snprintf(path, sizeof(path), "%s/downloads/" Start_Mod_App_Id "/%s", paths->workshop, name);
         if (length > 0 && (size_t)length < sizeof(path) && folder_there(path))

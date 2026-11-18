@@ -11,13 +11,16 @@
 #define Game_Folder "../../.."
 #define Workshop_Folder "../../../../../workshop"
 
-static const char *loaded_name; // the game's: the loaded mod's name, char[0x20] ("" without one)
+static const char *loaded_name;          // the game's: the loaded mod's name, char[0x20] ("" without one)
+static const volatile int32_t *load_state; // the game's: its mod load, 0 while none is under way (offsets.h)
 static start_mod_paths_t paths = { Macfix_Folder, Game_Folder, Workshop_Folder };
 static bool debug_on;
+static bool look_pending; // a first menu came while the game was loading a mod: look once it's done
 
 void start_mod_game_init(uint64_t game_base_address, bool enabled, const char *folder, const char *launch_note,
                          bool debug) {
     loaded_name = (const char *)(game_base_address + ADDR_Mods_LoadedName);
+    load_state = (const volatile int32_t *)(game_base_address + ADDR_Mods_LoadState);
     paths.folder = folder != NULL && folder[0] != '\0' ? folder : Macfix_Folder;
     debug_on = debug;
     const char *state = enabled ? "on" : "off";
@@ -53,15 +56,15 @@ static const char *loaded_text(start_mod_loaded_t loaded) {
     }
 }
 
-void start_mod_game_menu_ready(void) {
-    if (loaded_name == NULL)
-        return;
+// the start got as far as the menus with no mod load under way: the marker goes, and lastmod.txt gets the mod loaded
+// now. when says what moment it is, for the debug line.
+static void look_now(const char *when) {
     char raw[Start_Mod_Name_Size];
     memcpy(raw, loaded_name, sizeof(raw));
     start_mod_look_t look;
     start_mod_menu_ready(&paths, raw, &look);
     if (look.marker_there)
-        printf("BO3MacFix: StartWithMod: the start got as far as the menus%s\n",
+        printf("BO3MacFix: StartWithMod: the start got as far as the menus with no mod load under way%s\n",
                look.marker_removed ? "" : ", but lastmod.pending couldn't be removed");
     const char *before = look.before == Start_Mod_File_Named ? look.before_name
                          : look.before == Start_Mod_File_Damaged ? "a damaged lastmod.txt" : "nothing";
@@ -76,6 +79,32 @@ void start_mod_game_menu_ready(void) {
                look.written ? "" : ", but lastmod.txt couldn't be removed");
     }
     if (debug_on)
-        printf("BO3MacFix: StartWithMod: first menu: %s (%s), lastmod.txt holds %s%s\n", loaded_text(look.loaded),
+        printf("BO3MacFix: StartWithMod: %s: %s (%s), lastmod.txt holds %s%s\n", when, loaded_text(look.loaded),
                look.loaded_name[0] != '\0' ? look.loaded_name : "none", before, look.changed ? ", changed" : "");
+}
+
+void start_mod_game_menu_ready(void) {
+    if (loaded_name == NULL)
+        return;
+    // A mod's load builds the menus again and again before it is done (in a start with the mod on the command line the
+    // first menu comes about 10 s in and the load is done at about 19 s), and it is the done that counts: until then
+    // the look waits for the poll. A start without a mod never loads one, so it looks at its first menu.
+    int32_t state = *load_state;
+    if (state != 0) {
+        if (debug_on && !look_pending)
+            printf("BO3MacFix: StartWithMod: first menu while the game loads a mod (state %d): looking once it's done\n",
+                   (int)state);
+        look_pending = true;
+        return;
+    }
+    look_pending = false;
+    look_now("first menu");
+}
+
+void start_mod_game_poll(void) {
+    // a look is only left for later once this is set up (start_mod_game_menu_ready)
+    if (!look_pending || *load_state != 0)
+        return;
+    look_pending = false;
+    look_now("the mod's load is done");
 }

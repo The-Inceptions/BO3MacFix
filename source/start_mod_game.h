@@ -11,6 +11,12 @@
 void start_mod_game_init(uint64_t game_base_address, bool enabled, const char *folder, const char *launch_note,
                          bool debug);
 
-// the first menu of a UI state is up (notices.m, the moment of "notices: ready on UIRootFull"): the start got as far
-// as the menus, and lastmod.txt gets the mod loaded now. Main thread, like the game's own mod loading.
+// The first menu of a UI state is up (notices.m, the moment of "notices: ready on UIRootFull"): the start got as far
+// as the menus. The look that follows (the marker goes, lastmod.txt gets the mod loaded now) waits until the game has
+// finished loading a mod (its load state 0): a start with the mod comes to its first menu twice before that, and a
+// mod that stops the game in between must neither lose its start the marker nor be remembered. Main thread, like the
+// game's own mod loading.
 void start_mod_game_menu_ready(void);
+// notices.lua's poll, four times a second while a menu is up (notices.m's MenusOpen, on the same thread): does a look
+// the first menu left for later once the game's mod load is done
+void start_mod_game_poll(void);

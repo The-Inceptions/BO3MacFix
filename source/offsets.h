@@ -423,6 +423,12 @@
 #define ADDR_Map_f_SetCheatsReturn 0x140f46b // where that Dvar_SetBool(sv_cheats, 1) (the call at 0x140f466) returns to
 #define ADDR_cmd_args 0x125dc3c0 // the console command's arguments: int nesting at 0, int argc[8] at 0x64, char **argv[8] at 0x88
 #define ADDR_Mods_LoadedName 0x30878dc // char[0x20]: the loaded mod's folder name ("" without one), "ModLoad start: %s"
+// int: the game's mod load, 0 while none is under way. ModLoad start/reset (0x100e49e88) sets 1 at 0x100e49f23
+// (when it restarts the game for it) and 2 at 0x100e49f57 (always, after both its paths; its reset path's clearing of
+// the block at 0x100e49f11 clears it on the way); the frame's mod check (0x100e4a0d9, from 0x100e757fa every frame)
+// then asks ModLoad done (0x100e4a055), which sets 0 at 0x100e4a07d once the profile storage's mod (0x1011026b6) is
+// the loaded one. No other code writes it (Windows 0x15670e1e8)
+#define ADDR_Mods_LoadState 0x3087d20
 #define ADDR_bg_weaponVariantDefs 0x14ce0a70 // WeaponVariantDef *[], by weapon index (BG_GetWeaponDef at 0x12362cd)
 #define ADDR_bg_lastWeaponIndex 0x14ce0a68 // int: the number of weapons less one (BG_GetNumWeapons at 0x12362a8)
 #define gentity_Size 0x4f8

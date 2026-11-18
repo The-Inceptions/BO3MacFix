@@ -321,6 +321,8 @@ static int lua_menus_open(lua_State *s) {
     float open = 0;
     hks_number_arg(s, 1, &open);
     gpu_tweaks_menus_open(open != 0);
+    // StartWithMod's look that waits for the game's mod load to be done (it reads nothing of Lua's)
+    start_mod_game_poll();
     return 0;
 }
 

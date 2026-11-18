@@ -8,37 +8,16 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <Foundation/Foundation.h>
+#include "../source/settings_ini.h"
 #include "../source/start_mod.h"
 
 // BO3MacFix_PrepatchedIsCurrent and BO3MacFix_BuildPrepatched, see source/prepatch.h
 typedef int (*prepatch_fn)(const char *original, const char *copy, char *message, size_t message_size);
 
-// reads "Name = value" from BO3MacFix's settings.ini, like read_int_setting in bo3macfix.c
+// reads "Name = value" from BO3MacFix's settings.ini with the library's own reader (source/settings_ini.c), so that
+// both see the same value: past a UTF-8 byte order mark, in quotes, beyond an int's range, the last line that sets it
 static int read_setting(NSString *path, const char *name, int fallback) {
-    FILE *fp = fopen(path.fileSystemRepresentation, "r");
-    if (fp == NULL)
-        return fallback;
-    int value = fallback;
-    size_t name_len = strlen(name);
-    char line[256];
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        char *p = line + strspn(line, " \t");
-        if (strncmp(p, name, name_len) != 0)
-            continue;
-        p += name_len;
-        p += strspn(p, " \t");
-        if (*p != '=')
-            continue;
-        p++;
-        p += strspn(p, " \t\"");
-        // "Name =" with nothing (or no number) after it keeps the default, like the dylib's parser
-        char *end;
-        long parsed = strtol(p, &end, 10);
-        if (end != p)
-            value = (int)parsed;
-    }
-    fclose(fp);
-    return value;
+    return settings_ini_read(path.fileSystemRepresentation, name, fallback, 10);
 }
 
 // runs /usr/bin/codesign with these arguments, returns whether it succeeded

@@ -654,20 +654,40 @@ static void test_notices(void) {
     }
 }
 
-// the game's half, against a made-up loaded mod's name where the game keeps it
-static char game_memory[Start_Mod_Name_Size];
+// the game's half, against a made-up block where the game keeps its loaded mod (0x103087858, 0x4d0 bytes): the name
+// at +0x84, the mod load's state at +0x4c8
+static unsigned char game_block[0x4d0] __attribute__((aligned(16)));
+#define game_memory ((char *)game_block + 0x84)
+#define game_state (*(int32_t *)(game_block + 0x4c8))
 static uint64_t game_base(void) {
     return (uint64_t)(uintptr_t)game_memory - ADDR_Mods_LoadedName;
+}
+
+// a first menu, then n polls, what the log got
+static const char *menu_and_polls(int polls) {
+    capture_start();
+    start_mod_game_menu_ready();
+    for (int i = 0; i < polls; i++)
+        start_mod_game_poll();
+    return capture_end();
+}
+
+static const char *polls(int count) {
+    capture_start();
+    for (int i = 0; i < count; i++)
+        start_mod_game_poll();
+    return capture_end();
 }
 
 static void test_game(void) {
     fresh_folders();
     const char *log;
-    // a first menu before the library was set up (NoCodePatches): nothing
+    // the made-up block lies as the game's does
+    CHECK(ADDR_Mods_LoadState - ADDR_Mods_LoadedName == 0x4c8 - 0x84);
+    // a first menu or a poll before the library was set up (NoCodePatches): nothing
     raw_name(game_memory, AAE);
-    capture_start();
-    start_mod_game_menu_ready();
-    log = capture_end();
+    game_state = 0;
+    log = menu_and_polls(2);
     CHECK(log[0] == '\0' && !exists(memory));
     // the files in a folder of their own (BO3MACFIX_STARTWITHMOD_DIR)
     char own[PATH_MAX];
@@ -682,30 +702,64 @@ static void test_game(void) {
     log = capture_end();
     CHECK(strstr(log, "StartWithMod on: " AAE ": started with it") != NULL);
     CHECK(posted_count == 0);
-    // its first menu with the mod loaded: remembered, the marker gone
+    // its first menus come while the game still loads the mod (state 2): the marker stays, nothing remembered, also
+    // through polls and the second first menu of the menus' rebuild
     write_text(marker, AAE "\n");
-    raw_name(game_memory, AAE);
-    capture_start();
-    start_mod_game_menu_ready();
-    log = capture_end();
-    CHECK(strstr(log, "StartWithMod: the start got as far as the menus\n") != NULL);
+    game_state = 2;
+    log = menu_and_polls(3);
+    CHECK(log[0] == '\0' && exists(marker) && !exists(memory));
+    log = menu_and_polls(3);
+    CHECK(log[0] == '\0' && exists(marker) && !exists(memory));
+    // the load done (state 0): the next poll looks, once
+    game_state = 0;
+    log = polls(1);
+    CHECK(strstr(log, "StartWithMod: the start got as far as the menus with no mod load under way\n") != NULL);
     CHECK(strstr(log, "StartWithMod: remembered " AAE " for the next start (was nothing)\n") != NULL);
     CHECK(!exists(marker) && strcmp(read_text(memory), AAE "\n") == 0);
     char default_memory[PATH_MAX];
     path_of(default_memory, folder, Start_Mod_Memory_File);
     CHECK(!exists(default_memory));
-    // the next menus: quiet unless debugging
-    capture_start();
-    start_mod_game_menu_ready();
-    log = capture_end();
+    unlink(memory);
+    log = polls(3);
+    CHECK(log[0] == '\0' && !exists(memory));
+    // the next menus, with no load under way: they look at once, quietly when nothing changes
+    CHECK(start_mod_write(memory, AAE));
+    log = menu_and_polls(0);
     CHECK(log[0] == '\0');
-    // unloaded
+    // a mod that stops the game during its load is never remembered: tried from MODS, it never gets past state 2
+    raw_name(game_memory, "zm_crashes");
+    game_state = 1;
+    log = menu_and_polls(4);
+    game_state = 2;
+    log = menu_and_polls(4);
+    CHECK(log[0] == '\0' && strcmp(read_text(memory), AAE "\n") == 0);
+    // a load that starts over (another mod chosen while one loads): the look is for the mod loaded at the end
+    raw_name(game_memory, "zm_other");
+    game_state = 1;
+    log = polls(2);
+    CHECK(log[0] == '\0');
+    game_state = 0;
+    log = polls(2);
+    CHECK(strstr(log, "StartWithMod: remembered zm_other for the next start (was " AAE ")\n") != NULL);
+    // unloaded (MODS, Unload): ModLoad reset leaves the state at 2 until the game is done, then the mod is forgotten
     raw_name(game_memory, "");
-    capture_start();
-    start_mod_game_menu_ready();
-    log = capture_end();
-    CHECK(strstr(log, "StartWithMod: forgot " AAE ": no mod is loaded\n") != NULL && !exists(memory));
-    // the stand-in, with debug lines
+    game_state = 2;
+    log = menu_and_polls(2);
+    CHECK(log[0] == '\0' && exists(memory));
+    game_state = 0;
+    log = polls(1);
+    CHECK(strstr(log, "StartWithMod: forgot zm_other: no mod is loaded\n") != NULL && !exists(memory));
+    // a poll without a first menu before it doesn't look
+    CHECK(start_mod_write(memory, AAE));
+    log = polls(3);
+    CHECK(log[0] == '\0' && exists(memory));
+    // a start with no mod at all: state 0 at its first menu, so a stale marker and a stale memory go there and then
+    write_text(marker, AAE "\n");
+    log = menu_and_polls(0);
+    CHECK(strstr(log, "StartWithMod: the start got as far as the menus with no mod load under way\n") != NULL);
+    CHECK(strstr(log, "StartWithMod: forgot " AAE ": no mod is loaded\n") != NULL);
+    CHECK(!exists(marker) && !exists(memory));
+    // the stand-in, with debug lines: at a first menu with no load under way, and at the poll after a load
     CHECK(start_mod_write(memory, AAE));
     posted_count = 0;
     capture_start();
@@ -713,11 +767,33 @@ static void test_game(void) {
     raw_name(game_memory, "usermaps");
     start_mod_game_menu_ready();
     start_mod_game_menu_ready();
+    game_state = 2;
+    start_mod_game_menu_ready();
+    start_mod_game_menu_ready();
+    start_mod_game_poll();
+    game_state = 0;
+    start_mod_game_poll();
+    start_mod_game_poll();
+    // a look left for later and then made at a first menu with no load under way isn't made again at the next poll
+    game_state = 2;
+    start_mod_game_menu_ready();
+    game_state = 0;
+    start_mod_game_menu_ready();
+    start_mod_game_poll();
     log = capture_end();
     CHECK(strstr(log, "StartWithMod off: this start didn't come from a launcher that knows it") != NULL);
     CHECK(strstr(log, "forgot " AAE ": only the stock game's stand-in for custom maps is loaded (usermaps)") != NULL);
     CHECK(strstr(log, "StartWithMod: first menu: only the stock game's stand-in for custom maps is loaded (usermaps), "
+                      "lastmod.txt holds " AAE ", changed\n") != NULL);
+    CHECK(strstr(log, "StartWithMod: first menu: only the stock game's stand-in for custom maps is loaded (usermaps), "
                       "lastmod.txt holds nothing\n") != NULL);
+    // said once for the two first menus of one load (and once more for the next load)
+    const char *waiting = "StartWithMod: first menu while the game loads a mod (state 2): looking once it's done\n";
+    const char *found = strstr(log, waiting);
+    CHECK(found != NULL && (found = strstr(found + 1, waiting)) != NULL && strstr(found + 1, waiting) == NULL);
+    found = strstr(log, "StartWithMod: the mod's load is done: only the stock game's stand-in for custom maps is "
+                        "loaded (usermaps), lastmod.txt holds nothing\n");
+    CHECK(found != NULL && strstr(found + 1, "StartWithMod: the mod's load is done") == NULL);
     CHECK(posted_count == 0 && !exists(memory));
     // a start the launcher left the mod out of for a reason the player must know: a lasting notice with its title
     static const struct {
@@ -725,8 +801,7 @@ static void test_game(void) {
     } told[] = {
         { "failed " AAE, "StartWithMod on: " AAE ": the last start with it didn't get as far as the menus",
           "The last start with [ZM] All-around Enhancement didn't reach the menus. This one is without it: load it "
-          "from "
-          "MODS." },
+          "from MODS." },
         { "missing zm_mymod", "zm_mymod: its files aren't there",
           "The game started without the mod zm_mymod: it was loaded at the last quit, but its files are gone." },
         { "updating " AAE, "Steam is downloading it",
@@ -766,9 +841,8 @@ static void test_game(void) {
     log = capture_end();
     CHECK(posted_count == 1 && strstr(posted[0], "[ZM] All-around Enhancement") != NULL);
     raw_name(game_memory, AAE);
-    capture_start();
-    start_mod_game_menu_ready();
-    log = capture_end();
+    game_state = 0;
+    log = menu_and_polls(0);
     CHECK(strstr(log, "remembered " AAE) != NULL && strcmp(read_text(default_memory), AAE "\n") == 0);
     path_of(memory, folder, Start_Mod_Memory_File);
     path_of(marker, folder, Start_Mod_Marker_File);
