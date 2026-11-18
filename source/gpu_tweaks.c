@@ -1063,10 +1063,12 @@ static os_unfair_lock user_battery_lock = OS_UNFAIR_LOCK_INIT;
 static atomic_int saver_level = Battery_Saver_Off;
 
 static void saver_apply(void) {
+    // computed and stored under the lock: a settings page change and a plug-in seen by the power watch can come at
+    // the same moment from two threads, and the older result must not be stored last (the review of the follow-ups,
+    // B4). display_sleep_set_mode takes display_sleep_mac.c's own lock, which never calls back here.
     os_unfair_lock_lock(&user_battery_lock);
     battery_settings_t e =
         battery_saver_effective(atomic_load(&saver_level), atomic_load(&limits.on_battery), user_battery);
-    os_unfair_lock_unlock(&user_battery_lock);
     atomic_store(&limits.battery_fps, e.battery_fps);
     atomic_store(&battery_resolution, e.battery_resolution);
     atomic_store(&limits.idle_menu_fps, e.idle_menu_fps);
@@ -1074,6 +1076,24 @@ static void saver_apply(void) {
         atomic_store(&limits.idle, false);
     atomic_store(&limits.background_fps, e.background_fps);
     display_sleep_set_mode(e.idle_display_sleep);
+    os_unfair_lock_unlock(&user_battery_lock);
+}
+
+// what applies on battery with BatterySaver's level, for the log lines
+static battery_settings_t saver_on_battery(void) {
+    os_unfair_lock_lock(&user_battery_lock);
+    battery_settings_t e = battery_saver_effective(atomic_load(&saver_level), true, user_battery);
+    os_unfair_lock_unlock(&user_battery_lock);
+    return e;
+}
+
+// a setting's line says the player's own value; while BatterySaver's level sets another on battery, this one says
+// that too (the review of the follow-ups, B3). After the setting's own line, and for all five with BatterySaver's.
+static void saver_note(const char *name, int own, int applies) {
+    int level = atomic_load(&saver_level);
+    if (level != Battery_Saver_Off && own != applies)
+        printf("battery saver: %s is %i, BatterySaver %s makes it %i on battery\n", name, own,
+               level == Battery_Saver_Saver ? "Saver" : "Longest", applies);
 }
 
 // a user's own value changed (startup or the settings page): what applies follows
@@ -1298,6 +1318,7 @@ bool gpu_tweaks_set_idle_display_sleep(int mode) {
                      : "display sleep: the display may turn off while the game is paused, in the menus or in the "
                        "background%s\n",
            mode == 1 ? ", on battery" : "");
+    saver_note("IdleDisplaySleep", mode, saver_on_battery().idle_display_sleep);
     return true;
 }
 
@@ -1313,6 +1334,16 @@ static void saver_say(int level) {
                "stay; the menu and display parts with ControllerBridge only); plugged in, your own settings (%s now)\n",
                level == Battery_Saver_Saver ? "Saver" : "Longest", l.battery_fps, l.battery_resolution,
                l.idle_menu_fps, l.background_fps, atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
+    // the player's own values were said before the level was known (at the start the five settings come first)
+    os_unfair_lock_lock(&user_battery_lock);
+    battery_settings_t u = user_battery;
+    os_unfair_lock_unlock(&user_battery_lock);
+    battery_settings_t e = saver_on_battery();
+    saver_note("BatteryFPS", u.battery_fps, e.battery_fps);
+    saver_note("BatteryResolution", u.battery_resolution, e.battery_resolution);
+    saver_note("IdleMenuFPS", u.idle_menu_fps, e.idle_menu_fps);
+    saver_note("BackgroundFPS", u.background_fps, e.background_fps);
+    saver_note("IdleDisplaySleep", u.idle_display_sleep, e.idle_display_sleep);
 }
 
 void gpu_tweaks_battery_saver_init(int level, code_patch_fn checked_code_patch) {
@@ -1401,6 +1432,7 @@ bool gpu_tweaks_set_battery_fps(int fps) {
         printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
     else
         printf("not limiting the frame rate on battery\n");
+    saver_note("BatteryFPS", fps, saver_on_battery().battery_fps);
     return true;
 }
 
@@ -1417,6 +1449,7 @@ bool gpu_tweaks_set_battery_resolution(int setting) {
                atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
     else
         printf("the 3D scene at the full Render Resolution on battery too\n");
+    saver_note("BatteryResolution", setting, saver_on_battery().battery_resolution);
     return true;
 }
 
@@ -1472,6 +1505,7 @@ bool gpu_tweaks_set_idle_menu_fps(int fps) {
     saver_user(&user_battery.idle_menu_fps, fps);
     printf(fps != 0 ? "limiting the frame rate to %i fps in a menu left untouched for 10 s\n"
                     : "not limiting the frame rate in a menu left untouched\n", fps);
+    saver_note("IdleMenuFPS", fps, saver_on_battery().idle_menu_fps);
     return true;
 }
 
@@ -1485,6 +1519,7 @@ bool gpu_tweaks_set_background_fps(int fps) {
         app_focus_watch(background_changed);
     saver_user(&user_battery.background_fps, fps);
     printf(fps != 0 ? "limiting the frame rate to %i fps in the background\n" : "not limiting the frame rate in the background\n", fps);
+    saver_note("BackgroundFPS", fps, saver_on_battery().background_fps);
     return true;
 }
 
