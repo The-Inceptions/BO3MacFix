@@ -80,6 +80,13 @@ bool frame_limit_in_menus(frame_limits_t *limits, uint64_t now);
 // saw any such input) and on any controller the game reads (seconds since the last input there)
 bool frame_limit_idle(double hid_seconds, double controller_seconds);
 
+// whether IdleMenuFPS applies its rate now: idle (above), a controller's input can be seen (ControllerBridge: without
+// it a controller player's menu would count as idle while they use it), and the game is in the menus outside a match
+// or its pause menu really paused it (cl_paused: a co-op or LAN match goes on behind the pause menu, and this
+// client's frame rate with it)
+bool frame_limit_idle_menu(double hid_seconds, double controller_seconds, bool controllers_seen, bool in_menus,
+                           bool paused);
+
 // whether nobody can be playing at now, for IdleDisplaySleep: the pause menu is open in a match, the game is in the
 // menus, or it is in the background with the menus or a match up (in_background is only kept with BackgroundFPS or
 // IdleDisplaySleep on). Not while the game starts or a map loads: no UI polls then.

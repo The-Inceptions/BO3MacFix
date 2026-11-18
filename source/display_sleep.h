@@ -23,6 +23,10 @@
 
 #define Display_Sleep_Delay_NS (5 * 1000000000ULL)    // away from play this long before the assertion goes
 #define Display_Sleep_Activity_NS (10 * 1000000000ULL) // a controller's activity is declared at most this often
+// after the assertion is taken back, a controller's input is still declared for this long: taking it back doesn't
+// light a display that went off (Apple's IOPMLib.h), and play can go on without this player's input (a co-op host
+// lifting the pause, a lobby's host starting the match), so the glue also declares once at the moment it's taken back
+#define Display_Sleep_Wake_NS (30 * 1000000000ULL)
 
 enum { Display_Sleep_Off = 0, Display_Sleep_On_Battery = 1, Display_Sleep_Always = 2 };
 
@@ -30,15 +34,18 @@ typedef struct {
     uint64_t away_since;  // when the player went away from play, 0 while playing
     bool released;        // the decision: the game's assertion is let go
     uint64_t declared_at; // when a controller's input was last declared as activity, 0 never
+    uint64_t retaken_at;  // when the assertion was last taken back after a release, 0 never
 } display_sleep_t;
 
 // whether the game's assertion should be let go at now (now > 0): mode (Display_Sleep_*), on battery, away from play
-// (frame_limit_away_from_play). Let go once away has lasted Display_Sleep_Delay_NS with the mode applying; back the
-// moment it doesn't (play goes on, plugged in with mode 1, the setting off).
-bool display_sleep_decide(display_sleep_t *s, int mode, bool on_battery, bool away, uint64_t now);
+// (frame_limit_away_from_play), and whether a controller's input can be seen (ControllerBridge: without it a
+// controller couldn't keep the display on, nor wake it, so nothing is let go). Let go once away has lasted
+// Display_Sleep_Delay_NS with the mode applying; back the moment it doesn't (play goes on, plugged in with mode 1, the
+// setting off), and the moment of that is remembered (retaken_at).
+bool display_sleep_decide(display_sleep_t *s, int mode, bool on_battery, bool away, bool controllers_seen, uint64_t now);
 
-// whether a controller's input at now is declared as user activity: only while the assertion is let go, and at most
-// every Display_Sleep_Activity_NS
+// whether a controller's input at now is declared as user activity: while the assertion is let go and for
+// Display_Sleep_Wake_NS after it was taken back, at most every Display_Sleep_Activity_NS
 bool display_sleep_activity_due(display_sleep_t *s, uint64_t now);
 
 // whether a controller's state is input a player gives: a button, a trigger past 30 of 255, a stick past 8000 of

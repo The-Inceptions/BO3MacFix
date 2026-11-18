@@ -1,9 +1,11 @@
 // See display_sleep.h.
 #include "display_sleep.h"
 
-bool display_sleep_decide(display_sleep_t *s, int mode, bool on_battery, bool away, uint64_t now) {
-    bool applies = mode == Display_Sleep_Always || (mode == Display_Sleep_On_Battery && on_battery);
+bool display_sleep_decide(display_sleep_t *s, int mode, bool on_battery, bool away, bool controllers_seen, uint64_t now) {
+    bool applies = controllers_seen && (mode == Display_Sleep_Always || (mode == Display_Sleep_On_Battery && on_battery));
     if (!applies || !away) {
+        if (s->released)
+            s->retaken_at = now;
         s->away_since = 0;
         s->released = false;
         return false;
@@ -16,7 +18,8 @@ bool display_sleep_decide(display_sleep_t *s, int mode, bool on_battery, bool aw
 }
 
 bool display_sleep_activity_due(display_sleep_t *s, uint64_t now) {
-    if (!s->released)
+    bool waking = s->retaken_at != 0 && now - s->retaken_at < Display_Sleep_Wake_NS;
+    if (!s->released && !waking)
         return false;
     if (s->declared_at != 0 && now - s->declared_at < Display_Sleep_Activity_NS)
         return false;

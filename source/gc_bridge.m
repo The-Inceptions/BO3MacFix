@@ -66,6 +66,8 @@ typedef struct {
     int user_index;             // XInput user index the game reads it on, -1 = waiting for a free one
     bool found;                 // the game has asked for its state since it connected or moved
     XINPUT_STATE state;
+    uint16_t latched;           // buttons pressed since the game's last read: a tap shorter than the time between two
+                                // reads (100 ms at IdleMenuFPS 10) is seen by the next read instead of lost
     uint16_t wanted_motors[2];  // last speeds from XInputSetState
     int16_t gyro[2];            // right stick deflection GyroAim adds (x, y)
     // only on input_queue:
@@ -286,6 +288,20 @@ static int16_t stick_value(float value) {
     return (int16_t)scaled;
 }
 
+// under pads_lock: a new state from the controller, and its buttons latched until the game's next read
+static void store_state(bridged_pad *pad, XINPUT_GAMEPAD state) {
+    pad->state.dwPacketNumber++;
+    pad->state.Gamepad = state;
+    pad->latched |= state.wButtons;
+}
+
+// under pads_lock, at the game's read: the buttons held now and those pressed since the last read, once
+static uint16_t take_buttons(bridged_pad *pad) {
+    uint16_t buttons = pad->state.Gamepad.wButtons | pad->latched;
+    pad->latched = 0;
+    return buttons;
+}
+
 // runs on input_queue whenever anything on the controller changes
 API_AVAILABLE(macos(11.3))
 static void update_state(bridged_pad *pad, GCExtendedGamepad *gamepad) {
@@ -321,11 +337,14 @@ static void update_state(bridged_pad *pad, GCExtendedGamepad *gamepad) {
     };
     os_unfair_lock_lock(&pads_lock);
     // a late update from a controller that has since disconnected must not land on whatever took its entry
-    if (pad->controller == gamepad.controller) {
-        pad->state.dwPacketNumber++;
-        pad->state.Gamepad = state;
-    }
+    bool stored = pad->controller == gamepad.controller;
+    if (stored)
+        store_state(pad, state);
     os_unfair_lock_unlock(&pads_lock);
+    // IdleMenuFPS: a press lifts the menu's lower rate when it happens, not at the game's next read (gpu_tweaks.c)
+    if (stored)
+        gpu_tweaks_controller_input(state.wButtons, state.bLeftTrigger, state.bRightTrigger, state.sThumbLX,
+                                    state.sThumbLY, state.sThumbRX, state.sThumbRY);
 }
 
 // GyroAim: the controller's turn rate becomes extra right stick deflection, about 2.5 rad/s (140 degrees a second)
@@ -456,6 +475,7 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
             bool active = atomic_load(&app_active) && (*(volatile uint8_t *)(base_address + ADDR_ASL_XInputEnabled) & 1);
             if (active) {
                 *state = pad->state;
+                state->Gamepad.wButtons = take_buttons(pad);
                 // GyroAim = 2 only aims with the gyro while L2 (aim down sights) is held
                 if (gyro_mode == 1 || (gyro_mode == 2 && state->Gamepad.bLeftTrigger > 30)) {
                     state->Gamepad.sThumbRX = add_stick(state->Gamepad.sThumbRX, pad->gyro[0]);
@@ -463,11 +483,14 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
                 }
                 // L3 + R3 held in the pause menu is a quick save (quick_save.m)
                 quick_save_pad(user_index, state->Gamepad.wButtons);
-                controller_input(&state->Gamepad);
             } else {
                 memset(state, 0, sizeof(*state));
+                pad->latched = 0; // presses while the game wasn't reading them aren't handed over later
             }
             os_unfair_lock_unlock(&pads_lock);
+            // outside the lock: IdleDisplaySleep may hand macOS a declaration (on its own queue, display_sleep_mac.c)
+            if (active)
+                controller_input(&state->Gamepad);
             return ERROR_SUCCESS;
         }
         os_unfair_lock_unlock(&pads_lock);

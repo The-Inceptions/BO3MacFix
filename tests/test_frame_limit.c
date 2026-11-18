@@ -352,6 +352,17 @@ static void test_idle_rule(void) {
     CHECK(!frame_limit_idle(0, 0));
 }
 
+// IdleMenuFPS applies only with a controller's input seen (ControllerBridge) and in the menus or a pause that really
+// paused (cl_paused): the review of 2026-11-18, M1 and M4
+static void test_idle_menu_rule(void) {
+    CHECK(frame_limit_idle_menu(1e9, 1e9, true, true, false));   // the menus, idle
+    CHECK(frame_limit_idle_menu(1e9, 1e9, true, false, true));   // paused, idle
+    CHECK(!frame_limit_idle_menu(1e9, 1e9, false, true, true));  // no bridge: a controller player isn't idle
+    CHECK(!frame_limit_idle_menu(1e9, 1e9, true, false, false)); // the pause menu of a co-op match that goes on
+    CHECK(!frame_limit_idle_menu(1, 1e9, true, true, true));     // a key a second ago
+    CHECK(!frame_limit_idle_menu(1e9, 1, true, true, true));     // a controller's button a second ago
+}
+
 // IdleDisplaySleep's "away from play": the pause menu, the menus, or the background with a UI up; not a match, not a
 // map loading, not the game starting
 static void test_away_from_play(void) {
@@ -456,6 +467,7 @@ int main(void) {
     test_away_from_play();
     test_idle_menu();
     test_idle_rule();
+    test_idle_menu_rule();
     test_low_power();
     if (failures == 0)
         printf("test_frame_limit: all passed\n");

@@ -19,6 +19,7 @@
 #include "display_sleep.h"
 #include "display_sleep_mac.h"
 #include "dyld-interposing.h"
+#include "gc_bridge.h"
 
 static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
 // under lock:
@@ -28,9 +29,33 @@ static IOPMAssertionID held = kIOPMNullAssertionID;   // the game's assertion as
 static CFStringRef held_name = NULL;                  // its name, for making it again
 static bool managed = false;                          // SDL made it and hasn't released it itself
 static bool applied_released = false;                 // what was last done to it: let go (true) or held
+static uint64_t retried_at = 0;                       // when a refused re-take was last tried again
 static atomic_int mode = Display_Sleep_Off;
-static atomic_bool released_now = false; // a copy of state.released for the controller's quick look
+static atomic_bool released_now = false; // state.released, or within Display_Sleep_Wake_NS of a re-take: the
+                                         // controller's quick look
 static bool debug = false;
+// The declarations of user activity go to macOS (powerd) from their own serial queue, not from the game's thread that
+// reads the controller (it may hold the bridge's lock): IOPMAssertionDeclareUserActivity is a synchronous message,
+// usually microseconds, slower around a sleep or a wake. The queue also owns the activity's ID.
+static dispatch_queue_t declare_queue;
+static IOPMAssertionID activity = kIOPMNullAssertionID;
+
+static void declare(void *what) {
+    IOReturn result = IOPMAssertionDeclareUserActivity(what != NULL ? CFSTR("BO3MacFix: back in play")
+                                                                    : CFSTR("BO3MacFix: controller input in the game"),
+                                                       kIOPMUserActiveLocal, &activity);
+    if (debug || what != NULL)
+        printf("display sleep: %s declared as user activity (%s)\n",
+               what != NULL ? "back in play" : "a controller's input", result == kIOReturnSuccess ? "done" : "refused");
+}
+
+static void declare_soon(bool back_in_play) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        declare_queue = dispatch_queue_create("BO3MacFix display sleep", DISPATCH_QUEUE_SERIAL);
+    });
+    dispatch_async_f(declare_queue, back_in_play ? (void *)1 : NULL, declare);
+}
 
 static uint64_t now_ns(void) {
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
@@ -41,7 +66,10 @@ static uint64_t now_ns(void) {
 static void apply(void *unused) {
     (void)unused;
     os_unfair_lock_lock(&lock);
-    bool want_released = state.released, change = managed && want_released != applied_released;
+    bool want_released = state.released;
+    // a change, or a re-take macOS refused before (held stays none): tried again
+    bool change = managed && (want_released != applied_released || (!want_released && held == kIOPMNullAssertionID));
+    bool was_released = applied_released;
     IOPMAssertionID id = held;
     CFStringRef name = held_name != NULL ? CFRetain(held_name) : NULL;
     os_unfair_lock_unlock(&lock);
@@ -69,15 +97,25 @@ static void apply(void *unused) {
     printf(want_released ? "display sleep: away from play, the display may turn off after the Mac's own idle time%s\n"
                          : "display sleep: back in play, the game keeps the display on%s\n",
            result == kIOReturnSuccess ? "" : " (macOS refused the change)");
+    // taking the assertion back doesn't light a display that went off meanwhile (Apple's IOPMLib.h); declaring user
+    // activity does, and play may have gone on without this player's input (a co-op host lifting the pause)
+    if (!want_released && was_released)
+        declare_soon(true);
 }
 
 // under lock: decides again and has the main thread apply a change
 static void decide_locked(uint64_t now) {
     bool before = state.released;
-    bool released = display_sleep_decide(&state, atomic_load(&mode), known_battery, known_away, now);
-    atomic_store(&released_now, released);
+    // without ControllerBridge a controller's input can't be seen: nothing is let go (display_sleep.h)
+    bool released = display_sleep_decide(&state, atomic_load(&mode), known_battery, known_away, gc_bridge_enabled(), now);
+    atomic_store(&released_now, released || (state.retaken_at != 0 && now - state.retaken_at < Display_Sleep_Wake_NS));
     if (released != before && managed)
         dispatch_async_f(dispatch_get_main_queue(), NULL, apply);
+    else if (!released && managed && !applied_released && held == kIOPMNullAssertionID &&
+             (retried_at == 0 || now - retried_at >= Display_Sleep_Delay_NS)) {
+        retried_at = now; // macOS refused to make the assertion again: once every 5 s until it does
+        dispatch_async_f(dispatch_get_main_queue(), NULL, apply);
+    }
 }
 
 void display_sleep_update(bool away, bool on_battery) {
@@ -102,7 +140,10 @@ void display_sleep_init(int value) {
     const char *env = getenv("BO3MACFIX_IDLEDISPLAYSLEEPDEBUG");
     debug = env != NULL && atoi(env) != 0;
     atomic_store(&mode, value);
-    if (value != Display_Sleep_Off)
+    if (value != Display_Sleep_Off && !gc_bridge_enabled())
+        printf("display sleep: IdleDisplaySleep needs ControllerBridge (only through it does a controller's input count "
+               "as activity), so the game keeps the display on as before\n");
+    else if (value != Display_Sleep_Off)
         printf("display sleep: the display may turn off while the game is paused, in the menus or in the background%s\n",
                value == Display_Sleep_On_Battery ? ", on battery" : "");
 }
@@ -116,17 +157,14 @@ void display_sleep_controller(uint16_t buttons, uint8_t left_trigger, uint8_t ri
     os_unfair_lock_lock(&lock);
     bool due = display_sleep_activity_due(&state, now_ns());
     os_unfair_lock_unlock(&lock);
-    if (!due)
-        return;
-    static IOPMAssertionID activity = kIOPMNullAssertionID;
-    IOReturn result = IOPMAssertionDeclareUserActivity(CFSTR("BO3MacFix: controller input in the game"),
-                                                       kIOPMUserActiveLocal, &activity);
-    if (debug)
-        printf("display sleep: a controller's input declared as user activity (%s)\n",
-               result == kIOReturnSuccess ? "done" : "refused");
+    if (due)
+        declare_soon(false);
 }
 
-// SDL's assertion is made here (and any other code's, which passes through untouched)
+// SDL's assertion is made here (and any other code's, which passes through untouched). SDL keeps the first ID in its
+// own data (+0x28 of its video data) for the whole run and uses it once more, at quit (SDL_VideoQuit releases it): by
+// then this file may have released it and made others, so that release is of a stale ID, which powerd answers with an
+// error and nothing else; the assertion this file holds then goes with the process (the review of 2026-11-18, F4).
 static IOReturn assertion_create(CFStringRef type, CFStringRef name, CFStringRef details, CFStringRef reason,
                                  CFStringRef bundle, CFTimeInterval timeout, CFStringRef timeout_action,
                                  IOPMAssertionID *id) {

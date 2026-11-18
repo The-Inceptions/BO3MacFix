@@ -42,6 +42,7 @@
 #include "display_sleep.h"
 #include "display_sleep_mac.h"
 #include "frame_limit.h"
+#include "gc_bridge.h"
 #include "frame_pace.h"
 #include "gpu_tweaks.h"
 #include "metalfx.h"
@@ -1129,6 +1130,12 @@ static _Atomic uint64_t controller_input_at = 0;
 
 // IdleMenuFPS: whether nothing has been pressed for Idle_Menu_Seconds, looked at with each of notices.lua's polls
 // (four times a second in the menus and in a match); the keyboard, mouse and trackpad from macOS's own event times
+// whether the game is paused (cl_paused): the pause menu of a co-op or LAN match doesn't pause it
+static bool game_paused(void) {
+    const uint8_t *dvar = *(const uint8_t *const volatile *)(game_base_address + ADDR_dvar_cl_paused);
+    return dvar != NULL && *(const volatile int *)(dvar + dvar_Value) != 0;
+}
+
 static void idle_menu_tick(uint64_t now) {
     if (atomic_load(&limits.idle_menu_fps) == 0) {
         atomic_store(&limits.idle, false);
@@ -1137,7 +1144,10 @@ static void idle_menu_tick(uint64_t now) {
     double hid = CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState, kCGAnyInputEventType);
     uint64_t pad = atomic_load(&controller_input_at);
     double controller = pad != 0 && now > pad ? (now - pad) / 1e9 : pad != 0 ? 0.0 : 1e9;
-    atomic_store(&limits.idle, frame_limit_idle(hid, controller));
+    // only with ControllerBridge (else a controller player's menu would count as idle while used), and in the menus
+    // or a pause that really paused (the review of 2026-11-18, M1 and M4)
+    atomic_store(&limits.idle, frame_limit_idle_menu(hid, controller, gc_bridge_enabled(),
+                                                     frame_limit_in_menus(&limits, now), game_paused()));
 }
 
 void gpu_tweaks_controller_input(uint16_t buttons, uint8_t left_trigger, uint8_t right_trigger, int16_t left_x,
@@ -1180,8 +1190,12 @@ void gpu_tweaks_ui_gone(void) {
 }
 
 void gpu_tweaks_idle_menu_fps_init(int fps, code_patch_fn checked_code_patch) {
-    if (fps < 5 || fps > 60)
+    if (fps < 10 || fps > 60)
         return;
+    if (!gc_bridge_enabled()) {
+        printf("IdleMenuFPS needs ControllerBridge (only through it is a controller's input seen), so it stays off\n");
+        return;
+    }
     if (!redirect_present(checked_code_patch)) {
         printf("couldn't hook Aspyr's present, no IdleMenuFPS\n");
         return;
@@ -1352,8 +1366,12 @@ bool gpu_tweaks_set_menu_fps(int fps) {
 }
 
 bool gpu_tweaks_set_idle_menu_fps(int fps) {
-    if (fps != 0 && (fps < 5 || fps > 60))
+    if (fps != 0 && (fps < 10 || fps > 60))
         return false;
+    if (fps != 0 && !gc_bridge_enabled()) {
+        printf("IdleMenuFPS needs ControllerBridge (only through it is a controller's input seen), so it stays off\n");
+        return true; // saved; nothing to apply
+    }
     if (fps != 0 && !present_live())
         return false;
     sel_present_after_minimum_duration = sel_registerName("presentDrawable:afterMinimumDuration:");

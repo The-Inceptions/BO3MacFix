@@ -52,6 +52,11 @@ bool frame_limit_idle(double hid_seconds, double controller_seconds) {
     return hid_seconds >= Idle_Menu_Seconds && controller_seconds >= Idle_Menu_Seconds;
 }
 
+bool frame_limit_idle_menu(double hid_seconds, double controller_seconds, bool controllers_seen, bool in_menus,
+                           bool paused) {
+    return controllers_seen && (in_menus || paused) && frame_limit_idle(hid_seconds, controller_seconds);
+}
+
 bool frame_limit_away_from_play(frame_limits_t *limits, uint64_t now) {
     return lasts(&limits->pause_menu_until, now) || lasts(&limits->menus_until, now) ||
            (atomic_load(&limits->in_background) && lasts(&limits->ui_until, now));
