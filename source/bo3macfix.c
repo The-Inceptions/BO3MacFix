@@ -40,6 +40,7 @@
 #include "aae_coop_pause.h"
 #include "aae_viewmodel.h"
 #include "clientfield_guard.h"
+#include "missing_map_guard.h"
 #include "texture_swap_guard.h"
 #include "asl_refcount.h"
 #include "workshop_preview.h"
@@ -1247,6 +1248,11 @@ __attribute__((constructor)) static void dylib_main() {
     // places T7Overcharged names for that, with or without a mod (ClientFieldGuard, on by default), see
     // clientfield_guard.c
     clientfield_guard_init(game_base_address, read_int_setting_or_env("ClientFieldGuard", 1));
+
+    // a map the lobby can't start (one that isn't installed or owned, or a workshop map that is gone) is refused
+    // before the menus are shut down, so the game shows its own message instead of crashing, with or without a mod
+    // (MissingMapGuard, on by default), see missing_map_guard.c
+    missing_map_guard_init(game_base_address, read_int_setting_or_env("MissingMapGuard", 1));
 
     // a texture view the game replaces or drops while the render thread may still be reading it goes to the game's own
     // delayed release instead of dying at once, with or without a mod (TextureSwapGuard, on by default), see

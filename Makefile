@@ -75,6 +75,8 @@ TEST_TARGETS += tests/test_aae_breath
 TEST_TARGETS += tests/test_aae_viewmodel
 # a client field nobody registered: which places get a script error or a field that reads as 0 (clientfield_guard.c)
 TEST_TARGETS += tests/test_clientfield_guard
+# a lobby start of a map that can't be had: refused before the menus are shut down (missing_map_guard.c)
+TEST_TARGETS += tests/test_missing_map_guard
 # texture views the game replaces while they may be drawn: which places hand them to the game's delayed release, and
 # the hook against a made-up untrack, delayed release and render thread (texture_swap_guard.c)
 TEST_TARGETS += tests/test_texture_swap_guard
@@ -215,6 +217,8 @@ SOURCES += source/t7o_subtitle.c
 SOURCES += source/t7o_guards.c
 # ClientFieldGuard: a script error instead of a crash for a client field nobody registered (clientfield_guard.c)
 SOURCES += source/clientfield_guard.c
+# MissingMapGuard: a lobby start the game's preload would refuse is refused before the teardown (missing_map_guard.c)
+SOURCES += source/missing_map_guard.c
 # TextureSwapGuard: views the game replaces while they may be drawn die a few frames later (texture_swap_guard.c)
 SOURCES += source/texture_swap_guard.c
 # AtomicRelease: an object of the Direct3D layer released by two threads at once is destroyed once (asl_refcount.c)
@@ -490,6 +494,12 @@ tests/test_clientfield_guard: tests/test_clientfield_guard.c source/clientfield_
 		source/offsets.h source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_clientfield_guard.c
+
+# missing_map_guard.c: the preload stage's decisions and the hook against a made-up launch task
+tests/test_missing_map_guard: tests/test_missing_map_guard.c source/missing_map_guard.c source/missing_map_guard.h \
+		source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_missing_map_guard.c
 
 # material_sort_guard.c: its rules, and its hook against a made-up merge, frame and renderer table
 tests/test_material_sort_guard: tests/test_material_sort_guard.c source/material_sort_guard.c \

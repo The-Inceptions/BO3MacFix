@@ -629,6 +629,26 @@
 #define ADDR_playerKeys 0x1a1cd770 // PlayerKeyState[] (0x1940 bytes each): keys[256] of 24 bytes at +0x138, int down first (Key_SetBinding 0x101546a78; Windows 0x14531d850)
 #define ADDR_com_quitInProgress 0x118dfaac // int, Com_Quit (text "quitting...") sets it to 1 (Windows 0x15686e93c)
 #define ADDR_DB_FreeUnusedResources 0x13490b7 // func - void (bool), only the second flag of the Windows one (0x141421590, T7Overcharged's pattern): the same text "unloaded inuse" and the branch on it, 3 callers on both sides
+// MissingMapGuard (missing_map_guard.c): the lobby host's launch task and what its preload stage asks
+// (wip/night/crash-journey.md, sections 12 and 13)
+#define ADDR_LaunchGamePump 0x108830b // func - int (task *): the launch task's step, its callback at +0x28 of its definition 0x1b72320 ("task_lobbyhost_launchGame"; failed callback 0x10882aa); 0 go on, 1 done, 2 failed. Stage 0x1f (at 0x1088484) preloads: LobbyHost_IsHost(1), Com_IsInGame, the map and game type, then Com_KillUILevel, then its two failures (0x108865c, 0x1088709)
+#define ADDR_LaunchGame_State 0x447b394 // int: its state, 0x1d..0x25 (jump table 0x108875c); 0x1f preload, 0x20 go, 0x24 done, 0x25 failed (the next step returns 2)
+#define ADDR_LaunchGame_Error 0x447b4b8 // const char *: the error its failed callback drops to the menus with (Com_Error 2, "%s")
+#define ADDR_dvar_LobbyMap 0x1283ece0 // dvar_t *: the lobby's map, read by the preload stage (0x10885ad)
+#define ADDR_dvar_LobbyGametype 0x1283ed88 // dvar_t *: the lobby's game type
+#define ADDR_dvar_LaunchAllowed 0x118dfa88 // dvar_t *: a bool (hash 0xa7e6dac0, default 1, flags 0, registered at 0xe76fef) whose 0 fails the preload with EXE_DISCONNECTED; nothing in the game's code writes it - name is a guess
+#define ADDR_LobbyHost_IsHost 0xe3152b // func - bool (int session): LobbySession_IsHost of the session (the "LobbyHost_IsHost(%s)" of the task's own print at 0x1087a72)
+#define ADDR_Com_IsInGame 0xe71710 // func - bool (void) (the "Com_IsInGame(%s)" of the same print)
+#define ADDR_Com_ServerWithoutUILevel 0xe7174f // func - bool (void): sv_running and not Com_IsRunningUILevel - name is a guess
+#define ADDR_Dvar_GetBool 0xfa0224 // func - bool (dvar_t *)
+#define ADDR_Usermap_SelectByName 0xe4a7c5 // func - entry *(const char *name): the workshop map whose name at +0x84 is that, from the list 0x3061440 (0x4c8 bytes an entry, the name it loads by at +0x64), made the current one (0xe4a6f3: copied to 0x3087d28, cleared for none), or NULL
+#define ADDR_Com_PreloadMap_SkipsTest 0x127b0c2 // func - bool (void): Com_PreloadMap (0xd6f75d) doesn't test the map when this is true (not flag 0x30878dc, session mode bits 0x3c0 == 0x80, and not 0x127b088)
+#define ADDR_Com_MapCanBeHad 0x11558d7 // func - bool (const char *map): Com_PreloadMap's test and Engine.IsMapValid's (0x1093258): base game, a workshop map that is there, or a pack that is installed and owned
+#define ADDR_SEH_Localize 0x109cdd4 // func - const char *(const char *key): the localized text (as 0xd6f7fc does for PLATFORM_MISSINGMAP)
+#define ADDR_Com_PrintError 0xe7117f // func - void (int channel, const char *format, ...): an error line in the console
+#define ADDR_String_PLATFORM_MISSINGMAP 0x16ad0ac // the game's "PLATFORM_MISSINGMAP"
+#define ADDR_String_EXE_DISCONNECTED 0x16c0c0b // the game's "EXE_DISCONNECTED"
+#define ADDR_String_UnableToPreload 0x16fea24 // the game's "Unable to begin preloading map %s gametype %s: %s\n"
 // TextureSwapGuard (texture_swap_guard.c): the texture views the game replaces or drops while the render thread may
 // still read them, read in the Mac game's code (wip/night/crash-render.md); no Windows counterparts looked up
 #define ADDR_R_UntrackTextureMemory 0x126dde1 // func - int (view, category): under critical section 0x67 counts the view's entry in the texture memory table down, removes it at 0 and returns what is left; called right before nearly every release of a texture view (29 calls, all with call)
