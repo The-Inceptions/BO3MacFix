@@ -34,6 +34,9 @@ void display_follow_save(void) {
 }
 void gc_bridge_quit(void) {
 }
+void crash_log_quit(int status) {
+    (void)status;
+}
 
 #include "../source/qol.c"
 
