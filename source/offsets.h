@@ -633,10 +633,13 @@
 #define ADDR_TextureSwap_StreamerRet 0x138f173 // in the streamer's view swap 0x138ef3a: image view cleared, new view made (0x129b330), stored, then untrack and Release of the old
 #define ADDR_TextureSwap_StreamerRet2 0x138f20d // the same in 0x138f1d5 (its Release is a tail jump)
 #define ADDR_TextureSwap_StreamerRet3 0x138f25b // the same in 0x138f223
-#define ADDR_TextureSwap_ImageFreeRet 0x129b2b3 // in the image release 0x129b297 (the per-asset free 0x13462d4, case 9): untrack and Release of +0xa8, then the field cleared
-#define ADDR_TextureSwap_ImageFreeRet2 0x129b2e8 // the same for +0xb0
 #define ADDR_TextureSwap_ImageAssignRet 0x129c15a // in 0x129c113 (stub, source): an image's own +0xa8 view untracked and released before the source's is stored (the default asset stubs of a zone unload, 0x1349650)
 #define ADDR_TextureSwap_ImageAssignRet2 0x129c19c // the same for +0xb0
+#define ADDR_TextureSwap_StubMakerRet 0x13497db // where 0x129c113 returns to in the stub maker 0x1349650 (called by the zone unload 0x1348d0e after the render sync 0x1348c96: the render thread then only draws the loading icon, lui_loader_no_offset, in its remote-update frames)
+#define ADDR_TextureSwap_DefaultResetRet 0x129c23e // and in 0x129c1e8 (an image with its +0xbc flag gets the default picture's views; only from 0x1346745 <- 0x13489b7)
+#define ADDR_DelayedRelease_Head 0x20d9a70 // the delayed release's ring (0x129b485): the oldest entry, NULL when empty; head == tail when full
+#define ADDR_DelayedRelease_Tail 0x20d9a78 // where the next entry goes
+#define ADDR_DelayedRelease_Ring 0x20d9a80 // 8182 entries of 16 bytes {u32 frame stamp, u8 untrack, view at +8}, up to 0x20f99e0
 // AtomicRelease (asl_refcount.c): the reference counting every object of Aspyr's Direct3D 11 layer on Metal
 // (ASL::DX11Metal) shares through its virtual base IUnknown_Mac (vtable 0x197cd90): vtable at +0, external count at +8,
 // internal count at +0xc, one aligned 8-byte word; vtable entry 4 (+0x20) is the deleting destructor
