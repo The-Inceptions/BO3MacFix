@@ -88,6 +88,8 @@
 #include "controllers.h"
 #include "gc_bridge.h"
 #include "launch_args.h"
+#include "start_mod.h"
+#include "start_mod_game.h"
 
 #include "versioninfo.h"
 
@@ -1293,6 +1295,13 @@ __attribute__((constructor)) static void dylib_main() {
     notices_init(read_int_setting_or_env("Notices", 1), read_int_setting_or_env("PauseOnDisconnect", 0));
     // OfflineMode's automatic test deciding "offline" tells the player (offline_mode.c), now that notices can be shown
     offline_mode_set_notice(offline_notice);
+    // StartWithMod (on by default; the launcher reads it and starts the game with the mod loaded at the last quit):
+    // what the launcher did for this start, with a notice when it left the mod out for a reason the player must know,
+    // and the loaded mod noted at each first menu (notices.m), see start_mod_game.c
+    const char *start_mod_debug = getenv("BO3MACFIX_STARTWITHMODDEBUG");
+    start_mod_game_init(game_base_address, read_int_setting_or_env("StartWithMod", 1) != 0,
+                        getenv("BO3MACFIX_STARTWITHMOD_DIR"), getenv(Start_Mod_Launch_Env),
+                        start_mod_debug != NULL && atoi(start_mod_debug) != 0);
     // a key (F5 by default), or L3 + R3 in the pause menu, saves a solo zombies game (quick_save.m, checkpoint.lua)
     quick_save_init(read_int_setting_or_env("QuickSave", 96));
 

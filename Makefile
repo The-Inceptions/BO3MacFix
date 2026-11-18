@@ -8,6 +8,9 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 	tests/test_aae_cheats tests/test_script_errors tests/test_quick_save tests/test_dynres tests/test_gpu_diag \
 	tests/test_t7o_subtitle
 TEST_TARGETS += tests/test_launch_args
+# StartWithMod: which mods are remembered and when, the launcher's decisions, the marker of a start given the mod, its
+# notices, and the game's half against a made-up loaded mod (start_mod.c, start_mod_game.c)
+TEST_TARGETS += tests/test_start_mod
 TEST_TARGETS += tests/test_frame_pace
 # the plugin's packets and rules for joining a game on the local network, its listener over the loopback (aae_lan.c)
 TEST_TARGETS += tests/test_aae_lan
@@ -147,6 +150,9 @@ SOURCES += source/navmesh_convert.c
 SOURCES += source/prepatch.c
 # whether the command line starts a map at launch, for SkipIntro (launch_args.c)
 SOURCES += source/launch_args.c
+# StartWithMod: the loaded mod noted for the launcher, which starts the game with it next time (start_mod.c, which the
+# launcher builds too, and start_mod_game.c)
+SOURCES += source/start_mod.c source/start_mod_game.c
 
 # the build All-around Enhancement checks for, read from its fastfile (aae_build.c)
 SOURCES += source/aae_build.c
@@ -263,6 +269,8 @@ test: $(TEST_TARGETS)
 	for test in $(TEST_TARGETS); do ./$$test || exit 1; done
 	@# every setting can be overridden at env (BO3MACFIX_<NAME>)
 	sh tests/test_env_overrides.sh
+	@# StartWithMod in the launcher: what it puts on the game's command line, through its dry run
+	sh tests/test_launcher_startmod.sh
 	@# each setting's default agrees in the code, its settings page row (settings.c) and README.md
 	python3 tests/test_settings_defaults.py
 	python3 tests/test_hook_returns.py
@@ -564,6 +572,13 @@ tests/test_dynres: tests/test_dynres.c source/dynres.c source/dynres.h source/fr
 tests/test_launch_args: tests/test_launch_args.c source/launch_args.c source/launch_args.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_launch_args.c \
 		source/launch_args.c
+
+# start_mod.c and start_mod_game.c in made-up game, workshop and BO3MacFix folders, with the address and undefined
+# behaviour sanitizers since they read files
+tests/test_start_mod: tests/test_start_mod.c source/start_mod.c source/start_mod.h source/start_mod_game.c \
+		source/start_mod_game.h source/launch_args.c source/launch_args.h source/offsets.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_start_mod.c source/start_mod.c source/start_mod_game.c source/launch_args.c
 
 # offline_mode.c against stand-ins for the system's network calls, made-up lookups and connections, and this Mac's
 # loopback (nothing leaves the machine), with the address and undefined behaviour sanitizers

@@ -43,6 +43,7 @@
 #include "notice_queue.h"
 #include "notices.h"
 #include "notices_lua.h"
+#include "start_mod_game.h"
 
 #define Max_Notice_Age 20.0    // seconds a notice waits for the UI (while a map loads, say) before it's dropped
 #define Lasting_Show 8         // seconds a lasting notice (a warning) shows, twice the others
@@ -340,6 +341,9 @@ static int lua_log(lua_State *s) {
 // UI state is set up, as All-around Enhancement's scripts load, makes AAE quit the game at a map's load (see
 // settings_menu.c). One more line in start_lua did.
 static int lua_load_ui(lua_State *s) {
+    // the start got as far as the menus, and a mod loaded or unloaded since the last menu shows now: StartWithMod
+    // notes it (no Lua)
+    start_mod_game_menu_ready();
     ptrdiff_t top = HKS_TOP(s) - HKS_BASE(s);
     if (hks_load_source(s, (const char *)notices_lua, notices_lua_len, "=BO3MacFix notices")) {
         hks_push_boolean(s, debug_menus);

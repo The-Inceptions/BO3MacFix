@@ -39,6 +39,24 @@ int main(void) {
     CHECK(launch_args_start_game(ARGS(EXE, "+set", "fs_game", "2631943123", "+set", "sv_cheats", "0", "+devmap",
                                       "zm_zod")));
 
+    // fs_game in any form (StartWithMod adds none then): the engine's own "+set fs_game", as one argument, other
+    // ways of setting a dvar, other cases
+    CHECK(launch_args_sets_fs_game(ARGS(EXE, "+set", "fs_game", "2631943123")));
+    CHECK(launch_args_sets_fs_game(ARGS(EXE, "/Game/CoDBlkOps3.app/Contents/MacOS/AppBundleExe", "+set fs_game mymod")));
+    CHECK(launch_args_sets_fs_game(ARGS(EXE, "+seta", "fs_game", "mymod")));
+    CHECK(launch_args_sets_fs_game(ARGS(EXE, "+FS_GAME", "x")));
+    CHECK(launch_args_sets_fs_game(ARGS(EXE, "+set", "Fs_Game", "")));
+    CHECK(launch_args_sets_fs_game(ARGS(EXE, "+exec", "a.cfg", "+set fs_game usermaps")));
+    // and none: no arguments, others, a word that is only like it, argv[0]
+    CHECK(!launch_args_sets_fs_game(ARGS(EXE)));
+    CHECK(!launch_args_sets_fs_game(ARGS(EXE, "/Game/CoDBlkOps3.app/Contents/MacOS/AppBundleExe")));
+    CHECK(!launch_args_sets_fs_game(ARGS(EXE, "+set", "fs_gam", "x", "+map", "zm_zod")));
+    CHECK(!launch_args_sets_fs_game(ARGS(EXE, "+set", "fs", "game")));
+    CHECK(!launch_args_sets_fs_game(ARGS("/tmp/fs_game/CoDBlkOps3_Exe")));
+    CHECK(!launch_args_sets_fs_game(ARGS(EXE, "fs_gam")));
+    CHECK(!launch_args_sets_fs_game(0, (char *[]){ NULL }));
+    CHECK(!launch_args_sets_fs_game(ARGS(EXE, NULL)));
+
     if (failures == 0)
         printf("test_launch_args: all passed\n");
     return failures == 0 ? 0 : 1;

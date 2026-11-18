@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <Foundation/Foundation.h>
+#include "../source/start_mod.h"
 
 // BO3MacFix_PrepatchedIsCurrent and BO3MacFix_BuildPrepatched, see source/prepatch.h
 typedef int (*prepatch_fn)(const char *original, const char *copy, char *message, size_t message_size);
@@ -129,12 +130,55 @@ static NSURL *prepatched_executable(NSURL *gameDir, NSURL *dylibUrl, FILE *log) 
     return [NSURL fileURLWithPath:copy];
 }
 
+// StartWithMod (source/start_mod.c): the mod that was loaded when the game was last quit, which BO3MacFix notes in
+// BO3MacFix/lastmod.txt, goes on the game's command line as "+set fs_game <mod>", as the test runner has always
+// started the game: it then loads the mod before its first menu instead of the player loading it from MODS. The game
+// is told what was done (BO3MACFIX_STARTWITHMOD_LAUNCH), for its log and for a notice when the mod was left out for a
+// reason the player has to know. Not with NoCodePatches, under which the library does none of its part. A dry run
+// writes only into a folder of its own (BO3MACFIX_STARTWITHMOD_DIR).
+static start_mod_plan_t start_with_mod(NSURL *gameDir, NSURL *macfixUrl, NSString *settingsPath, BOOL noCodePatches,
+                                       BOOL dryRun, int argc, char **argv, NSMutableArray *arguments,
+                                       NSMutableDictionary *environment, FILE *log, start_mod_paths_t *paths) {
+    static char folder[PATH_MAX], game[PATH_MAX], workshop[PATH_MAX];
+    const char *env = getenv("BO3MACFIX_STARTWITHMOD"), *ownFolder = getenv("BO3MACFIX_STARTWITHMOD_DIR");
+    BOOL hasOwnFolder = ownFolder != NULL && ownFolder[0] != '\0';
+    int enabled = env != NULL ? atoi(env) : read_setting(settingsPath, "StartWithMod", 1);
+    strlcpy(folder, hasOwnFolder ? ownFolder : macfixUrl.URLByStandardizingPath.path.fileSystemRepresentation,
+            sizeof(folder));
+    strlcpy(game, [gameDir URLByAppendingPathComponent:@"../../.."].URLByStandardizingPath.path
+                      .fileSystemRepresentation, sizeof(game));
+    strlcpy(workshop, [gameDir URLByAppendingPathComponent:@"../../../../../workshop"].URLByStandardizingPath.path
+                          .fileSystemRepresentation, sizeof(workshop));
+    paths->folder = folder;
+    paths->game = game;
+    paths->workshop = workshop;
+    char mod[Start_Mod_Name_Size], note[64];
+    BOOL write = !dryRun || hasOwnFolder;
+    start_mod_plan_t plan = start_mod_launch(paths, enabled != 0 && !noCodePatches, argc, argv, write, mod);
+    if (plan == Start_Mod_Given)
+        [arguments addObjectsFromArray:@[ @"+set", @"fs_game", @(mod) ]];
+    start_mod_note(plan, mod, note, sizeof(note));
+    environment[@Start_Mod_Launch_Env] = @(note);
+    fprintf(log, "StartWithMod: %s%s%s (lastmod.txt in %s%s)\n", mod, mod[0] != '\0' ? ": " : "",
+            enabled != 0 && noCodePatches ? "off, since NoCodePatches is on" : start_mod_plan_text(plan), folder,
+            write ? "" : "; a dry run, so nothing written");
+    return plan;
+}
+
 int main(int argc, char **argv) {
     NSTask *gameProc = [[NSTask alloc] init];
     // copy our current working directory and pass it onto the child process
     NSProcessInfo *currentProcess = [NSProcessInfo processInfo];
     NSString *pwd = [currentProcess arguments][0];
-    gameProc.currentDirectoryURL = [[NSURL fileURLWithPath:pwd] URLByDeletingLastPathComponent];
+    // a dry run for tests (BO3MACFIX_LAUNCHER_DRYRUN=<the game's MacOS folder>): this launcher acts as if it were in
+    // that folder, writes nothing there (no launcher.log, no pre-patched copy; StartWithMod only into
+    // BO3MACFIX_STARTWITHMOD_DIR), prints what it would start and exits without starting it
+    const char *dryRunFolder = getenv("BO3MACFIX_LAUNCHER_DRYRUN");
+    BOOL dryRun = dryRunFolder != NULL && dryRunFolder[0] != '\0';
+    if (dryRun)
+        gameProc.currentDirectoryURL = [NSURL fileURLWithPath:@(dryRunFolder) isDirectory:YES];
+    else
+        gameProc.currentDirectoryURL = [[NSURL fileURLWithPath:pwd] URLByDeletingLastPathComponent];
     // set the game executable path
     gameProc.executableURL = [gameProc.currentDirectoryURL URLByAppendingPathComponent:@"CoDBlkOps3_Exe"];
 
@@ -163,27 +207,44 @@ int main(int argc, char **argv) {
         else
             [newArguments addObject:[NSString stringWithUTF8String:argv[i]]];
     }
+
+    // What happened goes in BO3MacFix/launcher.log (a dry run prints it)
+    NSURL *macfixUrl = [gameProc.currentDirectoryURL URLByAppendingPathComponent:@"../../../BO3MacFix"];
+    NSString *settingsPath = [macfixUrl URLByAppendingPathComponent:@"settings.ini"].path;
+    FILE *log = dryRun ? stdout
+                       : fopen([macfixUrl URLByAppendingPathComponent:@"launcher.log"].path.fileSystemRepresentation, "w");
+    if (log == NULL)
+        log = fopen("/dev/null", "w");
+    BOOL noCodePatches = getenv("BO3MACFIX_NOCODEPATCHES") != NULL ? atoi(getenv("BO3MACFIX_NOCODEPATCHES")) != 0
+                                                                  : read_setting(settingsPath, "NoCodePatches", 0) != 0;
+    start_mod_paths_t startModPaths;
+    start_mod_plan_t startMod = start_with_mod(gameProc.currentDirectoryURL, macfixUrl, settingsPath, noCodePatches,
+                                               dryRun, argc, argv, newArguments, newEnvironment, log, &startModPaths);
     gameProc.environment = newEnvironment;
     gameProc.arguments = newArguments;
 
     // start the pre-patched executable unless PrePatchedExe = 0 in settings.ini, or NoCodePatches is on (which
-    // wants the game's code as shipped). What happened goes in BO3MacFix/launcher.log.
-    NSURL *macfixUrl = [gameProc.currentDirectoryURL URLByAppendingPathComponent:@"../../../BO3MacFix"];
-    NSString *settingsPath = [macfixUrl URLByAppendingPathComponent:@"settings.ini"].path;
-    FILE *log = fopen([macfixUrl URLByAppendingPathComponent:@"launcher.log"].path.fileSystemRepresentation, "w");
-    if (log == NULL)
-        log = fopen("/dev/null", "w");
+    // wants the game's code as shipped)
     const char *prepatched_env = getenv("BO3MACFIX_PREPATCHEDEXE");
     int prepatched = prepatched_env != NULL ? atoi(prepatched_env) : read_setting(settingsPath, "PrePatchedExe", 1);
     if (prepatched == 0) {
         fprintf(log, "PrePatchedExe is off\n");
-    } else if (getenv("BO3MACFIX_NOCODEPATCHES") != NULL ? atoi(getenv("BO3MACFIX_NOCODEPATCHES")) != 0
-                                                          : read_setting(settingsPath, "NoCodePatches", 0) != 0) {
+    } else if (noCodePatches) {
         fprintf(log, "NoCodePatches is on, so the game's code stays as shipped\n");
+    } else if (dryRun) {
+        fprintf(log, "dry run: the pre-patched executable is neither checked nor made\n");
     } else {
         NSURL *copyUrl = prepatched_executable(gameProc.currentDirectoryURL, dylibUrl, log);
         if (copyUrl != nil)
             gameProc.executableURL = copyUrl;
+    }
+    if (dryRun) {
+        printf("dry run: would start %s in %s\n", gameProc.executableURL.lastPathComponent.UTF8String,
+               gameProc.currentDirectoryURL.path.fileSystemRepresentation);
+        for (NSUInteger i = 0; i < newArguments.count; i++)
+            printf("argument %lu: %s\n", (unsigned long)i + 1, [newArguments[i] UTF8String]);
+        printf("environment: %s=%s\n", Start_Mod_Launch_Env, [newEnvironment[@Start_Mod_Launch_Env] UTF8String]);
+        return 0;
     }
     fprintf(log, "starting %s\n", gameProc.executableURL.lastPathComponent.UTF8String);
     fflush(log);
@@ -212,6 +273,9 @@ int main(int argc, char **argv) {
     if (!launched) {
         fprintf(log, "couldn't start %s: %s\n", gameProc.executableURL.lastPathComponent.UTF8String,
                 error.localizedDescription.UTF8String);
+        // no game ran, so its marker mustn't make the next start look like one with the mod that failed
+        if (startMod == Start_Mod_Given && !start_mod_launch_abandoned(&startModPaths))
+            fprintf(log, "StartWithMod: couldn't remove lastmod.pending\n");
         fclose(log);
         return 1;
     }

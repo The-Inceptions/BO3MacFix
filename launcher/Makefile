@@ -17,7 +17,8 @@ LDFLAGS =
 
 FRAMEWORKS = -framework CoreFoundation -framework Foundation
 
-SOURCES = launcher.m
+# StartWithMod's rules, the library's own files (source/start_mod.c with the command line's in launch_args.c)
+SOURCES = launcher.m ../source/start_mod.c ../source/launch_args.c
 
 all: $(TARGET)
 

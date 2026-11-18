@@ -19,3 +19,15 @@ bool launch_args_start_game(int argc, char *const argv[]) {
     }
     return false;
 }
+
+bool launch_args_sets_fs_game(int argc, char *const argv[]) {
+    static const char word[] = "fs_game";
+    for (int i = 1; i < argc; i++) {
+        if (argv[i] == NULL)
+            continue;
+        for (const char *p = argv[i]; *p != '\0'; p++)
+            if (strncasecmp(p, word, sizeof(word) - 1) == 0)
+                return true;
+    }
+    return false;
+}

@@ -7,7 +7,7 @@
 //   BO3MacFix.RestartPending() -> true while a setting saved this session differs from what the game started with
 //                                  and couldn't be applied without a restart
 // Some settings apply right away (live = true): the frame rate ones, the display ones, the controller ones,
-// RawMouseScale, AAEOnline, ExitFix, AutoSave, QuickSave and ModWarningDialog, plus JobIdleFix, RenderIdleFix, MainWaitFix and AvoidNotch from the pre-patched executable. The rest
+// RawMouseScale, AAEOnline, ExitFix, AutoSave, QuickSave, ModWarningDialog and StartWithMod, plus JobIdleFix, RenderIdleFix, MainWaitFix and AvoidNotch from the pre-patched executable. The rest
 // are read once at startup, so changing them asks for a restart.
 #include <limits.h>
 #include <spawn.h>
@@ -101,6 +101,7 @@ static const setting_t settings[] = {
     { "RawMouseScale", "Raw mouse speed", "The speed of raw mouse aiming, in percent.", "Mouse", false, 7, { 25, 50, 75, 100, 150, 200, 300 }, { "25%", "50%", "75%", "100%", "150%", "200%", "300%" }, 100, Live_Always },
     { "ExitFix", "Quit without crashing", "Quits without the crash (and crash report) every quit used to end in.", "Game", Toggle_Live(1, Live_Always) },
     { "SkipIntro", "Skip intro movies", "Starts without the Black Ops III and Aspyr logo movies, so the title screen comes up about 20 seconds sooner.", "Game", Toggle(1) },
+    { "StartWithMod", "Start with the last mod", "Starts the game with the mod that was loaded when you last quit, about 15 seconds sooner than loading it from MODS. Unload it in MODS and quit to start without it.", "Game", Toggle_Live(1, Live_Always) },
     { "AudioFollowsDefault", "Audio follows output device", "Moves the game's sound to the new output device, for example when AirPods connect.", "Game", Toggle(1) },
     { "Notices", "On-screen notices", "Shows a short notice when a controller connects or disconnects or its battery runs low, and when the game moves to another display.", "Game", Toggle_Live(1, Live_Always) },
     { "AAEOnline", "AAE online notes", "Lets All-around Enhancement show its version notes and weather (GitHub and wttr.in only).", "Game", Toggle_Live(0, Live_Always) },
@@ -226,6 +227,8 @@ static bool apply_live(const setting_t *t, int value) {
         checkpoint_set_keep_bank(value != 0);
     else if (strcmp(n, "ModWarningDialog") == 0)
         ; // read when a mod's DLL doesn't load (bo3macfix.c)
+    else if (strcmp(n, "StartWithMod") == 0)
+        ; // read by the launcher at each start (start_mod.c)
     else
         return false;
     return true;
@@ -270,7 +273,8 @@ static void (*Cbuf_AddText)(int localClientNum, const char *text);
 
 // Starts the game again through Steam once this process has gone, then quits through the game's own quit path (so
 // config.ini is saved). Going through Steam keeps its launch options and session; the launcher it runs makes or
-// reuses the pre-patched executable, and the game reloads the last mod (AAE) by itself.
+// reuses the pre-patched executable and, with StartWithMod, starts the game with the mod that is loaded now
+// (start_mod.c).
 static void restart_game(void) {
     // only once: pressing restart again before the game has quit would start it twice
     static bool restarting = false;
