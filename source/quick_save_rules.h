@@ -28,3 +28,17 @@ typedef struct {
 void quick_save_slot_put(quick_save_slot_t *slot, quick_save_source_t source, double now);
 // the request, at most Quick_Save_Max_Age seconds old, or Quick_Save_None; taking it empties the slot
 quick_save_source_t quick_save_slot_take(quick_save_slot_t *slot, double now);
+
+// when L3 + R3 were last down together on any controller. All-around Enhancement's pause menu opens its Discord invite
+// on R3's press, before the quick save's hold has counted and often a few milliseconds before L3's press, so
+// checkpoint.lua holds that popup back for a moment and asks this whether it was the quick save after all.
+#define Quick_Save_Chord_Never 1e9 // the age when L3 + R3 were never down together
+typedef struct {
+    double seen; // the latest read with L3 + R3 down together and no other button, 0 for none yet
+    bool read;   // a controller's buttons have come through at all: without that there's no quick save by controller
+} quick_save_chord_t;
+
+void quick_save_chord_note(quick_save_chord_t *chord, uint16_t buttons, double now);
+// seconds since L3 + R3 were last down together (Quick_Save_Chord_Never if they never were), or -1 when no
+// controller's buttons have come through yet
+double quick_save_chord_age(const quick_save_chord_t *chord, double now);

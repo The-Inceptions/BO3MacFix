@@ -15,3 +15,7 @@ void quick_save_pad(uint32_t user, uint16_t buttons);
 // CheckpointTakeQuickSave() -> nil, or "key" and the key's name, or "pad": a quick save asked for in the last 3 seconds
 // (checkpoint.lua's timer, twice a second)
 int quick_save_lua_take(lua_State *s);
+// CheckpointQuickSaveChord() -> seconds since a controller last had L3 + R3 down together (1e9 if never), or nil when
+// the quick save is off or no controller's buttons have come through it: checkpoint.lua holds All-around Enhancement's
+// R3 popup in the pause menu back for a moment and drops it when L3 + R3 turn out to be the quick save
+int quick_save_lua_chord_age(lua_State *s);

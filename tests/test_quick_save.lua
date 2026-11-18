@@ -2,7 +2,8 @@
 -- Checks the quick save (the QuickSave key, or L3 + R3 held in the pause menu): it saves through the settings page's
 -- Save game path with the same checks (a solo zombies match, a resumed game not short of its saved round), says how it
 -- went in a notice, and asks again before replacing a game saved at a higher round; and the saved game's details on
--- the settings page's rows (map, round, points, when it was saved).
+-- the settings page's rows (map, round, points, when it was saved). And AAE's Discord invite on R3 in the pause menu: it
+-- waits a moment there and stays closed when L3 + R3 turn out to be the quick save.
 local failures = 0
 local function check(condition, what)
     if not condition then
@@ -32,9 +33,14 @@ Engine = {
 }
 Enum = { LobbyType = { LOBBY_TYPE_GAME = 2 } }
 CoD = { GetGameRulePostFix = function() return "_Default" end }
-local tick
+local tick -- the poll, checkpoint.lua's first timer; the ones after it (the Discord invite's waits) are kept in timers
+local timers = {}
 local root = { addElement = function() end }
-LUI = { roots = { UIRootFull = root }, UITimer = { newElementTimer = function(ms, once, fn) tick = fn return {} end } }
+LUI = { roots = { UIRootFull = root }, UITimer = { newElementTimer = function(ms, once, fn)
+    local timer = { ms = ms, once = once, fn = fn, close = function(self) self.closed = true end }
+    if tick == nil then tick = fn else table.insert(timers, timer) end
+    return timer
+end } }
 
 -- ---- a made-up checkpoint.c, quick_save.m and notices
 local store, state, saves, notices, requests, clock_now = {}, 0, {}, {}, {}, 100
@@ -68,13 +74,19 @@ local function when_fn(saved)
     return saved == "1000" and "3 h ago" or ""
 end
 BO3MacFix = { Log = function(text) table.insert(logs, text) end, NoticeClock = function() return clock_now end }
+-- CheckpointQuickSaveChord: how long ago L3 + R3 were down together, nil while no controller can quick save
+local chord_answer, chord_fails = nil, false
+local function chord_fn()
+    if chord_fails then error("no chord") end
+    return chord_answer
+end
 local chunk = assert(loadfile("source/checkpoint.lua"))
 chunk(save_fn, read_fn, function() return nil end, function() return nil end, resume_fn, function() return nil end,
     function() return "" end, function() end, notice_fn, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-    take_fn, when_fn)
-check(tick ~= nil, "a timer is started")
-check(BO3MacFix.CheckpointTakeQuickSave == take_fn and BO3MacFix.CheckpointSavedWhen == when_fn,
-    "the new C functions are set up")
+    take_fn, when_fn, nil, chord_fn)
+check(tick ~= nil and #timers == 0, "a timer is started")
+check(BO3MacFix.CheckpointTakeQuickSave == take_fn and BO3MacFix.CheckpointSavedWhen == when_fn and
+    BO3MacFix.CheckpointQuickSaveChord == chord_fn, "the new C functions are set up")
 
 local function enter_match(name, hud_round)
     map, in_game = name, true
@@ -231,6 +243,143 @@ clock_now = 403
 last = press()
 check(#saves == 10 and store.Round == "3", "the key again replaces it: " .. tostring(last))
 menu_parent = nil
+
+-- ---- AAE's Discord invite on R3 in the pause menu: CreateOverlay(controller, menu, "DiscordInvite", controller, nil)
+local made = {} -- the overlays the game's CreateOverlay made: { name, menu, count of the arguments after the name, ... }
+local function game_create(controller, menu, name, ...)
+    table.insert(made, { name = name, menu = menu, controller = controller, n = select("#", ...), ... })
+    return { overlay = name }
+end
+CoD.OverlayUtility = { CreateOverlay = game_create }
+local added = {} -- what the pause menu was given: the invite's wait
+pause_menu.addElement = function(self, element) table.insert(added, element) end
+menu_parent = { getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu) -- the wrapper goes in here
+local create = CoD.OverlayUtility.CreateOverlay
+check(create ~= game_create, "CreateOverlay is wrapped")
+local function r3(menu)
+    made, timers, added, logs = {}, {}, {}, {}
+    return create(0, menu or pause_menu, "DiscordInvite", 0, nil)
+end
+local function fire()
+    local waiting = timers[#timers]
+    if waiting ~= nil then waiting.fn() end
+    return waiting
+end
+local function closed_line()
+    return string.find(table.concat(logs, "\n"), "Discord invite left closed: L3 + R3 were held for the quick save",
+        1, true) ~= nil
+end
+
+-- with no controller that can quick save (nil), it opens at once, as AAE opens it
+enter_match("zm_theater", 3)
+chord_answer = nil
+r3()
+check(#made == 1 and made[1].name == "DiscordInvite" and made[1].menu == pause_menu and made[1].controller == 0 and
+    made[1].n == 2 and made[1][1] == 0 and made[1][2] == nil and #timers == 0, "no quick save by controller: at once")
+-- R3 alone: it waits on the pause menu, then opens with the same arguments
+chord_answer = 1e9
+local given = r3()
+check(given == nil and #made == 0 and #timers == 1 and #added == 1 and added[1] == timers[1], "R3: it waits")
+check(timers[1].ms == 200 and timers[1].once == true, "for 200 ms, once: " .. tostring(timers[1].ms))
+fire()
+check(#made == 1 and made[1].name == "DiscordInvite" and made[1].menu == pause_menu and made[1].n == 2 and
+    made[1][1] == 0 and made[1][2] == nil and not closed_line(), "R3 alone: it opens after the wait")
+check(timers[1].closed == true, "and the wait's timer is closed")
+fire()
+check(#made == 1, "a timer that fires again opens nothing more")
+-- L3 + R3 down together since just before R3: it stays closed
+r3()
+chord_answer = 0.05
+fire()
+check(#made == 0 and closed_line(), "L3 + R3: the invite stays closed")
+-- the edge of the window: 0.3 s ago (the wait and 0.1 s before R3's press) still counts, longer ago doesn't
+r3()
+chord_answer = 0.29
+fire()
+check(#made == 0, "0.29 s ago: closed")
+r3()
+chord_answer = 0.35
+fire()
+check(#made == 1, "0.35 s ago, before R3's press: it opens")
+-- a timer that fires late (LUI's run late under load): the window is the wait the clock measured, not the 200 ms
+clock_now = 500
+r3()
+clock_now = 501.5
+chord_answer = 1.3 -- L3 + R3 seen 0.2 s after R3, then let go
+fire()
+check(#made == 0, "a late timer: L3 + R3 after R3 still counts")
+r3()
+clock_now = 503.5
+chord_answer = 2.2 -- seen 0.2 s before R3's press, then let go
+fire()
+check(#made == 1, "a late timer: L3 + R3 well before R3 doesn't")
+-- a clock that doesn't move (or none) falls back to the 200 ms
+r3()
+chord_answer = 0.35
+fire()
+check(#made == 1, "an unmoved clock: the 200 ms")
+-- a second R3 while one waits: still one invite
+chord_answer = 1e9
+r3()
+create(0, pause_menu, "DiscordInvite", 0, nil)
+check(#timers == 1 and #made == 0, "a second R3 while one waits: no second wait")
+fire()
+check(#made == 1, "one invite")
+-- the pause menu closed during the wait: nothing opens, even from a timer that still fires
+r3()
+menu_parent = nil
+fire()
+check(#made == 0, "the pause menu closed during the wait: nothing")
+menu_parent = { getParent = function() return root end }
+r3()
+check(#timers == 1, "the next R3 waits again")
+fire()
+check(#made == 1, "and opens")
+-- as LUI does it, the wait's timer closes with the menu and never fires; the next pause menu's R3 still waits and opens
+r3()
+menu_parent = nil
+local next_parent = { getParent = function() return root end }
+local next_menu = { getParent = function() return next_parent end, addElement = function(self, element) end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", next_menu)
+r3(next_menu)
+check(#timers == 1 and #made == 0, "a new pause menu after one closed during a wait: its R3 waits")
+fire()
+check(#made == 1 and made[1].menu == next_menu, "and opens over it")
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+menu_parent = { getParent = function() return root end }
+-- the chord's answer failing at the end of the wait: it opens, as R3 alone
+r3()
+chord_fails = true
+fire()
+chord_fails = false
+check(#made == 1, "the chord can't be asked: it opens")
+-- at once: the chord can't be asked; another overlay; outside the pause menu; outside a match; a menu without elements
+chord_fails = true
+r3()
+chord_fails = false
+check(#made == 1 and #timers == 0, "the chord can't be asked: at once")
+made, timers = {}, {}
+create(0, pause_menu, "QuitPCGamePopup", 0, nil)
+check(#made == 1 and made[1].name == "QuitPCGamePopup" and #timers == 0, "another overlay: at once")
+menu_parent = nil
+r3()
+check(#made == 1 and #timers == 0, "the pause menu closed: at once")
+menu_parent = { getParent = function() return root end }
+in_game = false
+r3()
+check(#made == 1 and #timers == 0, "outside a match (the lobby's R3): at once")
+in_game = true
+r3({ getParent = function() return root end })
+check(#made == 1 and #timers == 0, "a menu that takes no elements: at once")
+-- an overlay with more arguments gets them all back after the wait
+made, timers, added = {}, {}, {}
+create(0, pause_menu, "DiscordInvite", 1, nil, "three", nil)
+fire()
+check(#made == 1 and made[1].n == 4 and made[1][1] == 1 and made[1][2] == nil and made[1][3] == "three" and
+    made[1][4] == nil, "every argument after the wait: " .. tostring(made[1] and made[1].n))
+menu_parent = nil
+chord_answer = nil
 
 -- ---- the settings page's rows: map, round, points and when it was saved
 local resume_row, delete_row = rows[2], rows[3]

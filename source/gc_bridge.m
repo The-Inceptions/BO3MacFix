@@ -450,6 +450,8 @@ install_hook_name(ASL_XInputGetState, uint32_t, uint32_t user_index, XINPUT_STAT
         *state = test_pad;
         os_unfair_lock_unlock(&pads_lock);
         controller_input(&state->Gamepad);
+        // the tests' L3 + R3 is a quick save in the pause menu, as a controller's (quick_save.m)
+        quick_save_pad(0, state->Gamepad.wButtons);
         return ERROR_SUCCESS;
     }
     if (enabled && user_index < XUSER_MAX_COUNT) {

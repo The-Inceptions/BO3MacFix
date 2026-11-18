@@ -59,9 +59,13 @@ static int lost = 0; // PauseOnDisconnect's requests
 void notices_controller_lost(void) {
     lost++;
 }
-static int quick_save_looks = 0; // the controller states the quick save's L3 + R3 saw
+static int quick_save_looks = 0; // the controller states the quick save's L3 + R3 saw, and the last one
+static uint32_t quick_save_user = 99;
+static uint16_t quick_save_buttons = 0;
 void quick_save_pad(uint32_t user, uint16_t buttons) {
     quick_save_looks++;
+    quick_save_user = user;
+    quick_save_buttons = buttons;
 }
 // the controller states IdleDisplaySleep saw, and the last one
 static int display_sleep_looks = 0;
@@ -353,6 +357,15 @@ int main(void) {
     looks = display_sleep_looks;
     CHECK(get(1) == ERROR_SUCCESS && display_sleep_looks == looks + 1);
     set_sdl(1, NULL);
+
+    // the tests' own controller (display_testhooks.m) reaches the quick save as player 1's, L3 + R3 and all
+    gc_bridge_test_pad(0x00C0, 0, 0, 0, 0, 0, 0);
+    int quick_looks = quick_save_looks;
+    CHECK(fake_ASL_XInputGetState(0, &read) == ERROR_SUCCESS && read.Gamepad.wButtons == 0x00C0);
+    CHECK(quick_save_looks == quick_looks + 1 && quick_save_user == 0 && quick_save_buttons == 0x00C0);
+    gc_bridge_test_pad(0x0080, 0, 0, 0, 0, 0, 0);
+    CHECK(fake_ASL_XInputGetState(0, &read) == ERROR_SUCCESS && quick_save_looks == quick_looks + 2 &&
+          quick_save_buttons == 0x0080);
 
     drain_input_queue();
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.2, false); // the player index updates, on the main queue

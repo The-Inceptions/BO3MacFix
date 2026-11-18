@@ -1,4 +1,5 @@
-// Tests for quick_save_rules.c: L3 + R3 held for the quick save, and the request waiting for checkpoint.lua's timer.
+// Tests for quick_save_rules.c: L3 + R3 held for the quick save, the request waiting for checkpoint.lua's timer, and
+// how long ago L3 + R3 were down together (for AAE's R3 popup in the pause menu).
 #include <stdio.h>
 #include "../source/quick_save_rules.h"
 
@@ -65,9 +66,36 @@ static void test_slot(void) {
     CHECK(quick_save_slot_take(&slot, 31.0) == Quick_Save_None);
 }
 
+static void test_chord(void) {
+    quick_save_chord_t chord = { 0 };
+    // no controller's buttons yet: nothing to wait for
+    CHECK(quick_save_chord_age(&chord, 5.0) < 0);
+    // buttons, but never L3 + R3 together, or not alone
+    quick_save_chord_note(&chord, R3, 10.0);
+    CHECK(quick_save_chord_age(&chord, 10.0) == Quick_Save_Chord_Never);
+    quick_save_chord_note(&chord, L3, 10.1);
+    quick_save_chord_note(&chord, L3 | R3 | CROSS, 10.2);
+    quick_save_chord_note(&chord, L3 | R3 | BACK, 10.3);
+    CHECK(quick_save_chord_age(&chord, 10.4) == Quick_Save_Chord_Never);
+    // together: the age counts from the latest read that had them
+    quick_save_chord_note(&chord, L3 | R3, 20.0);
+    CHECK(quick_save_chord_age(&chord, 20.0) == 0 && quick_save_chord_age(&chord, 20.25) == 0.25);
+    quick_save_chord_note(&chord, L3 | R3, 21.0);
+    quick_save_chord_note(&chord, R3, 21.5);
+    quick_save_chord_note(&chord, 0, 21.6);
+    CHECK(quick_save_chord_age(&chord, 22.0) == 1.0);
+    // a clock that reads earlier gives 0, not a negative age (which would say "no controller")
+    CHECK(quick_save_chord_age(&chord, 20.0) == 0);
+    // a clock at 0 still counts as seen
+    quick_save_chord_t zero = { 0 };
+    quick_save_chord_note(&zero, L3 | R3, 0.0);
+    CHECK(quick_save_chord_age(&zero, 0.5) > 0.49 && quick_save_chord_age(&zero, 0.5) <= 0.5);
+}
+
 int main(void) {
     test_combo();
     test_slot();
+    test_chord();
     if (failures == 0)
         printf("test_quick_save: all passed\n");
     return failures == 0 ? 0 : 1;

@@ -20,10 +20,12 @@
 -- the checkpoint's up to be given back and what that did, setting a test one up; and its test switch: give these perks
 -- first (a PerkList line). Then the gun in hand after a restore made during a map's intro (zm_inventory_switch_poll).
 -- Then the quick save's request (quick_save.m: the QuickSave key, or L3 + R3 held in the pause menu) and the saved
--- game's Saved time as text ("3 h ago").
+-- game's Saved time as text ("3 h ago"). Then ResumeKeepsBank's points, and how long ago a controller last had L3 + R3
+-- down together (quick_save.m; nil while no controller can quick save), for AAE's R3 in the pause menu.
 local save_fn, read_fn, apply_fn, clear_fn, resume_fn, weapons_fn, weapon_commands_fn, allow_cheats_fn, notice_fn,
     save_after, give_test, report_after, autosave_fn, delete_fn, autosave_start, loadout_fn, restore_fn,
-    restore_result_fn, test_loadout_fn, perks_test, restore_switch_fn, quick_save_fn, saved_when_fn, points_later_fn = ...
+    restore_result_fn, test_loadout_fn, perks_test, restore_switch_fn, quick_save_fn, saved_when_fn, points_later_fn,
+    chord_age_fn = ...
 local bo3macfix = BO3MacFix
 if bo3macfix == nil or read_fn == nil then return end
 bo3macfix.SaveCheckpoint, bo3macfix.ReadCheckpoint, bo3macfix.ApplyCheckpoint = save_fn, read_fn, apply_fn
@@ -34,7 +36,7 @@ bo3macfix.CheckpointLoadout, bo3macfix.CheckpointRestoreLoadout = loadout_fn, re
 bo3macfix.CheckpointRestoreResult, bo3macfix.CheckpointTestLoadout = restore_result_fn, test_loadout_fn
 bo3macfix.CheckpointRestoreSwitch = restore_switch_fn
 bo3macfix.CheckpointTakeQuickSave, bo3macfix.CheckpointSavedWhen = quick_save_fn, saved_when_fn
-bo3macfix.CheckpointPointsLater = points_later_fn
+bo3macfix.CheckpointPointsLater, bo3macfix.CheckpointQuickSaveChord = points_later_fn, chord_age_fn
 local log = bo3macfix.Log or function() end
 
 local POLL_MS = 500
@@ -1082,6 +1084,68 @@ end
 -- Game popup of AAE's start menu didn't save live. So CreateOverlay is wrapped too (again if something replaces it),
 -- and gives its overlay's name to CheckpointMenuCreated.
 local overlay_wrapper, reporting_overlay = nil, false
+
+local function make_overlay(create, controller, menu, name, ...)
+    -- set while the overlay is made, so an older wrapper of ours further down the chain doesn't report it again
+    reporting_overlay = true
+    local ok, err = pcall(bo3macfix.CheckpointMenuCreated, name, menu, "overlay")
+    if not ok then log("checkpoint error: " .. tostring(err)) end
+    local made, overlay = pcall(create, controller, menu, name, ...)
+    reporting_overlay = false
+    if not made then error(overlay, 0) end
+    return overlay
+end
+
+-- AAE's pause menu opens its Discord invite on R3's press, and the quick save is L3 + R3 held in that menu: R3's press
+-- comes before the hold has counted, and as often as not a few milliseconds before L3's. So while the pause menu is
+-- open in a match and a controller can quick save, the invite waits DISCORD_WAIT_MS and opens only if L3 + R3 weren't
+-- down together since just before R3 went down (the wait as the notices' clock measured it: LUI's timers run late
+-- under load). R3 alone opens it as before, that much later; anywhere else, with the quick save off or with no
+-- controller, it opens at once. The wait is a timer on the menu it opens over, so it goes when that menu does.
+local DISCORD_WAIT_MS = 200
+local DISCORD_SLACK = 0.1 -- seconds before R3's press that still count: the controller's read just before it
+local discord_menu = nil  -- the menu an invite waits over
+
+-- the overlay's arguments after its name, kept and given back as they came (any count, nils too), without unpack
+local function pack(...) return { n = select("#", ...), ... } end
+local function unpacked(list, i)
+    i = i or 1
+    if i > list.n then return end
+    return list[i], unpacked(list, i + 1)
+end
+
+local function discord_waits(name, menu)
+    if name ~= "DiscordInvite" or chord_age_fn == nil or LUI == nil or LUI.UITimer == nil then return false end
+    if type(menu) ~= "table" or type(menu.addElement) ~= "function" then return false end
+    if not (in_match() and on_root(start_menu)) then return false end
+    local ok, age = pcall(chord_age_fn)
+    return ok and type(age) == "number"
+end
+
+local function discord_later(create, controller, menu, name, ...)
+    -- a second R3 while one waits: one invite, as the first press would have opened
+    if discord_menu ~= nil and on_root(discord_menu) then return end
+    discord_menu = menu
+    local extra, decided, timer = pack(...), false, nil
+    local asked = tonumber(call(bo3macfix.NoticeClock))
+    timer = LUI.UITimer.newElementTimer(DISCORD_WAIT_MS, true, function()
+        if decided then return end
+        decided, discord_menu = true, nil
+        if type(timer) == "table" and type(timer.close) == "function" then pcall(timer.close, timer) end
+        local waited, now = DISCORD_WAIT_MS / 1000, tonumber(call(bo3macfix.NoticeClock))
+        if asked ~= nil and now ~= nil and now > asked then waited = now - asked end
+        local ok, age = pcall(chord_age_fn)
+        if ok and type(age) == "number" and age <= waited + DISCORD_SLACK then
+            log("checkpoint: AAE's Discord invite left closed: L3 + R3 were held for the quick save")
+            return
+        end
+        if not on_root(menu) then return end
+        local made, err = pcall(make_overlay, create, controller, menu, name, unpacked(extra))
+        if not made then log("checkpoint error: " .. tostring(err)) end
+    end)
+    menu:addElement(timer)
+end
+
 local function watch_overlays()
     local utility = CoD ~= nil and CoD.OverlayUtility or nil
     if type(utility) ~= "table" or type(utility.CreateOverlay) ~= "function" then return end
@@ -1089,14 +1153,9 @@ local function watch_overlays()
     local create = utility.CreateOverlay
     overlay_wrapper = function(controller, menu, name, ...)
         if reporting_overlay or type(name) ~= "string" then return create(controller, menu, name, ...) end
-        -- set while the overlay is made, so an older wrapper of ours further down the chain doesn't report it again
-        reporting_overlay = true
-        local ok, err = pcall(bo3macfix.CheckpointMenuCreated, name, menu, "overlay")
-        if not ok then log("checkpoint error: " .. tostring(err)) end
-        local made, overlay = pcall(create, controller, menu, name, ...)
-        reporting_overlay = false
-        if not made then error(overlay, 0) end
-        return overlay
+        -- its callers don't use what it gives back (OpenSystemOverlay drops it)
+        if discord_waits(name, menu) then return discord_later(create, controller, menu, name, ...) end
+        return make_overlay(create, controller, menu, name, ...)
     end
     utility.CreateOverlay = overlay_wrapper
 end

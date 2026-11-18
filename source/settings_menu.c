@@ -371,7 +371,8 @@ static int lua_load_menu(lua_State *s) {
     // so many seconds in. Then AutoSave's writer and deleting the save, and its test switch: how many seconds of a
     // match only set the round it starts at. Then the full loadout's functions, and its test switch: give these perks
     // first. Then the gun in hand after a restore made during a map's intro. Then the quick save's request (the key,
-    // or L3 + R3; quick_save.m) and the saved game's time as the page shows it. Then ResumeKeepsBank's points.
+    // or L3 + R3; quick_save.m) and the saved game's time as the page shows it. Then ResumeKeepsBank's points. Then when
+    // L3 + R3 were last down together (quick_save.m), for All-around Enhancement's R3 in the pause menu.
     checkpoint_autosave_init(&checkpoint_paths, Autosave_Interval_Ms, autosave_report);
     if (hks_load_source(s, (const char *)checkpoint_lua, checkpoint_lua_len, "=BO3MacFix checkpoint")) {
         hks_push_cfunction(s, locked_checkpoint_save, "CheckpointSave");
@@ -398,7 +399,8 @@ static int lua_load_menu(lua_State *s) {
         hks_push_cfunction(s, quick_save_lua_take, "CheckpointTakeQuickSave");
         hks_push_cfunction(s, lua_checkpoint_saved_when, "CheckpointSavedWhen");
         hks_push_cfunction(s, lua_checkpoint_points_later, "CheckpointPointsLater");
-        hks_pcall(s, 24, 0);
+        hks_push_cfunction(s, quick_save_lua_chord_age, "CheckpointQuickSaveChord");
+        hks_pcall(s, 25, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
     return 0;

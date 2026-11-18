@@ -8,7 +8,10 @@
 //   test hooks' made-up keys). The game gets the key as well, so QuickSave offers keys it doesn't use: F5 to F9 (F10
 //   opens the settings page from the start menu, F12 is Steam's screenshot key). With Cmd, Ctrl, Option or Shift held
 //   it's left alone.
-// - The buttons: gc_bridge.m's XInputGetState hook passes each controller's buttons on, so only with ControllerBridge.
+// - The buttons: gc_bridge.m's XInputGetState hook passes each controller's buttons on, so only with ControllerBridge
+//   (and the tests' own controller, from its test hook). They reach the game as well, and All-around Enhancement's
+//   pause menu opens its Discord invite on R3's press: checkpoint.lua holds that popup back for a moment there and
+//   asks CheckpointQuickSaveChord whether L3 + R3 were down together, the quick save, before it lets it open.
 #import <AppKit/AppKit.h>
 #include <os/lock.h>
 #include <stdatomic.h>
@@ -23,6 +26,7 @@ static atomic_int quick_key; // the macOS virtual key code, 0 for off
 static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
 static quick_save_slot_t slot;              // under lock
 static quick_save_combo_t combos[Players];  // under lock
+static quick_save_chord_t chord;            // under lock: when any controller last had L3 + R3 down together
 static id key_monitor;                      // main thread
 
 static double now(void) {
@@ -73,6 +77,7 @@ void quick_save_pad(uint32_t user, uint16_t buttons) {
         return;
     double time = now();
     os_unfair_lock_lock(&lock);
+    quick_save_chord_note(&chord, buttons, time);
     bool fire = quick_save_combo(&combos[user], buttons, time);
     if (fire)
         quick_save_slot_put(&slot, Quick_Save_Pad, time);
@@ -94,5 +99,16 @@ int quick_save_lua_take(lua_State *s) {
         hks_push_string(s, "pad");
     else
         hks_push_nil(s);
+    return 1;
+}
+
+int quick_save_lua_chord_age(lua_State *s) {
+    os_unfair_lock_lock(&lock);
+    double age = quick_save_chord_age(&chord, now());
+    os_unfair_lock_unlock(&lock);
+    if (age < 0 || atomic_load(&quick_key) == 0)
+        hks_push_nil(s);
+    else
+        hks_push_number(s, (float)age);
     return 1;
 }

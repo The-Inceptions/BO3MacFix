@@ -29,3 +29,18 @@ quick_save_source_t quick_save_slot_take(quick_save_slot_t *slot, double now) {
     slot->source = Quick_Save_None;
     return source != Quick_Save_None && age >= 0 && age <= Quick_Save_Max_Age ? source : Quick_Save_None;
 }
+
+void quick_save_chord_note(quick_save_chord_t *chord, uint16_t buttons, double now) {
+    chord->read = true;
+    // the same buttons the hold counts (quick_save_combo), at the same clock; a clock at 0 still counts as seen
+    if (buttons == Quick_Save_Buttons)
+        chord->seen = now > 0 ? now : 1e-9;
+}
+
+double quick_save_chord_age(const quick_save_chord_t *chord, double now) {
+    if (!chord->read)
+        return -1;
+    if (chord->seen <= 0)
+        return Quick_Save_Chord_Never;
+    return now > chord->seen ? now - chord->seen : 0;
+}
