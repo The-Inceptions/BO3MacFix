@@ -224,6 +224,9 @@ static int redirect_present(code_patch_fn checked_code_patch);
 
 // DynamicResolution: 0 off, else the lowest share of ResolutionPercent it goes down to, in percent
 static atomic_int dynres_setting = 0;
+// BatteryResolution: 0 off, else the most the resolution may be on battery, as a share of ResolutionPercent in percent
+static atomic_int battery_resolution = 0;
+static int battery_ceiling_logged = 0; // the render thread's: the ceiling the log last named, 0 for none yet
 static dynres_t dynres; // the render thread's
 // BO3MACFIX_DYNRESSTARTLOW=1, a test switch (off by default): the controller's first decision after each start (a
 // match's warm-up, a new base) puts the resolution at the floor, so a game check can watch it climb back at a frame
@@ -543,7 +546,10 @@ static bool dynres_prewarm_tick(char *dvar, uint64_t now, bool view_3d, int appe
         dynres_prewarm.armed = false;
         return false;
     }
-    int percent = dynres_prewarm_frame(&dynres_prewarm, dynres.base, dynres.lowest, ready, warmed || appeared > 0);
+    // on battery with BatteryResolution, the sizes under its ceiling (dynres.h)
+    int ceiling = dynres_battery_ceiling(dynres.base, atomic_load(&battery_resolution), atomic_load(&limits.on_battery));
+    int percent = dynres_prewarm_frame_up_to(&dynres_prewarm, dynres.base, dynres.lowest, ceiling, ready,
+                                             warmed || appeared > 0);
     if (percent == 0)
         return running;
     if (!running) {
@@ -687,6 +693,8 @@ static void dynres_tick(int frame_limit_fps) {
     int appeared = dynres_keep_tick(&view_3d);
     int current = *(volatile int *)(dvar + dvar_Value), latched = *(volatile int *)(dvar + dvar_Latched);
     int written = atomic_load(&dynres_written), setting = atomic_load(&dynres_setting);
+    int battery = atomic_load(&battery_resolution);
+    bool active = setting != 0 || battery != 0; // DynamicResolution, BatteryResolution or both
     bool reconfigure = atomic_exchange(&dynres_reconfigure, false);
     if (written != 0 && (current != written || latched != written)) {
         // something else set ResolutionPercent (the options): that's the user's value from now on
@@ -694,21 +702,24 @@ static void dynres_tick(int frame_limit_fps) {
         atomic_store(&dynres_written, 0);
         written = 0;
         dynres.base = 0;
-    } else if (written != 0 && (reconfigure || setting == 0)) {
+    } else if (written != 0 && (reconfigure || !active)) {
         // turned off or changed in the menu: the user's value back first
         int base = atomic_load(&dynres_base);
         scene_multiplier_set(dvar, base);
         atomic_store(&dynres_written, 0);
-        printf(setting == 0 ? "dynamic resolution off, back to %i%%\n" : "dynamic resolution: back to %i%% for the new setting\n", base);
+        printf(!active ? "dynamic resolution off, back to %i%%\n" : "dynamic resolution: back to %i%% for the new setting\n", base);
         dynres.base = 0;
         return;
     }
     if (reconfigure)
         dynres.base = 0;
-    if (written == 0 && (setting == 0 || current != latched)) // off, or a change the engine applies first
+    if (written == 0 && (!active || current != latched)) // off, or a change the engine applies first
         return;
     if (written == 0 && dynres.base != current) {
-        dynres_reset(&dynres, current, dynres_lowest_for(current, setting));
+        // with DynamicResolution off (BatteryResolution alone) the controller's floor is the user's own value: it only
+        // ever goes down to BatteryResolution's ceiling
+        dynres_reset(&dynres, current, setting != 0 ? dynres_lowest_for(current, setting) : current);
+        battery_ceiling_logged = 0;
         atomic_store(&dynres_base, current);
         window_start = 0;
         dynres_start_low_pending = true;
@@ -761,12 +772,22 @@ static void dynres_tick(int frame_limit_fps) {
             dynres.event = Dynres_Event_None;
             printf("dynamic resolution: BO3MACFIX_DYNRESSTARTLOW, starting at the floor, %i%%\n", percent);
         } else {
+            // BatteryResolution's ceiling for this window, said in the log when it changes
+            dynres_set_ceiling(&dynres, dynres_battery_ceiling(dynres.base, battery, atomic_load(&limits.on_battery)));
+            if (battery != 0 && dynres.ceiling != battery_ceiling_logged) {
+                printf(dynres.ceiling < dynres.base
+                           ? "dynamic resolution: on battery, the 3D scene at %i%% at most (BatteryResolution)\n"
+                           : "dynamic resolution: plugged in, the 3D scene up to %i%% again (BatteryResolution)\n",
+                       dynres.ceiling);
+                battery_ceiling_logged = dynres.ceiling;
+            }
             percent = dynres_window_limited(&dynres, window_fps, window_busy, target, limit);
         }
         dynres_start_low_pending = false;
         why = dynres.event == Dynres_Event_Trial ? ", a trial under the frame limit"
               : dynres.event == Dynres_Event_Taken_Back ? ", the trial taken back"
-              : dynres.event == Dynres_Event_Failed_Late ? ", soon after the last trial, which counts as failed" : "";
+              : dynres.event == Dynres_Event_Failed_Late ? ", soon after the last trial, which counts as failed"
+              : dynres.event == Dynres_Event_Ceiling ? ", BatteryResolution's ceiling" : "";
     }
     int value = written != 0 ? written : current;
     if (percent == value || logging > 0)
@@ -825,7 +846,9 @@ void gpu_tweaks_dynres_init(int setting, code_patch_fn checked_code_patch) {
 
 // called instead of objc_msgSend for Aspyr's [commandBuffer presentDrawable:drawable]
 static void present_drawable(id command_buffer, SEL sel, id drawable) {
-    if (frame_stats_detail || atomic_load(&dynres_setting) != 0 || atomic_load(&dynres_written) != 0)
+    bool resolution_control = atomic_load(&dynres_setting) != 0 || atomic_load(&battery_resolution) != 0 ||
+                              atomic_load(&dynres_written) != 0;
+    if (frame_stats_detail || resolution_control)
         gpu_diag_watch_command_buffers(command_buffer);
     if (frame_stats_seconds > 0)
         frame_stats_tick();
@@ -836,7 +859,7 @@ static void present_drawable(id command_buffer, SEL sel, id drawable) {
     int fps = frame_limit_for_frame(&limits, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), &started, &stopped);
     if (started | stopped)
         log_limits(started, stopped, fps);
-    if (atomic_load(&dynres_setting) != 0 || atomic_load(&dynres_written) != 0)
+    if (resolution_control)
         dynres_tick(fps);
     double min_duration = fps > 0 ? 1.0 / fps : 0;
     static unsigned int paced_frames = 0;
@@ -1052,6 +1075,19 @@ void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch) {
     printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
 }
 
+void gpu_tweaks_battery_resolution_init(int setting, code_patch_fn checked_code_patch) {
+    if (setting < 50 || setting > 95)
+        return;
+    if (!redirect_present(checked_code_patch)) {
+        printf("couldn't hook Aspyr's present, no BatteryResolution\n");
+        return;
+    }
+    start_power_watch();
+    atomic_store(&battery_resolution, setting);
+    printf("the 3D scene at %i%% of ResolutionPercent at most on battery (%s now)\n", setting,
+           atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
+}
+
 void gpu_tweaks_low_power_fps_init(int fps, code_patch_fn checked_code_patch) {
     if (fps < 30 || fps > 240)
         return;
@@ -1208,6 +1244,22 @@ bool gpu_tweaks_set_battery_fps(int fps) {
         printf("limiting the frame rate to %i fps on battery (%s now)\n", fps, atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
     else
         printf("not limiting the frame rate on battery\n");
+    return true;
+}
+
+bool gpu_tweaks_set_battery_resolution(int setting) {
+    if (setting != 0 && (setting < 50 || setting > 95))
+        return false;
+    if (setting != 0 && !present_live())
+        return false;
+    if (setting != 0)
+        start_power_watch();
+    atomic_store(&battery_resolution, setting);
+    if (setting != 0)
+        printf("the 3D scene at %i%% of ResolutionPercent at most on battery (%s now)\n", setting,
+               atomic_load(&limits.on_battery) ? "on battery" : "plugged in");
+    else
+        printf("the 3D scene at the full Render Resolution on battery too\n");
     return true;
 }
 

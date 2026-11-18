@@ -22,6 +22,10 @@ void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch);
 // fps: the frame rate limit while macOS's Low Power Mode is on, 30 to 240 (0 = off)
 void gpu_tweaks_low_power_fps_init(int fps, code_patch_fn checked_code_patch);
 
+// setting: BatteryResolution, the most the 3D scene's resolution may be on battery as a share of ResolutionPercent, 50 to
+// 95 (0 = off), through DynamicResolution's controller as its ceiling (dynres.h)
+void gpu_tweaks_battery_resolution_init(int setting, code_patch_fn checked_code_patch);
+
 // fps: the frame rate limit while the pause menu is open in a match, 30 to 240 (0 = off)
 void gpu_tweaks_pause_menu_fps_init(int fps, code_patch_fn checked_code_patch);
 
@@ -68,6 +72,7 @@ bool gpu_tweaks_live_possible(void);
 bool gpu_tweaks_set_pacing(int fps);
 bool gpu_tweaks_set_battery_fps(int fps);
 bool gpu_tweaks_set_low_power_fps(int fps);
+bool gpu_tweaks_set_battery_resolution(int setting);
 bool gpu_tweaks_set_pause_menu_fps(int fps);
 bool gpu_tweaks_set_menu_fps(int fps);
 bool gpu_tweaks_set_background_fps(int fps);

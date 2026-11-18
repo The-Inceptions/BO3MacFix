@@ -6,6 +6,7 @@
 void dynres_reset(dynres_t *d, int base, int lowest) {
     d->base = base;
     d->lowest = lowest < base ? lowest : base;
+    d->ceiling = base;
     d->percent = base;
     d->windows_since_change = 0;
     d->headroom_windows = 0;
@@ -15,6 +16,16 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
     d->failed_trials = 0;
     d->limit = Dynres_No_Limit;
     d->event = Dynres_Event_None;
+}
+
+void dynres_set_ceiling(dynres_t *d, int ceiling) {
+    d->ceiling = ceiling < d->base ? ceiling : d->base;
+}
+
+int dynres_battery_ceiling(int base, int setting, bool on_battery) {
+    if (setting == 0 || !on_battery)
+        return base;
+    return dynres_lowest_for(base, setting);
 }
 
 int dynres_lowest_for(int base, int setting) {
@@ -73,6 +84,18 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
         }
         d->limit = limit;
     }
+    // the range for now: BatteryResolution's ceiling (base when there's none) and the floor under it
+    int top = d->ceiling < d->base ? d->ceiling : d->base;
+    int least = d->lowest < top ? d->lowest : top;
+    // the ceiling came down below the resolution (on battery) or went up above the floor (plugged in): there at once,
+    // without waiting for the frame rate, which has nothing to do with it. A trial in progress just ends: neither a
+    // failure nor a success of the size it tried.
+    if (d->percent > top || d->percent < least) {
+        d->trial_from = 0;
+        d->trial_watched = false;
+        d->event = Dynres_Event_Ceiling;
+        return change(d, d->percent > top ? top : least);
+    }
     if (target_fps <= 0 || fps <= 0)
         return d->percent;
     bool settled = d->windows_since_change > Dynres_Hold_Down;
@@ -101,7 +124,7 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
     // behind and the GPU is why: a step down, two when far behind
     if (behind && gpu_busy >= Dynres_GPU_Bound) {
         d->headroom_windows = 0;
-        if (!settled || d->percent <= d->lowest)
+        if (!settled || d->percent <= least)
             return d->percent;
         int steps = fps < target_fps * Dynres_Far_Behind ? 2 : 1;
         int percent = d->percent - steps * Dynres_Step;
@@ -112,15 +135,15 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
             d->event = Dynres_Event_Failed_Late;
         }
         d->trial_watched = false;
-        return change(d, percent > d->lowest ? percent : d->lowest);
+        return change(d, percent > least ? percent : least);
     }
 
-    if (d->percent >= d->base)
+    if (d->percent >= top)
         return d->percent;
     // in a pause, the menus or the background: no step up of any kind (see dynres_window_limited)
     if (limit == Dynres_Situation_Limit)
         return d->percent;
-    int up = d->percent + Dynres_Step < d->base ? d->percent + Dynres_Step : d->base;
+    int up = d->percent + Dynres_Step < top ? d->percent + Dynres_Step : top;
     // under a limit: room is the limit held, for the trial's hold in a row (the busy share is the slowed clock's)
     if (limit == Dynres_Match_Limit) {
         if (behind) {
@@ -269,11 +292,20 @@ void dynres_prewarm_init(dynres_prewarm_t *p) {
 }
 
 int dynres_prewarm_frame(dynres_prewarm_t *p, int base, int lowest, bool ready, bool new_set) {
+    return dynres_prewarm_frame_up_to(p, base, lowest, base, ready, new_set);
+}
+
+int dynres_prewarm_frame_up_to(dynres_prewarm_t *p, int base, int lowest, int ceiling, bool ready, bool new_set) {
     if (p->index < 0) {
         if (!p->armed || !ready)
             return 0;
         p->armed = false;
-        p->count = dynres_prewarm_sizes(base, lowest, p->percent);
+        // under a ceiling the sizes the controller can reach are the ceiling and the steps under it: the steps from a
+        // step above it, so the ceiling comes first
+        if (ceiling < base)
+            p->count = dynres_prewarm_sizes(ceiling + Dynres_Step, lowest < ceiling ? lowest : ceiling, p->percent);
+        else
+            p->count = dynres_prewarm_sizes(base, lowest, p->percent);
         if (p->count == 0)
             return 0;
         p->base = base;

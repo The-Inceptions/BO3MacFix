@@ -1293,6 +1293,8 @@ __attribute__((constructor)) static void dylib_main() {
 
     // limit the frame rate on battery (BatteryFPS, 0 = off) and show the Metal HUD (MetalHUD), see gpu_tweaks.c
     gpu_tweaks_battery_fps_init(read_int_setting("BatteryFPS", 0), checked_code_patch);
+    // the 3D scene at most at this share of ResolutionPercent on battery (BatteryResolution, 0 = off), see dynres.h
+    gpu_tweaks_battery_resolution_init(read_int_setting_or_env("BatteryResolution", 0), checked_code_patch);
     // and while macOS's Low Power Mode is on, the user's own request to save power (LowPowerFPS, off unless set)
     gpu_tweaks_low_power_fps_init(read_int_setting_or_env("LowPowerFPS", 0), checked_code_patch);
     gpu_tweaks_metal_hud_init(read_int_setting("MetalHUD", 0));

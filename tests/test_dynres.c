@@ -1105,6 +1105,205 @@ static void test_engine_edge(void) {
     CHECK(e.evictions_in_flight == e.evictions);
 }
 
+// BatteryResolution's ceiling: off, or plugged in, it's the base; on battery its share of the base, rounded as the floor
+static void test_battery_ceiling(void) {
+    CHECK(dynres_battery_ceiling(100, 0, true) == 100);   // off
+    CHECK(dynres_battery_ceiling(100, 75, false) == 100); // plugged in
+    CHECK(dynres_battery_ceiling(100, 75, true) == 75);
+    CHECK(dynres_battery_ceiling(100, 85, true) == 85);
+    CHECK(dynres_battery_ceiling(80, 70, true) == 55);    // 56, down to a whole step
+    CHECK(dynres_battery_ceiling(60, 75, true) == 50);    // not below the engine's 50
+    CHECK(dynres_battery_ceiling(150, 70, true) == 105);
+    dynres_t d;
+    dynres_reset(&d, 100, 85);
+    CHECK(d.ceiling == 100);
+    dynres_set_ceiling(&d, 120); // never above the base
+    CHECK(d.ceiling == 100);
+    dynres_set_ceiling(&d, 75);
+    CHECK(d.ceiling == 75);
+    dynres_reset(&d, 100, 85); // a reset lifts it
+    CHECK(d.ceiling == 100);
+}
+
+// With the ceiling at the base, the controller decides exactly as without one, with and without a frame limit
+static void test_ceiling_at_base_changes_nothing(void) {
+    for (int kind = 0; kind < 3; kind++) {
+        dynres_t with, without;
+        dynres_reset(&with, 100, 60);
+        dynres_reset(&without, 100, 60);
+        unsigned seed = 1 + kind;
+        for (int i = 0; i < 20000; i++) {
+            seed = seed * 1103515245u + 12345u;
+            double target = kind == 0 ? 120 : 40;
+            double fps = target * (0.7 + ((seed >> 16) % 31) / 100.0), busy = ((seed >> 8) % 103) / 100.0;
+            dynres_set_ceiling(&with, 100);
+            int a = dynres_window_limited(&with, fps, busy, target, (dynres_limit_t)kind);
+            int b = dynres_window_limited(&without, fps, busy, target, (dynres_limit_t)kind);
+            CHECK(a == b && with.event == without.event && with.failed_trials == without.failed_trials);
+            if (a != b)
+                break;
+        }
+    }
+}
+
+// On battery: at once down to the ceiling, even right after a change and with the frame rate met; no step up past it
+static void test_ceiling_on_battery(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 85);
+    dynres_set_ceiling(&d, 70);
+    CHECK(dynres_window(&d, 60, 0.40, 60) == 70 && d.event == Dynres_Event_Ceiling); // the first window
+    // plenty of room for many windows: stays at the ceiling, every window
+    int moved = 0;
+    for (int i = 0; i < 1000; i++)
+        moved += dynres_window(&d, 60, 0.20, 60) != 70;
+    CHECK(moved == 0);
+    // GPU-bound at the ceiling, which is below DynamicResolution's floor: it doesn't go lower, nor back to the floor
+    for (int i = 0; i < 100; i++)
+        moved += dynres_window(&d, 40, 0.99, 60) != 70;
+    CHECK(moved == 0);
+    // a ceiling above DynamicResolution's floor keeps its range under the ceiling: from 90 down to 85, not lower
+    dynres_reset(&d, 100, 85);
+    dynres_set_ceiling(&d, 90);
+    CHECK(dynres_window(&d, 120, 0.50, 120) == 90);
+    for (int i = 0; i < 100; i++)
+        dynres_window(&d, 80, 0.99, 120);
+    CHECK(d.percent == 85);
+    int above = 0;
+    for (int i = 0; i < 1000; i++)
+        above += dynres_window(&d, 120, 0.30, 120) > 90;
+    CHECK(above == 0 && d.percent == 90); // back up in steps, but never past the ceiling
+}
+
+// Plugged in again: at once back to DynamicResolution's floor if below it, and from there in the usual steps
+static void test_ceiling_lifted(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 85);
+    dynres_set_ceiling(&d, 70);
+    dynres_window(&d, 60, 0.40, 60);
+    CHECK(d.percent == 70);
+    dynres_set_ceiling(&d, 100);
+    CHECK(dynres_window(&d, 60, 0.40, 60) == 85); // at once, without the hold
+    for (int i = 0; i < Dynres_Hold_Up - 1; i++)
+        CHECK(dynres_window(&d, 120, 0.50, 120) == 85);
+    CHECK(dynres_window(&d, 120, 0.50, 120) == 90); // then the usual step up after the headroom's hold
+    // DynamicResolution off (the floor is the base): straight back to the user's own resolution
+    dynres_reset(&d, 100, 100);
+    dynres_set_ceiling(&d, 75);
+    CHECK(dynres_window(&d, 30, 0.30, 30) == 75);
+    for (int i = 0; i < 100; i++)
+        CHECK(dynres_window(&d, 30, 0.99, 30) == 75); // GPU-bound or not, nothing else happens on battery
+    dynres_set_ceiling(&d, 100);
+    CHECK(dynres_window(&d, 30, 0.30, 30) == 100);
+    for (int i = 0; i < 100; i++)
+        CHECK(dynres_window(&d, 20, 0.99, 30) == 100); // and no dynamic steps down with DynamicResolution off
+}
+
+// A base that isn't a whole number of steps: the steps from it don't land on the ceiling, and a step up from under the
+// ceiling stops at it instead of going past it
+static void test_ceiling_between_steps(void) {
+    dynres_t d;
+    dynres_reset(&d, 83, 50);
+    for (int i = 0; i < 100 && d.percent > 58; i++)
+        dynres_window(&d, 110, 0.99, 120); // 83, 78, 73, 68, 63, 58
+    CHECK(d.percent == 58);
+    dynres_set_ceiling(&d, dynres_battery_ceiling(83, 75, true)); // 62, down to 60
+    CHECK(d.ceiling == 60);
+    int above = 0;
+    for (int i = 0; i < 500; i++)
+        above += dynres_window(&d, 120, 0.20, 120) > 60;
+    CHECK(above == 0 && d.percent == 60);
+}
+
+// At the ceiling (below the base) there's no step up to wait for: the windows with room don't count as a change, so a
+// GPU-bound window right after them may step down at once
+static void test_ceiling_no_idle_change(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 85);
+    dynres_set_ceiling(&d, 90);
+    CHECK(dynres_window(&d, 120, 0.50, 120) == 90);
+    for (int i = 0; i < Dynres_Hold_Up; i++)
+        CHECK(dynres_window(&d, 120, 0.30, 120) == 90);
+    CHECK(dynres_window(&d, 105, 0.99, 120) == 85);
+}
+
+// a window without a frame rate (a stall, the first after a pause) still applies the ceiling
+static void test_ceiling_without_frame_rate(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 85);
+    dynres_set_ceiling(&d, 75);
+    CHECK(dynres_window(&d, 0, 0, 60) == 75);
+    dynres_set_ceiling(&d, 100);
+    CHECK(dynres_window(&d, 60, 0.5, 0) == 85);
+}
+
+// Under the battery's frame limit (the trials of dynres.h): the trials climb to the ceiling and stop there; a trial in
+// progress when the ceiling comes down just ends (not counted as failed), and a trial is never taken back above it
+static void test_ceiling_and_trials(void) {
+    dynres_t d;
+    dynres_reset(&d, 100, 60);
+    dynres_start_at_floor(&d);
+    dynres_set_ceiling(&d, 70);
+    int windows = 0, above = 0;
+    while (windows < 400) {
+        above += dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit) > 70;
+        windows++;
+    }
+    CHECK(above == 0 && d.percent == 70); // 60, 65, 70 by trials, then no more
+    CHECK(d.failed_trials == 0);
+    // unplugged in the middle of a trial (85 -> 90 still on trial): down to the ceiling at once, the trial ends
+    dynres_reset(&d, 100, 60);
+    d.percent = 85;
+    for (int i = 0; i < 400 && d.percent < 90; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+    CHECK(d.percent == 90 && d.trial_from == 85 && d.trial_watched);
+    d.failed_trials = 2;
+    dynres_set_ceiling(&d, 70);
+    CHECK(dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit) == 70);
+    CHECK(d.event == Dynres_Event_Ceiling && d.trial_from == 0 && !d.trial_watched && d.failed_trials == 2);
+    // GPU-bound at once after that: it holds first (a change was just made), and never goes back up to the trial's 85
+    for (int i = 0; i < 20; i++)
+        CHECK(dynres_window_limited(&d, 30.0, 1.0, 40, Dynres_Match_Limit) <= 70);
+    CHECK(d.percent == 60); // down to the floor under the ceiling, the GPU still behind
+    // in the pause menu (a situation's limit): the ceiling applies at once all the same, both ways
+    dynres_reset(&d, 100, 60);
+    dynres_set_ceiling(&d, 75);
+    CHECK(dynres_window_limited(&d, 30.0, 0.5, 30, Dynres_Situation_Limit) == 75);
+    dynres_reset(&d, 100, 85);
+    d.percent = 85;
+    dynres_set_ceiling(&d, 70);
+    CHECK(dynres_window_limited(&d, 30.0, 0.5, 30, Dynres_Situation_Limit) == 70);
+    dynres_set_ceiling(&d, 100);
+    CHECK(dynres_window_limited(&d, 30.0, 0.5, 30, Dynres_Situation_Limit) == 85);
+    CHECK(dynres_window_limited(&d, 30.0, 0.2, 30, Dynres_Situation_Limit) == 85); // and no further in a pause
+}
+
+// The match's warm-up under the ceiling: the ceiling's size first and the steps under it, down to the floor under it;
+// back to the user's value at the end. At the base it's the warm-up without a ceiling.
+static void test_prewarm_under_ceiling(void) {
+    dynres_prewarm_t p, q;
+    dynres_prewarm_init(&p);
+    CHECK(dynres_prewarm_frame_up_to(&p, 100, 60, 70, true, false) == 70);
+    CHECK(dynres_prewarm_frame_up_to(&p, 100, 60, 70, true, true) == 65);
+    CHECK(dynres_prewarm_frame_up_to(&p, 100, 60, 70, true, true) == 60);
+    CHECK(dynres_prewarm_frame_up_to(&p, 100, 60, 70, true, true) == 100);
+    CHECK(!dynres_prewarm_running(&p));
+    // the ceiling under DynamicResolution's floor (85): just the ceiling
+    dynres_prewarm_init(&p);
+    CHECK(dynres_prewarm_frame_up_to(&p, 100, 85, 70, true, false) == 70);
+    CHECK(dynres_prewarm_frame_up_to(&p, 100, 85, 70, true, true) == 100);
+    // DynamicResolution off (the floor is the base): just the ceiling too
+    dynres_prewarm_init(&p);
+    CHECK(dynres_prewarm_frame_up_to(&p, 100, 100, 75, true, false) == 75);
+    CHECK(dynres_prewarm_frame_up_to(&p, 100, 100, 75, true, true) == 100);
+    // the ceiling at the base: frame by frame the same as dynres_prewarm_frame
+    dynres_prewarm_init(&p);
+    dynres_prewarm_init(&q);
+    for (int i = 0; i < 40; i++) {
+        bool ready = i > 3, set = i % 3 == 0;
+        CHECK(dynres_prewarm_frame_up_to(&p, 100, 85, 100, ready, set) == dynres_prewarm_frame(&q, 100, 85, ready, set));
+    }
+}
+
 int main(void) {
     test_eviction_victim();
     test_table_changes();
@@ -1138,6 +1337,15 @@ int main(void) {
     test_keep();
     test_pressure();
     test_prewarm();
+    test_battery_ceiling();
+    test_ceiling_at_base_changes_nothing();
+    test_ceiling_on_battery();
+    test_ceiling_lifted();
+    test_ceiling_between_steps();
+    test_ceiling_no_idle_change();
+    test_ceiling_without_frame_rate();
+    test_ceiling_and_trials();
+    test_prewarm_under_ceiling();
     if (failures == 0)
         printf("test_dynres: all passed\n");
     return failures != 0;

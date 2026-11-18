@@ -55,6 +55,7 @@
 typedef struct {
     int base;     // the user's ResolutionPercent, the most it goes up to
     int lowest;   // the least it goes down to
+    int ceiling;  // the most it goes up to for now (BatteryResolution on battery), base otherwise
     int percent;  // the resolution now
     int windows_since_change;
     int headroom_windows; // windows in a row in which a step up would have fit (under a limit: held the limit)
@@ -70,10 +71,25 @@ typedef struct {
 // FramePacingFPS, the game's com_maxfps), or one of a situation outside the play (the pause menu's, the menus', the
 // background's: frame_limit_for_frame's Limit_* bits)
 typedef enum { Dynres_No_Limit = 0, Dynres_Match_Limit = 1, Dynres_Situation_Limit = 2 } dynres_limit_t;
-enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back, Dynres_Event_Failed_Late };
+enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back, Dynres_Event_Failed_Late, Dynres_Event_Ceiling };
 
-// starts (again) at base, with lowest as the floor (both ResolutionPercent values, 50 to 200)
+// starts (again) at base, with lowest as the floor (both ResolutionPercent values, 50 to 200), and no ceiling below base
 void dynres_reset(dynres_t *d, int base, int lowest);
+
+// BatteryResolution: the 3D scene at most at a share of ResolutionPercent while the Mac runs on battery, to save the
+// GPU's power. On battery at a frame limit the GPU has room, so the controller above keeps (or climbs back to) the
+// user's resolution, and every frame costs the GPU what it costs there: on DEIMOS at 40 fps 11.4 W of GPU at 100%, on
+// Kino 3.3 W at 100% and 2.1 W at 70% (wip/night/perf-battery2.md). The ceiling is the most the resolution may be
+// for now, a ResolutionPercent value (base or more: none). Below the resolution now, the next window goes down to it at
+// once, whatever the frame rate, and a trial step up in progress ends without counting as failed; the floor is then the
+// ceiling where that's below lowest. Raised again (plugged in), the next window goes back up at once to lowest if it's
+// below that (with DynamicResolution off, lowest is base: the user's own resolution), and from there in the usual
+// steps. No step of any kind goes above it.
+void dynres_set_ceiling(dynres_t *d, int ceiling);
+
+// the ceiling for BatteryResolution's setting (the share of base, in percent, 50 to 95; 0 = off): base while it's off or
+// the Mac isn't on battery, else that share of base as dynres_lowest_for rounds it
+int dynres_battery_ceiling(int base, int setting, bool on_battery);
 
 // the lowest ResolutionPercent for a base and DynamicResolution's setting (the lowest share of base, in percent):
 // a multiple of Dynres_Step, at least 50 (the engine's minimum)
@@ -204,6 +220,12 @@ void dynres_prewarm_init(dynres_prewarm_t *p);
 // it's at appeared (or after Dynres_Prewarm_Wait frames), and back to base after the last. Returns the
 // ResolutionPercent to write now, or 0 for none.
 int dynres_prewarm_frame(dynres_prewarm_t *p, int base, int lowest, bool ready, bool new_set);
+
+// the same with BatteryResolution's ceiling (dynres_battery_ceiling): below base (on battery) it visits the ceiling and
+// the steps under it, down to the floor under it, instead of the steps under base, so that the controller's first step
+// down to the ceiling finds that size's set kept; it still goes back to base at the end. At base or above it's
+// dynres_prewarm_frame.
+int dynres_prewarm_frame_up_to(dynres_prewarm_t *p, int base, int lowest, int ceiling, bool ready, bool new_set);
 
 // the set (1-7) of the size the engine renders at percent, from set 0's size at base (each side scaled and rounded up to
 // 8 by the engine, so within 8 pixels), or -1 for none. Finds a set the warm-up visits that was there before it.
