@@ -59,6 +59,7 @@ typedef struct {
     double target;      // the frame rate the last window aimed at, 0 before the first (Dynres_Rise_Hold_Seconds)
     double rise_hold;   // seconds of play left in which no step down is taken, after the frame target rose
     int held_windows;   // windows behind with the GPU busy that the hold kept from stepping down since the rise
+    bool rise_window;   // the last window was the one in which the target rose (for the log)
     int percent;  // the resolution now
     int windows_since_change;
     int headroom_windows; // windows in a row in which a step up would have fit (under a limit: held the limit)
@@ -75,22 +76,35 @@ typedef struct {
 // background's: frame_limit_for_frame's Limit_* bits)
 typedef enum { Dynres_No_Limit = 0, Dynres_Match_Limit = 1, Dynres_Situation_Limit = 2 } dynres_limit_t;
 enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back, Dynres_Event_Failed_Late, Dynres_Event_Ceiling,
-       Dynres_Event_Held };
+       Dynres_Event_Held, Dynres_Event_Too_Slow };
 
 // After the frame target rises, for whatever reason (a frame limit lifted or raised: the pause menu or a menu closed,
 // the game in front again, plugged in, BatteryFPS or BatterySaver changed on the settings page, a display with a higher
-// refresh rate), no step down is taken for Dynres_Rise_Hold_Seconds of play, counted from the window in which the
-// target rose and including it. That window was partly paced to the lower target; and macOS clocks the GPU down to
-// just fit a frame limit (Kino paused at 30 fps: the GPU 781 ms busy a second), so "behind the target and the GPU
-// busy" is true by construction for a while after the rise and says nothing about the scene. Seen in the game: every
-// close of the pause menu on battery stepped 100% -> 95% in the window that spanned it (gcp1_perfbatt_pausekino:
-// "37.9 fps of 40, GPU busy 98%"), and a plug-in stepped 70% -> 60% four windows after it, the GPU still at 97 fps
-// and 99% busy where it later held 120 fps at 60% with 56% (gc26_perfbatt_battplug). Why 3 s: in that plug-in the
-// slow stretch outlasted the first 1.2 s (the three windows 0005's hold covered and the next), and a rise is rare
-// (a pause's end, a plug-in), so a scene that really can't hold the new target loses at most 3 s at a lower frame
-// rate before its step down. Steps up, the moves at once (BatteryResolution's ceiling) and a fall of the target are
-// not held.
+// refresh rate), a window behind the new target with the GPU busy is no reason to step down while the GPU's clock can
+// still be coming up: macOS clocks the GPU down to just fit a frame limit (Kino paused at 30 fps: the GPU 781 ms busy a
+// second), so "behind the target and the GPU busy" is true by construction for a while after the rise. Seen in the
+// game: both closes of the pause menu in one run on battery stepped 100% -> 95% in the window that spanned them
+// (gcp1_perfbatt_pausekino: "37.9 fps of 40, GPU busy 98%"); a plug-in stepped 70% -> 60% four windows after it, the GPU
+// at 97 fps and 99% busy where it later held 120 fps at 60% with 56% (gc26_perfbatt_battplug). So for
+// Dynres_Rise_Hold_Seconds of play, counted from the window in which the target rose and including it, these windows
+// take no step down and no trial take-back:
+// - the window in which the target rose, whatever its frame rate: it was partly paced to the old target;
+// - a later one only while its frame rate is at least Dynres_Rise_Hold_Share of the new target: a clock coming up.
+// A window further below it is a scene that can't keep up and is judged as without a rise. Every window logged after a
+// rise says which is which: a clock coming up was at 72% of the target or more from the window after the rise window on
+// (gc27/gc28 liftplain, battplug: 86.7, 88.9, 90.0, 91.3, 92.3 ... of 120; the journeys' unpauses on mains: 88.0, 96.7
+// of 120; pausebatt: 40 of 40), while DEIMOS at 100%, which can't hold 120, was flat at 55-58% (gc28_perfbatt_deimoslift:
+// 66.1 to 69.9 fps of 120, from its second window on). 65% lies in the middle: 7 points under the slowest clock seen, 7
+// over the heavy scene's best window. What each side costs: a clock window under 65% (not seen) is judged, two steps
+// down at once where there were none; a heavy scene at 65% or more (DEIMOS at 85% gives 82-91 fps of 120: 68-76%) waits
+// up to the 3 s for its first step, as it did with a plain 3 s hold. DEIMOS at 100% gets its first step in the window
+// after the rise window, about 1 s after the rise (the 3 s hold: 3.7 s; no hold: 0.6 s).
+// A window at the floor isn't held (nothing to step down to: none is said either). Everything else goes on as without
+// a rise: steps up, the count toward the next step up or trial in windows with room (a held window starts it again, as
+// a window behind with the GPU busy always did), a fall of the target, BatteryResolution's moves at once (a rise in the
+// window of such a move is seen in the next one, which counts as the window of the rise).
 #define Dynres_Rise_Hold_Seconds 3.0
+#define Dynres_Rise_Hold_Share 0.65
 
 // starts (again) at base, with lowest as the floor (both ResolutionPercent values, 50 to 200), and no ceiling below base
 void dynres_reset(dynres_t *d, int base, int lowest);

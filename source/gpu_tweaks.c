@@ -234,6 +234,7 @@ static atomic_int dynres_setting = 0;
 static atomic_int battery_resolution = 0;
 static int battery_ceiling_logged = 0; // the render thread's: the ceiling the log last named, 0 for none yet
 static dynres_t dynres; // the render thread's
+static char dynres_too_slow[80]; // the render thread's: the "why" of a step a window in the rise hold took (dynres_tick)
 // BO3MACFIX_DYNRESSTARTLOW=1, a test switch (off by default): the controller's first decision after each start (a
 // match's warm-up, a new base) puts the resolution at the floor, so a game check can watch it climb back at a frame
 // limit
@@ -800,20 +801,30 @@ static void dynres_tick(int frame_limit_fps) {
             percent = dynres_window_limited(&dynres, window_fps, window_busy, target, limit);
             // the frame target rose and this window, behind with the GPU busy, wasn't taken as a reason to step down
             // (dynres.h, Dynres_Rise_Hold_Seconds): said for the first such window after a rise, each with
-            // BO3MACFIX_DYNRESDEBUG
+            // BO3MACFIX_DYNRESDEBUG; the window of the rise, or one at Dynres_Rise_Hold_Share of the target or more
             static int rise_debug = -1;
             if (rise_debug < 0)
                 rise_debug = getenv("BO3MACFIX_DYNRESDEBUG") != NULL;
-            if (dynres.event == Dynres_Event_Held && (dynres.held_windows == 1 || rise_debug))
+            if (dynres.event == Dynres_Event_Held && (dynres.held_windows == 1 || rise_debug)) {
+                char share[32] = " in the window of the rise";
+                if (!dynres.rise_window)
+                    snprintf(share, sizeof(share), ", %.0f%% of it", window_fps * 100 / target);
                 printf("dynamic resolution: the frame target rose to %i, no step down while the GPU catches up "
-                       "(%.1f fps, GPU busy %.0f%%, %.1f s of the hold left)\n",
-                       target, window_fps, window_busy * 100, dynres.rise_hold > 0 ? dynres.rise_hold : 0.0);
+                       "(%.1f fps%s, GPU busy %.0f%%, %.1f s of the hold left)\n",
+                       target, window_fps, share, window_busy * 100, dynres.rise_hold > 0 ? dynres.rise_hold : 0.0);
+            }
+            // a window of the hold too far under the new target for a clock coming up: judged as without a rise; the
+            // step it takes says so, with the time from the start of the window of the rise to the end of this one
+            if (dynres.event == Dynres_Event_Too_Slow)
+                snprintf(dynres_too_slow, sizeof(dynres_too_slow), ", %.0f%% of the target %.1f s after it rose",
+                         window_fps * 100 / target, Dynres_Rise_Hold_Seconds - dynres.rise_hold);
         }
         dynres_start_low_pending = false;
         why = dynres.event == Dynres_Event_Trial ? ", a trial under the frame limit"
               : dynres.event == Dynres_Event_Taken_Back ? ", the trial taken back"
               : dynres.event == Dynres_Event_Failed_Late ? ", soon after the last trial, which counts as failed"
-              : dynres.event == Dynres_Event_Ceiling ? ", BatteryResolution's ceiling" : "";
+              : dynres.event == Dynres_Event_Ceiling ? ", BatteryResolution's ceiling"
+              : dynres.event == Dynres_Event_Too_Slow ? dynres_too_slow : "";
     }
     int value = written != 0 ? written : current;
     if (percent == value || logging > 0)

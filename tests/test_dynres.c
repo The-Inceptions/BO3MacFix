@@ -1305,11 +1305,11 @@ static void test_ceiling_news(void) {
 
 // One rise of the frame target: a controller settled at `percent` (BatteryResolution's ceiling there, so no step up
 // before the rise) under the target `before` (of kind `before_kind`); then the ceiling back at the base and the
-// target rising to `after` (of kind `after_kind`), every window at `slow_fps` with the GPU busy: the GPU's clock coming
-// up, and then a scene that really can't hold the new target. Returns the window of the first step down, counted from
-// the rise window (0), or -1 for none within 40; *held gets the windows the hold kept from stepping down.
-static int rise(int percent, double before, dynres_limit_t before_kind, double after, dynres_limit_t after_kind,
-                double slow_fps, int *held) {
+// target rising to `after` (of kind `after_kind`), the windows at the frame rates in `fps` (the last one repeated), the
+// GPU busy. Returns the window of the first step down, counted from the rise window (0), or -1 for none within 40;
+// *held gets the windows the hold kept from stepping down.
+static int rise_with(int percent, double before, dynres_limit_t before_kind, double after, dynres_limit_t after_kind,
+                     const double *fps, int count, int *held) {
     dynres_t d;
     dynres_reset(&d, 100, 60);
     d.percent = percent;
@@ -1320,13 +1320,20 @@ static int rise(int percent, double before, dynres_limit_t before_kind, double a
     CHECK(d.percent == percent && d.rise_hold <= 0);
     dynres_set_ceiling(&d, 100);
     for (int i = 0; i < 40; i++) {
-        if (dynres_window_limited(&d, slow_fps, 0.99, after, after_kind) < percent) {
+        if (dynres_window_limited(&d, fps[i < count ? i : count - 1], 0.99, after, after_kind) < percent) {
             *held = d.held_windows;
             return i;
         }
     }
     *held = d.held_windows;
     return -1;
+}
+
+// the same at one frame rate from the rise window on: the GPU's clock coming up at once, and then a scene that really
+// can't hold the new target
+static int rise(int percent, double before, dynres_limit_t before_kind, double after, dynres_limit_t after_kind,
+                double slow_fps, int *held) {
+    return rise_with(percent, before, before_kind, after, after_kind, &slow_fps, 1, held);
 }
 
 // the windows Dynres_Rise_Hold_Seconds spans at this frame rate (each window is Dynres_Window_Frames frames)
@@ -1338,8 +1345,9 @@ static int hold_windows(double fps) {
 }
 
 // The frame target rising, for each way it rises: the window spanning the rise and those of the next
-// Dynres_Rise_Hold_Seconds don't step down, though behind with the GPU busy; afterwards a scene still behind steps down
-// as before. The windows the hold spans depend on their length: 3 s is 4 windows at 40 fps, 12 at 120.
+// Dynres_Rise_Hold_Seconds at Dynres_Rise_Hold_Share of the new target or more don't step down, though behind with the
+// GPU busy; a window further below steps down as without a rise; after the 3 s a scene still behind steps as before.
+// The windows the hold spans depend on their length: 3 s is 4 windows at 40 fps, 12 at 120.
 static void test_rise_hold(void) {
     int held;
     // plugged in: BatteryFPS 40 lifts to the display's 120 (gc26_perfbatt_battplug: 97.3 fps, GPU busy 99%, the
@@ -1356,6 +1364,75 @@ static void test_rise_hold(void) {
     // a setting changed on the page (BatteryFPS 30 to 60), BatterySaver's level changed (Longest's 30 to Saver's 40)
     CHECK(rise(100, 30, Dynres_Match_Limit, 60, Dynres_Match_Limit, 52, &held) == hold_windows(52) && held == 6);
     CHECK(rise(100, 30, Dynres_Match_Limit, 40, Dynres_Match_Limit, 36, &held) == hold_windows(36) && held == 4);
+
+    // The windows logged after rises (BO3MACFIX_DYNRESDEBUG). A GPU clock coming up, at 72% of the target or more from
+    // the second window on: held as long as the 3 s last. gc27_perfbatt_liftplain (Kino at 100%): its clock still came
+    // up after the 3 s, so its 10th window (108.4, after them) steps, as with the plain 3 s
+    static const double liftplain27[] = { 59.0, 86.7, 100.2, 88.9, 96.0, 93.6, 92.4, 101.0, 106.1, 108.4 };
+    CHECK(rise_with(100, 40, Dynres_Match_Limit, 120, Dynres_No_Limit, liftplain27, 10, &held) == 9 && held == 9);
+    static const double liftplain28[] = { 70.0, 92.3, 101.4, 109.0, 110.7, 104.5, 114.0, 112.8, 123.8, 120.0 };
+    CHECK(rise_with(100, 40, Dynres_Match_Limit, 120, Dynres_No_Limit, liftplain28, 10, &held) == -1 && held == 7);
+    static const double battplug27[] = { 45.8, 91.3, 98.2, 99.2, 96.1, 107.2, 120.0 };
+    CHECK(rise_with(70, 40, Dynres_Match_Limit, 120, Dynres_No_Limit, battplug27, 7, &held) == -1 && held == 6);
+    static const double battplug28[] = { 54.8, 108.0, 112.8, 90.0, 105.9, 109.1, 119.9, 120.0 };
+    CHECK(rise_with(70, 40, Dynres_Match_Limit, 120, Dynres_No_Limit, battplug28, 8, &held) == -1 && held == 6);
+    static const double pausebatt27[] = { 37.5, 40.0 };
+    CHECK(rise_with(100, 30, Dynres_Situation_Limit, 40, Dynres_Match_Limit, pausebatt27, 2, &held) == -1 && held == 1);
+    // A scene that can't keep up: gc28_perfbatt_deimoslift (DEIMOS at 100%, 55-58% of 120 from its second window on).
+    // The window of the rise (53.1, 44%) is held; the next one is judged: two steps (far behind), about 1 s after the
+    // rise, where the plain 3 s held 7 windows and stepped at 3.7 s
+    static const double deimos28[] = { 53.1, 66.4, 66.8, 67.6, 68.3, 68.0, 68.0, 67.3, 66.9, 67.9, 69.9, 66.1 };
+    CHECK(rise_with(100, 40, Dynres_Match_Limit, 120, Dynres_No_Limit, deimos28, 12, &held) == 1 && held == 1);
+    {
+        dynres_t d;
+        dynres_reset(&d, 100, 60);
+        d.windows_since_change = 20;
+        dynres_window_limited(&d, 40, 0.5, 40, Dynres_Match_Limit);
+        CHECK(dynres_window_limited(&d, 53.1, 1.0, 120, Dynres_No_Limit) == 100);
+        CHECK(d.event == Dynres_Event_Held && d.rise_window && d.held_windows == 1);
+        CHECK(dynres_window_limited(&d, 66.4, 1.0, 120, Dynres_No_Limit) == 90);
+        CHECK(d.event == Dynres_Event_Too_Slow && !d.rise_window && d.rise_hold > 0);
+        double since = Dynres_Rise_Hold_Seconds - d.rise_hold; // the window of the rise and this one
+        CHECK(since > 0.99 && since < 1.02);
+        // the hold goes on for the next windows: at 90% (76 fps, 63% of 120: still too slow) and after the holds
+        // after a change, the next step; a window that reaches 65% would be held again while the 3 s last
+        dynres_window_limited(&d, 76, 1.0, 120, Dynres_No_Limit);
+        dynres_window_limited(&d, 76, 1.0, 120, Dynres_No_Limit);
+        CHECK(d.percent == 90 && d.rise_hold > 0);
+        CHECK(dynres_window_limited(&d, 76, 1.0, 120, Dynres_No_Limit) == 80 && d.event == Dynres_Event_Too_Slow);
+        dynres_window_limited(&d, 90, 1.0, 120, Dynres_No_Limit);
+        dynres_window_limited(&d, 90, 1.0, 120, Dynres_No_Limit);
+        CHECK(d.rise_hold > 0);
+        CHECK(dynres_window_limited(&d, 90, 1.0, 120, Dynres_No_Limit) == 80 && d.event == Dynres_Event_Held);
+    }
+    // the share's edge: after the window of the rise, 65% of the target is held, a little under it is judged
+    {
+        static const double at[] = { 50.0, 120 * Dynres_Rise_Hold_Share };
+        static const double under[] = { 50.0, 77.9 };
+        CHECK(rise_with(100, 40, Dynres_Match_Limit, 120, Dynres_No_Limit, at, 2, &held) == hold_windows(78.0));
+        CHECK(rise_with(100, 40, Dynres_Match_Limit, 120, Dynres_No_Limit, under, 2, &held) == 1 && held == 1);
+        // under a limit too: the battery's 40 after the pause menu (26 fps is 65% of 40)
+        static const double at40[] = { 30.0, 26.0 }, under40[] = { 30.0, 25.9 };
+        CHECK(rise_with(100, 30, Dynres_Situation_Limit, 40, Dynres_Match_Limit, at40, 2, &held) == hold_windows(26.0));
+        CHECK(rise_with(100, 30, Dynres_Situation_Limit, 40, Dynres_Match_Limit, under40, 2, &held) == 1);
+    }
+    // the window of the rise is held whatever its frame rate (a stall of 30 frames at 20 fps, 17% of 120)
+    {
+        // (the stall's own 1.5 s count in the hold: five windows at 95 fps start within the 3 s, the sixth is judged)
+        static const double stall[] = { 20.0, 95.0 };
+        CHECK(rise_with(100, 40, Dynres_Match_Limit, 120, Dynres_No_Limit, stall, 2, &held) == 6 && held == 6);
+        dynres_t d;
+        dynres_reset(&d, 100, 60);
+        d.windows_since_change = 20;
+        dynres_window_limited(&d, 40, 0.5, 40, Dynres_Match_Limit);
+        CHECK(dynres_window_limited(&d, 20.0, 1.0, 120, Dynres_No_Limit) == 100 && d.event == Dynres_Event_Held);
+        // a second rise inside the hold (the pause menu again and closed: 30, then 40 -> 120 once more): its window is
+        // the window of a rise too, held whatever its frame rate
+        dynres_window_limited(&d, 30, 0.5, 30, Dynres_Situation_Limit);
+        CHECK(dynres_window_limited(&d, 25.0, 1.0, 120, Dynres_No_Limit) == 100 && d.event == Dynres_Event_Held);
+        CHECK(d.rise_window && d.held_windows == 1);
+    }
+
     // without a rise, the same windows step down after the usual hold (the rule is only about rises)
     dynres_t d;
     dynres_reset(&d, 100, 60);
@@ -1364,6 +1441,7 @@ static void test_rise_hold(void) {
     for (int i = 0; i < 10; i++)
         dynres_window_limited(&d, 120, 0.5, 120, Dynres_No_Limit);
     CHECK(dynres_window_limited(&d, 97.3, 0.99, 120, Dynres_No_Limit) == 60 && d.event != Dynres_Event_Held);
+    CHECK(d.event == Dynres_Event_None && !d.rise_window);
     // a fall of the target (the pause menu opens: 40 to 30) holds nothing, and the window after it steps as before
     dynres_reset(&d, 100, 60);
     d.percent = 100;
@@ -1386,7 +1464,8 @@ static void test_rise_hold(void) {
     dynres_window_limited(&d, 120, 0.3, 120, Dynres_No_Limit); // rose, ahead of nothing: room
     CHECK(d.rise_hold > 0 && d.percent >= before);
     // under a limit, a window in the hold that holds the target counts toward the next trial as usual, though the GPU
-    // reads busy (the hold only keeps steps down from happening)
+    // reads busy (the hold only keeps steps down from happening); a held window starts that count again, as a window
+    // behind with the GPU busy always did (the review of the rise hold, R4)
     dynres_reset(&d, 100, 60);
     d.percent = 90;
     d.windows_since_change = 20;
@@ -1396,13 +1475,58 @@ static void test_rise_hold(void) {
     CHECK(d.rise_hold > 0 && d.headroom_windows == 1);
     dynres_window_limited(&d, 40, 0.95, 40, Dynres_Match_Limit);
     CHECK(d.rise_hold > 0 && d.headroom_windows == 2);
+    CHECK(dynres_window_limited(&d, 36, 0.95, 40, Dynres_Match_Limit) == 90 && d.event == Dynres_Event_Held);
+    CHECK(d.headroom_windows == 0 && !d.rise_window);
+    // only a window behind with the GPU busy is held: one behind with room on the GPU (CPU-bound) goes on as without a
+    // rise (R4)
+    dynres_reset(&d, 100, 60);
+    d.percent = 90;
+    d.windows_since_change = 20;
+    dynres_window_limited(&d, 30, 0.5, 30, Dynres_Situation_Limit);
+    CHECK(dynres_window_limited(&d, 34, 0.5, 40, Dynres_Match_Limit) == 90 && d.rise_hold > 0);
+    CHECK(d.event == Dynres_Event_None && d.held_windows == 0);
+    // a rise in the window of a move at once (BatteryResolution set lower on the page as the pause menu closes: the
+    // ceiling 85 -> 70, the target 30 -> 40): the move as before, and the rise is seen in the next window, held as the
+    // window of the rise (R4)
+    dynres_reset(&d, 100, 60);
+    dynres_set_ceiling(&d, 85);
+    dynres_window_limited(&d, 30, 0.5, 30, Dynres_Situation_Limit);
+    CHECK(d.percent == 85);
+    d.windows_since_change = 20;
+    dynres_window_limited(&d, 30, 0.5, 30, Dynres_Situation_Limit);
+    dynres_set_ceiling(&d, 70);
+    CHECK(dynres_window_limited(&d, 36, 0.99, 40, Dynres_Match_Limit) == 70 && d.event == Dynres_Event_Ceiling);
+    CHECK(d.rise_hold <= 0 && d.target == 30);
+    CHECK(dynres_window_limited(&d, 20, 0.99, 40, Dynres_Match_Limit) == 70 && d.event == Dynres_Event_Held);
+    CHECK(d.rise_window);
+    // and a move at once right after the window of a rise isn't that window (for the log)
+    dynres_set_ceiling(&d, 60);
+    CHECK(dynres_window_limited(&d, 38, 0.99, 40, Dynres_Match_Limit) == 60 && d.event == Dynres_Event_Ceiling);
+    CHECK(!d.rise_window);
+    // at the floor nothing is held (nothing to step down to) and nothing is said (the review of the rise hold, R5); the
+    // size stays, as it would; nor is a window under the share there marked as judged
+    dynres_reset(&d, 100, 60);
+    d.percent = 60;
+    d.windows_since_change = 20;
+    dynres_window_limited(&d, 40, 0.5, 40, Dynres_Match_Limit);
+    CHECK(dynres_window_limited(&d, 90, 0.99, 120, Dynres_No_Limit) == 60 && d.rise_hold > 0);
+    CHECK(d.event == Dynres_Event_None && d.held_windows == 0);
+    CHECK(dynres_window_limited(&d, 50, 0.99, 120, Dynres_No_Limit) == 60 && d.event == Dynres_Event_None);
+    // a window under the share right after a change isn't settled: no step, as without a rise
+    dynres_reset(&d, 100, 60);
+    d.percent = 90;
+    d.windows_since_change = 20;
+    dynres_window_limited(&d, 40, 0.5, 40, Dynres_Match_Limit);
+    d.windows_since_change = 0; // as if the size had just changed
+    CHECK(dynres_window_limited(&d, 50, 0.99, 120, Dynres_No_Limit) == 90 && d.event == Dynres_Event_Held);
+    CHECK(dynres_window_limited(&d, 60, 0.99, 120, Dynres_No_Limit) == 90 && d.event == Dynres_Event_Too_Slow);
     // a reset (a new base: ResolutionPercent changed, the setting changed) forgets the hold and the last target
     dynres_reset(&d, 100, 60);
     dynres_window_limited(&d, 30, 0.5, 30, Dynres_Situation_Limit);
     dynres_window_limited(&d, 35, 0.99, 40, Dynres_Match_Limit);
     CHECK(d.rise_hold > 0 && d.target == 40);
     dynres_reset(&d, 90, 60);
-    CHECK(d.rise_hold == 0 && d.target == 0 && d.held_windows == 0);
+    CHECK(d.rise_hold == 0 && d.target == 0 && d.held_windows == 0 && !d.rise_window);
     // a second rise counts its held windows from the start (the first one is said in the log)
     dynres_reset(&d, 100, 60);
     d.percent = 100;
@@ -1422,6 +1546,18 @@ static void test_rise_hold(void) {
         dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
     CHECK(d.percent == 90 && d.trial_from == 85);
     CHECK(dynres_window_limited(&d, 60.0, 0.99, 120, Dynres_No_Limit) == 90 && d.event == Dynres_Event_Held);
+    // ... and a window after it, too slow for a clock coming up, takes it back as without a rise (a rise that keeps the
+    // trial: BatteryFPS 40 -> 60 on the page, a limit of the match before and after; back to no limit ends a trial)
+    dynres_reset(&d, 100, 60);
+    d.percent = 85;
+    d.windows_since_change = 20;
+    for (int i = 0; i < 400 && d.percent < 90; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+    for (int i = 0; i < 3; i++) // the holds after the trial's change, at the limit
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+    CHECK(d.percent == 90 && d.trial_from == 85);
+    CHECK(dynres_window_limited(&d, 45.0, 0.99, 60, Dynres_Match_Limit) == 90 && d.event == Dynres_Event_Held);
+    CHECK(dynres_window_limited(&d, 35.0, 0.99, 60, Dynres_Match_Limit) == 85 && d.event == Dynres_Event_Taken_Back);
     // a rise with a move at once (BatteryResolution's ceiling under DynamicResolution's floor): the move as before
     dynres_reset(&d, 100, 85);
     dynres_set_ceiling(&d, 70);

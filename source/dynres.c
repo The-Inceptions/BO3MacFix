@@ -10,6 +10,7 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
     d->target = 0;
     d->rise_hold = 0;
     d->held_windows = 0;
+    d->rise_window = false;
     d->percent = base;
     d->windows_since_change = 0;
     d->headroom_windows = 0;
@@ -87,6 +88,7 @@ int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps) {
 int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double target_fps, dynres_limit_t limit) {
     d->windows_since_change++;
     d->event = Dynres_Event_None;
+    d->rise_window = false;
     // another kind of limit: the count of windows with room starts again; back to none, a trial is kept as it is
     if ((int)limit != d->limit) {
         d->headroom_windows = 0;
@@ -109,8 +111,11 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
         d->event = Dynres_Event_Ceiling;
         return change(d, d->percent > top ? top : least);
     }
-    // the frame target rose in this window: no step down from it on, for Dynres_Rise_Hold_Seconds of play (dynres.h)
-    if (d->target > 0 && target_fps > d->target) {
+    // the frame target rose in this window: for Dynres_Rise_Hold_Seconds of play, no step down while the GPU's clock can
+    // still be coming up (dynres.h)
+    bool rose = d->target > 0 && target_fps > d->target;
+    d->rise_window = rose;
+    if (rose) {
         d->rise_hold = Dynres_Rise_Hold_Seconds;
         d->held_windows = 0;
     }
@@ -122,11 +127,14 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
         return d->percent;
     bool settled = d->windows_since_change > Dynres_Hold_Down;
     bool behind = fps < target_fps * Dynres_Missed;
-    if (held && behind && gpu_busy >= Dynres_GPU_Bound) {
-        d->headroom_windows = 0;
-        d->held_windows++;
-        d->event = Dynres_Event_Held;
-        return d->percent;
+    if (held && behind && gpu_busy >= Dynres_GPU_Bound && d->percent > least) {
+        if (rose || fps >= target_fps * Dynres_Rise_Hold_Share) {
+            d->headroom_windows = 0;
+            d->held_windows++;
+            d->event = Dynres_Event_Held;
+            return d->percent;
+        }
+        d->event = Dynres_Event_Too_Slow; // a scene that can't keep up: judged as without a rise, below
     }
 
     // a trial step up under a limit: taken back at once if the GPU falls behind within its first Dynres_Trial_Windows,
