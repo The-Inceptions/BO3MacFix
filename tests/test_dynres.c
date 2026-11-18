@@ -792,7 +792,9 @@ static void test_late_heavy_moment(void) {
     CHECK(d.trial_from == 0 && d.trial_watched);
     CHECK(dynres_window_limited(&d, 25.0, 0.99, 30, Dynres_Situation_Limit) == 80);
     CHECK(d.failed_trials == 0 && !d.trial_watched);
-    for (int i = 0; i < Dynres_Hold_Down; i++)
+    // back in the match the frame target rose (30 -> 40): no step down for Dynres_Rise_Hold_Seconds (4 windows at
+    // 40 fps), then the fall is a plain step, not counted
+    for (int i = 0; i < 4; i++)
         dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
     CHECK(dynres_window_limited(&d, 36.0, 0.99, 40, Dynres_Match_Limit) == 75 && d.failed_trials == 0);
 }
@@ -1301,43 +1303,131 @@ static void test_ceiling_news(void) {
     CHECK(dynres_ceiling_news(90, 90, &logged) == Dynres_Ceiling_Nothing && logged == 90);
 }
 
-// Plugged in (the ceiling rises and the battery's frame limit lifts in the same window): that window and the holds after
-// it don't step down, though its frames look far behind the display's rate and the GPU reads busy at the slow clock of
-// the limit; a controller without the rise (DynamicResolution alone, at the same size) steps down two in that window,
-// which is what the plug-in did before (the review of 2026-11-18, finding 1). After the holds, a window really behind
-// with the GPU busy steps down as DynamicResolution does.
-static void test_plug_in_hold(void) {
-    dynres_t d, e;
+// One rise of the frame target: a controller settled at `percent` (BatteryResolution's ceiling there, so no step up
+// before the rise) under the target `before` (of kind `before_kind`); then the ceiling back at the base and the
+// target rising to `after` (of kind `after_kind`), every window at `slow_fps` with the GPU busy: the GPU's clock coming
+// up, and then a scene that really can't hold the new target. Returns the window of the first step down, counted from
+// the rise window (0), or -1 for none within 40; *held gets the windows the hold kept from stepping down.
+static int rise(int percent, double before, dynres_limit_t before_kind, double after, dynres_limit_t after_kind,
+                double slow_fps, int *held) {
+    dynres_t d;
     dynres_reset(&d, 100, 60);
-    dynres_set_ceiling(&d, 70);
-    CHECK(dynres_window_limited(&d, 40.0, 0.5, 40, Dynres_Match_Limit) == 70); // unplugged: at once
-    for (int i = 0; i < 20; i++)
-        dynres_window_limited(&d, 40.0, 0.92, 40, Dynres_Match_Limit);
-    CHECK(d.percent == 70 && !d.ceiling_rose);
-    dynres_reset(&e, 100, 60); // DynamicResolution alone, settled at 70% (a heavy moment brought it there)
-    e.percent = 70;
-    e.windows_since_change = 20;
-    dynres_set_ceiling(&d, 100); // plugged in
-    CHECK(d.ceiling_rose);
-    CHECK(dynres_window_limited(&d, 45.0, 0.94, 120, Dynres_No_Limit) == 70 && !d.ceiling_rose);
-    CHECK(dynres_window_limited(&e, 45.0, 0.94, 120, Dynres_No_Limit) == 60); // without the rise: two steps down
-    for (int i = 0; i < Dynres_Hold_Down; i++)
-        CHECK(dynres_window_limited(&d, 45.0, 0.94, 120, Dynres_No_Limit) == 70);
-    CHECK(dynres_window_limited(&d, 110.0, 0.99, 120, Dynres_No_Limit) == 65); // then DynamicResolution's own step
-    // a ceiling coming down (unplugged) is no rise; nor a ceiling set to what it is
+    d.percent = percent;
+    dynres_set_ceiling(&d, percent);
+    d.windows_since_change = 20;
+    for (int i = 0; i < 10; i++)
+        dynres_window_limited(&d, before, 0.5, before, before_kind); // at the old target, room on the GPU
+    CHECK(d.percent == percent && d.rise_hold <= 0);
+    dynres_set_ceiling(&d, 100);
+    for (int i = 0; i < 40; i++) {
+        if (dynres_window_limited(&d, slow_fps, 0.99, after, after_kind) < percent) {
+            *held = d.held_windows;
+            return i;
+        }
+    }
+    *held = d.held_windows;
+    return -1;
+}
+
+// the windows Dynres_Rise_Hold_Seconds spans at this frame rate (each window is Dynres_Window_Frames frames)
+static int hold_windows(double fps) {
+    int windows = 0;
+    for (double left = Dynres_Rise_Hold_Seconds; left > 0; left -= Dynres_Window_Frames / fps)
+        windows++;
+    return windows;
+}
+
+// The frame target rising, for each way it rises: the window spanning the rise and those of the next
+// Dynres_Rise_Hold_Seconds don't step down, though behind with the GPU busy; afterwards a scene still behind steps down
+// as before. The windows the hold spans depend on their length: 3 s is 4 windows at 40 fps, 12 at 120.
+static void test_rise_hold(void) {
+    int held;
+    // plugged in: BatteryFPS 40 lifts to the display's 120 (gc26_perfbatt_battplug: 97.3 fps, GPU busy 99%, the
+    // step four windows after the plug-in)
+    CHECK(rise(70, 40, Dynres_Match_Limit, 120, Dynres_No_Limit, 97.3, &held) == hold_windows(97.3));
+    CHECK(held == hold_windows(97.3) && held == 10);
+    // the pause menu closed: its 30 back to the battery's 40 (gcp1_perfbatt_pausekino: 37.9 fps of 40, GPU busy 98%)
+    CHECK(rise(100, 30, Dynres_Situation_Limit, 40, Dynres_Match_Limit, 37.9, &held) == hold_windows(37.9));
+    CHECK(held == 4);
+    // a menu closed into a match without a limit (the menus' 40 to the display's 120)
+    CHECK(rise(100, 40, Dynres_Situation_Limit, 120, Dynres_No_Limit, 99, &held) == hold_windows(99) && held == 10);
+    // the game in front again (BackgroundFPS 30 to the battery's 40)
+    CHECK(rise(100, 30, Dynres_Situation_Limit, 40, Dynres_Match_Limit, 36, &held) == hold_windows(36) && held == 4);
+    // a setting changed on the page (BatteryFPS 30 to 60), BatterySaver's level changed (Longest's 30 to Saver's 40)
+    CHECK(rise(100, 30, Dynres_Match_Limit, 60, Dynres_Match_Limit, 52, &held) == hold_windows(52) && held == 6);
+    CHECK(rise(100, 30, Dynres_Match_Limit, 40, Dynres_Match_Limit, 36, &held) == hold_windows(36) && held == 4);
+    // without a rise, the same windows step down after the usual hold (the rule is only about rises)
+    dynres_t d;
     dynres_reset(&d, 100, 60);
-    dynres_set_ceiling(&d, 85);
-    CHECK(!d.ceiling_rose);
-    dynres_set_ceiling(&d, 85);
-    CHECK(!d.ceiling_rose);
-    // a rise that moves the size at once (BatteryResolution under DynamicResolution's floor): the move, and the flag
-    // ends with it (the change's own holds follow)
+    d.percent = 70;
+    d.windows_since_change = 20;
+    for (int i = 0; i < 10; i++)
+        dynres_window_limited(&d, 120, 0.5, 120, Dynres_No_Limit);
+    CHECK(dynres_window_limited(&d, 97.3, 0.99, 120, Dynres_No_Limit) == 60 && d.event != Dynres_Event_Held);
+    // a fall of the target (the pause menu opens: 40 to 30) holds nothing, and the window after it steps as before
+    dynres_reset(&d, 100, 60);
+    d.percent = 100;
+    d.windows_since_change = 20;
+    for (int i = 0; i < 10; i++)
+        dynres_window_limited(&d, 40, 0.5, 40, Dynres_Match_Limit);
+    dynres_window_limited(&d, 34, 0.99, 30, Dynres_Situation_Limit); // the window spanning it: 40 fps frames, ahead
+    CHECK(d.rise_hold <= 0 && d.percent == 100);
+    // the first window after a reset has nothing to compare with: no rise
+    dynres_reset(&d, 100, 60);
+    d.windows_since_change = 20;
+    CHECK(dynres_window_limited(&d, 80, 0.99, 120, Dynres_No_Limit) == 90 && d.rise_hold <= 0);
+    // in the hold a window with room steps up as usual (the hold is only about steps down)
+    dynres_reset(&d, 100, 60);
+    d.percent = 70;
+    d.windows_since_change = 40;
+    d.headroom_windows = Dynres_Hold_Up;
+    dynres_window_limited(&d, 40, 0.3, 40, Dynres_Match_Limit);
+    int before = d.percent;
+    dynres_window_limited(&d, 120, 0.3, 120, Dynres_No_Limit); // rose, ahead of nothing: room
+    CHECK(d.rise_hold > 0 && d.percent >= before);
+    // under a limit, a window in the hold that holds the target counts toward the next trial as usual, though the GPU
+    // reads busy (the hold only keeps steps down from happening)
+    dynres_reset(&d, 100, 60);
+    d.percent = 90;
+    d.windows_since_change = 20;
+    for (int i = 0; i < 10; i++)
+        dynres_window_limited(&d, 30, 0.95, 30, Dynres_Situation_Limit); // the pause menu
+    dynres_window_limited(&d, 40, 0.95, 40, Dynres_Match_Limit);          // closed: the target rose, the limit held
+    CHECK(d.rise_hold > 0 && d.headroom_windows == 1);
+    dynres_window_limited(&d, 40, 0.95, 40, Dynres_Match_Limit);
+    CHECK(d.rise_hold > 0 && d.headroom_windows == 2);
+    // a reset (a new base: ResolutionPercent changed, the setting changed) forgets the hold and the last target
+    dynres_reset(&d, 100, 60);
+    dynres_window_limited(&d, 30, 0.5, 30, Dynres_Situation_Limit);
+    dynres_window_limited(&d, 35, 0.99, 40, Dynres_Match_Limit);
+    CHECK(d.rise_hold > 0 && d.target == 40);
+    dynres_reset(&d, 90, 60);
+    CHECK(d.rise_hold == 0 && d.target == 0 && d.held_windows == 0);
+    // a second rise counts its held windows from the start (the first one is said in the log)
+    dynres_reset(&d, 100, 60);
+    d.percent = 100;
+    d.windows_since_change = 20;
+    dynres_window_limited(&d, 30, 0.5, 30, Dynres_Situation_Limit);
+    dynres_window_limited(&d, 35, 0.99, 40, Dynres_Match_Limit);
+    dynres_window_limited(&d, 35, 0.99, 40, Dynres_Match_Limit);
+    CHECK(d.held_windows == 2);
+    dynres_window_limited(&d, 30, 0.5, 30, Dynres_Situation_Limit);
+    dynres_window_limited(&d, 35, 0.99, 40, Dynres_Match_Limit);
+    CHECK(d.held_windows == 1 && d.event == Dynres_Event_Held);
+    // a trial in progress when the target rises isn't taken back in the hold either
+    dynres_reset(&d, 100, 60);
+    d.percent = 85;
+    d.windows_since_change = 20;
+    for (int i = 0; i < 400 && d.percent < 90; i++)
+        dynres_window_limited(&d, 40.0, 0.8, 40, Dynres_Match_Limit);
+    CHECK(d.percent == 90 && d.trial_from == 85);
+    CHECK(dynres_window_limited(&d, 60.0, 0.99, 120, Dynres_No_Limit) == 90 && d.event == Dynres_Event_Held);
+    // a rise with a move at once (BatteryResolution's ceiling under DynamicResolution's floor): the move as before
     dynres_reset(&d, 100, 85);
     dynres_set_ceiling(&d, 70);
     dynres_window_limited(&d, 40.0, 0.5, 40, Dynres_Match_Limit);
     dynres_set_ceiling(&d, 100);
-    CHECK(dynres_window_limited(&d, 45.0, 0.94, 120, Dynres_No_Limit) == 85 && !d.ceiling_rose &&
-          d.event == Dynres_Event_Ceiling);
+    CHECK(dynres_window_limited(&d, 45.0, 0.94, 120, Dynres_No_Limit) == 85 && d.event == Dynres_Event_Ceiling);
 }
 
 // A warm-up ended early (the feature turned off in the middle of it) doesn't resume: nothing more until a map arms it
@@ -1428,7 +1518,7 @@ int main(void) {
     test_ceiling_and_trials();
     test_prewarm_under_ceiling();
     test_ceiling_news();
-    test_plug_in_hold();
+    test_rise_hold();
     test_prewarm_cancel();
     if (failures == 0)
         printf("test_dynres: all passed\n");

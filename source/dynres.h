@@ -56,7 +56,9 @@ typedef struct {
     int base;     // the user's ResolutionPercent, the most it goes up to
     int lowest;   // the least it goes down to
     int ceiling;  // the most it goes up to for now (BatteryResolution on battery), base otherwise
-    bool ceiling_rose; // the ceiling went up since the last window (plugged in): that window is held, see dynres.c
+    double target;      // the frame rate the last window aimed at, 0 before the first (Dynres_Rise_Hold_Seconds)
+    double rise_hold;   // seconds of play left in which no step down is taken, after the frame target rose
+    int held_windows;   // windows behind with the GPU busy that the hold kept from stepping down since the rise
     int percent;  // the resolution now
     int windows_since_change;
     int headroom_windows; // windows in a row in which a step up would have fit (under a limit: held the limit)
@@ -72,7 +74,23 @@ typedef struct {
 // FramePacingFPS, the game's com_maxfps), or one of a situation outside the play (the pause menu's, the menus', the
 // background's: frame_limit_for_frame's Limit_* bits)
 typedef enum { Dynres_No_Limit = 0, Dynres_Match_Limit = 1, Dynres_Situation_Limit = 2 } dynres_limit_t;
-enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back, Dynres_Event_Failed_Late, Dynres_Event_Ceiling };
+enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back, Dynres_Event_Failed_Late, Dynres_Event_Ceiling,
+       Dynres_Event_Held };
+
+// After the frame target rises, for whatever reason (a frame limit lifted or raised: the pause menu or a menu closed,
+// the game in front again, plugged in, BatteryFPS or BatterySaver changed on the settings page, a display with a higher
+// refresh rate), no step down is taken for Dynres_Rise_Hold_Seconds of play, counted from the window in which the
+// target rose and including it. That window was partly paced to the lower target; and macOS clocks the GPU down to
+// just fit a frame limit (Kino paused at 30 fps: the GPU 781 ms busy a second), so "behind the target and the GPU
+// busy" is true by construction for a while after the rise and says nothing about the scene. Seen in the game: every
+// close of the pause menu on battery stepped 100% -> 95% in the window that spanned it (gcp1_perfbatt_pausekino:
+// "37.9 fps of 40, GPU busy 98%"), and a plug-in stepped 70% -> 60% four windows after it, the GPU still at 97 fps
+// and 99% busy where it later held 120 fps at 60% with 56% (gc26_perfbatt_battplug). Why 3 s: in that plug-in the
+// slow stretch outlasted the first 1.2 s (the three windows 0005's hold covered and the next), and a rise is rare
+// (a pause's end, a plug-in), so a scene that really can't hold the new target loses at most 3 s at a lower frame
+// rate before its step down. Steps up, the moves at once (BatteryResolution's ceiling) and a fall of the target are
+// not held.
+#define Dynres_Rise_Hold_Seconds 3.0
 
 // starts (again) at base, with lowest as the floor (both ResolutionPercent values, 50 to 200), and no ceiling below base
 void dynres_reset(dynres_t *d, int base, int lowest);
@@ -88,11 +106,8 @@ void dynres_reset(dynres_t *d, int base, int lowest);
 // steps. No step of any kind goes above it.
 void dynres_set_ceiling(dynres_t *d, int ceiling);
 
-// The window in which the ceiling rises (plugged in, or the setting turned off) holds any step down, as the windows
-// after a change do: its frames were mostly paced to the battery's frame limit, which lifts at the same moment, and
-// judged against the display's rate they look far behind (the GPU reads 87-94% busy at a 40 fps limit even with
-// room), so without the hold the plug-in itself took two steps down (the review of 2026-11-18, finding 1: 70% -> 60%
-// with DynamicResolution 60). The steps up and down after the hold are DynamicResolution's own.
+// (Plugged in with BatteryFPS on, the battery's frame limit lifts in the same window the ceiling rises: the hold after
+// a rise of the frame target, above, keeps that moment from stepping down. The ceiling rising alone changes no load.)
 
 // the ceiling for BatteryResolution's setting (the share of base, in percent, 50 to 95; 0 = off): base while it's off or
 // the Mac isn't on battery, else that share of base as dynres_lowest_for rounds it

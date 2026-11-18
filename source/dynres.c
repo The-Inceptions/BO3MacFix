@@ -7,7 +7,9 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
     d->base = base;
     d->lowest = lowest < base ? lowest : base;
     d->ceiling = base;
-    d->ceiling_rose = false;
+    d->target = 0;
+    d->rise_hold = 0;
+    d->held_windows = 0;
     d->percent = base;
     d->windows_since_change = 0;
     d->headroom_windows = 0;
@@ -20,10 +22,7 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
 }
 
 void dynres_set_ceiling(dynres_t *d, int ceiling) {
-    int value = ceiling < d->base ? ceiling : d->base;
-    if (value > d->ceiling)
-        d->ceiling_rose = true;
-    d->ceiling = value;
+    d->ceiling = ceiling < d->base ? ceiling : d->base;
 }
 
 int dynres_battery_ceiling(int base, int setting, bool on_battery) {
@@ -108,19 +107,27 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
         d->trial_from = 0;
         d->trial_watched = false;
         d->event = Dynres_Event_Ceiling;
-        d->ceiling_rose = false;
         return change(d, d->percent > top ? top : least);
     }
-    // the ceiling rose in this window (plugged in): held like a window right after a change, see dynres.h
-    if (d->ceiling_rose) {
-        d->ceiling_rose = false;
-        d->windows_since_change = 0;
-        d->headroom_windows = 0;
+    // the frame target rose in this window: no step down from it on, for Dynres_Rise_Hold_Seconds of play (dynres.h)
+    if (d->target > 0 && target_fps > d->target) {
+        d->rise_hold = Dynres_Rise_Hold_Seconds;
+        d->held_windows = 0;
     }
+    d->target = target_fps;
+    bool held = d->rise_hold > 0;
+    if (held && fps > 0)
+        d->rise_hold -= Dynres_Window_Frames / fps;
     if (target_fps <= 0 || fps <= 0)
         return d->percent;
     bool settled = d->windows_since_change > Dynres_Hold_Down;
     bool behind = fps < target_fps * Dynres_Missed;
+    if (held && behind && gpu_busy >= Dynres_GPU_Bound) {
+        d->headroom_windows = 0;
+        d->held_windows++;
+        d->event = Dynres_Event_Held;
+        return d->percent;
+    }
 
     // a trial step up under a limit: taken back at once if the GPU falls behind within its first Dynres_Trial_Windows,
     // kept after them, and watched until Dynres_Trial_Watch: only a size that lasted that long clears the count of

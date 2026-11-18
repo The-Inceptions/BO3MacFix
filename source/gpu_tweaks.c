@@ -786,6 +786,8 @@ static void dynres_tick(int frame_limit_fps) {
         } else {
             // BatteryResolution's ceiling for this window, said in the log when it changes
             dynres_set_ceiling(&dynres, dynres_battery_ceiling(dynres.base, battery, atomic_load(&limits.on_battery)));
+            if (battery == 0)
+                battery_ceiling_logged = 0; // off: turned on again later on battery, it is said again
             if (battery != 0) {
                 int news = dynres_ceiling_news(dynres.ceiling, dynres.base, &battery_ceiling_logged);
                 if (news == Dynres_Ceiling_On_Battery)
@@ -796,6 +798,16 @@ static void dynres_tick(int frame_limit_fps) {
                            dynres.ceiling);
             }
             percent = dynres_window_limited(&dynres, window_fps, window_busy, target, limit);
+            // the frame target rose and this window, behind with the GPU busy, wasn't taken as a reason to step down
+            // (dynres.h, Dynres_Rise_Hold_Seconds): said for the first such window after a rise, each with
+            // BO3MACFIX_DYNRESDEBUG
+            static int rise_debug = -1;
+            if (rise_debug < 0)
+                rise_debug = getenv("BO3MACFIX_DYNRESDEBUG") != NULL;
+            if (dynres.event == Dynres_Event_Held && (dynres.held_windows == 1 || rise_debug))
+                printf("dynamic resolution: the frame target rose to %i, no step down while the GPU catches up "
+                       "(%.1f fps, GPU busy %.0f%%, %.1f s of the hold left)\n",
+                       target, window_fps, window_busy * 100, dynres.rise_hold > 0 ? dynres.rise_hold : 0.0);
         }
         dynres_start_low_pending = false;
         why = dynres.event == Dynres_Event_Trial ? ", a trial under the frame limit"
