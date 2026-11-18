@@ -28,6 +28,11 @@ const char *const *t7o_command_args(int *argc) {
 
 static int held_lock = -1; // the critical section the made-up game's lock holds last, -1 for none
 static int held_locks[4], held_count; // all it holds, in the order taken
+// the database thread of the made-up game: when the asset lock (0x60) is asked for, it has it first and takes one entry
+// off this pool's list before it lets go (then pop_from is NULL again)
+static int assets_locked;            // how often 0x60 was taken
+static struct asset_pool_s *pop_from;
+static void *popped;
 
 // the game's Lua: what the take function gave back (T7OTakeCustomKey)
 static struct {
@@ -86,6 +91,16 @@ static uint8_t game_player_keys[0x1940 * 2];
 // the game's scoped critical sections: each object goes on a per-thread list, so they're left the other way round
 static void game_critical_section_enter(void *lock, int critical_section, int mode) {
     CHECK(mode == 0 && held_count < 4);
+    if (critical_section == 0x60) {
+        assets_locked++;
+        asset_pool_t *pool = (asset_pool_t *)pop_from;
+        if (pool != NULL && pool->free_head != NULL) {
+            popped = pool->free_head;
+            memcpy(&pool->free_head, popped, sizeof(void *));
+            pool->item_alloc_count++;
+        }
+        pop_from = NULL;
+    }
     memcpy(lock, &critical_section, sizeof(critical_section));
     if (held_count < 4)
         held_locks[held_count++] = critical_section;
@@ -854,6 +869,100 @@ static void test_free_unused(void) {
     CHECK(updatevidconfig_logged && freed == 3);
 }
 
+// T7Overcharged's asset limits: a made-up DB_XAssetPool with a pool of five localize entries, two in use
+// the made-up game's array has room behind its 0x67 pools, where the game has other globals, so that a "pool" written
+// there is seen; and its names go on to 0x6A, as the game's do
+#define Asset_Name_Count 0x6B
+static asset_pool_t game_pools[Asset_Name_Count];
+static const char *game_pool_names[Asset_Name_Count];
+#define Localize 22
+#define Entry_Size 16
+static uint8_t localize_entries[5 * Entry_Size];
+
+static void make_pools(void) {
+    memset(game_pools, 0, sizeof(game_pools));
+    memset(localize_entries, 0, sizeof(localize_entries));
+    for (int i = 2; i < 5; i++) {
+        void *next = i + 1 < 5 ? localize_entries + (i + 1) * Entry_Size : NULL;
+        memcpy(localize_entries + i * Entry_Size, &next, sizeof(next));
+    }
+    game_pools[Localize] = (asset_pool_t){ localize_entries, Entry_Size, 5, false, 2, localize_entries + 2 * Entry_Size };
+    game_pool_names[Localize] = "localize";
+    game_pool_names[38] = "fx";
+    game_pool_names[0x67] = "string";
+    game_pool_names[0x68] = "assetlist";
+    game_pool_names[0x69] = "report";
+    game_pool_names[0x6A] = "depend";
+    // and what a pool there would look like, as the bytes of other globals might
+    for (int type = 0x67; type < Asset_Name_Count; type++)
+        game_pools[type] = (asset_pool_t){ NULL, Entry_Size, 1, false, 0, NULL };
+    asset_pools = game_pools;
+    asset_names = game_pool_names;
+    CritSec_ScopedLock = game_critical_section_enter;
+    CritSec_ScopedUnlock = game_critical_section_leave;
+    assets_locked = 0;
+    popped = NULL;
+}
+
+// the entries on a pool's list, at most most of them; whether one of them is that entry
+static int list_length(const asset_pool_t *pool, int most, const void *entry, bool *has_entry) {
+    int count = 0;
+    *has_entry = false;
+    for (void *at = pool->free_head; at != NULL && count < most; count++) {
+        *has_entry = *has_entry || at == entry;
+        memcpy(&at, at, sizeof(at));
+    }
+    return count;
+}
+
+static void test_raise_pool(void) {
+    make_pools();
+    void *head = game_pools[Localize].free_head;
+    // what doesn't fit changes nothing and takes no lock
+    CHECK(!t7o_small_raise_pool(Localize, "fx", 9));  // another type's name
+    CHECK(!t7o_small_raise_pool(-1, "localize", 9));
+    CHECK(!t7o_small_raise_pool(Asset_Name_Count, "localize", 9));
+    // the four named types without a pool, with their own names: refused, and nothing written behind the pools
+    CHECK(!t7o_small_raise_pool(0x67, "string", 9));
+    CHECK(!t7o_small_raise_pool(0x68, "assetlist", 9));
+    CHECK(!t7o_small_raise_pool(0x69, "report", 9));
+    CHECK(!t7o_small_raise_pool(0x6A, "depend", 9));
+    for (int type = 0x67; type < Asset_Name_Count; type++)
+        CHECK(game_pools[type].item_count == 1 && game_pools[type].free_head == NULL);
+    CHECK(!t7o_small_raise_pool(Localize, NULL, 9));
+    CHECK(!t7o_small_raise_pool(Localize, "localize", 5));      // not above what it has
+    CHECK(!t7o_small_raise_pool(Localize, "localize", 100001)); // over T7Overcharged's most
+    CHECK(!t7o_small_raise_pool(1, "localize", 9));             // a type without a name here
+    CHECK(assets_locked == 0 && game_pools[Localize].item_count == 5 && game_pools[Localize].free_head == head);
+    game_pools[Localize].singleton = true;
+    CHECK(!t7o_small_raise_pool(Localize, "localize", 9));
+    game_pools[Localize].singleton = false;
+    game_pools[Localize].item_size = 4; // no room for the list's pointer
+    CHECK(!t7o_small_raise_pool(Localize, "localize", 9));
+    game_pools[Localize].item_size = Entry_Size;
+    CHECK(assets_locked == 0 && game_pools[Localize].free_head == head);
+
+    // 5 to 9, while the database thread, which had the asset lock first, takes the first free entry: the list is the
+    // four new entries, then the pool's other two, and never the one the database took
+    pop_from = (struct asset_pool_s *)&game_pools[Localize];
+    CHECK(t7o_small_raise_pool(Localize, "localize", 9));
+    CHECK(assets_locked == 1 && held_count == 0 && pop_from == NULL); // taken once and left
+    CHECK(popped == localize_entries + 2 * Entry_Size && game_pools[Localize].item_alloc_count == 3);
+    CHECK(game_pools[Localize].item_count == 9);
+    bool has_popped = true;
+    CHECK(list_length(&game_pools[Localize], 100, popped, &has_popped) == 4 + 2 && !has_popped);
+    uint8_t *block = game_pools[Localize].free_head;
+    CHECK(block != NULL && (block < localize_entries || block >= localize_entries + sizeof(localize_entries)));
+    // and once more up: the next block before the last one
+    CHECK(t7o_small_raise_pool(Localize, "localize", 12));
+    CHECK(assets_locked == 2 && game_pools[Localize].item_count == 12);
+    CHECK(list_length(&game_pools[Localize], 100, popped, &has_popped) == 3 + 4 + 2 && !has_popped);
+    uint8_t *second_block = game_pools[Localize].free_head;
+    free(second_block);
+    free(block);
+    asset_pools = NULL;
+}
+
 int main(void) {
     test_stoi();
     test_keyset();
@@ -869,6 +978,7 @@ int main(void) {
     test_cursoroverride();
     test_dvar_patches();
     test_free_unused();
+    test_raise_pool();
     if (failures == 0)
         printf("test_t7o_small: all passed\n");
     return failures == 0 ? 0 : 1;

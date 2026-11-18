@@ -154,3 +154,8 @@ bool t7o_small_menuresponse_passes(int argc, const char *const *argv);
 // the mod has loaded T7Overcharged (the stand-in's init, t7overcharged.c): the first time, what T7Overcharged changes
 // in the game by itself when it starts
 void t7o_small_mod_loaded(void);
+// T7Overcharged's asset limits (the mod's T7Overcharged/assetlimits.txt, read by t7overcharged.c): the game's pool of
+// asset type `type`, whose name has to be `name`, gets new_limit entries in all. False, changing nothing, for a type
+// that has no pool or a name that isn't the type's, a limit over 100000 or not above the pool's, a pool of one, or no
+// memory.
+bool t7o_small_raise_pool(int type, const char *name, int new_limit);

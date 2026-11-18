@@ -34,51 +34,12 @@ void set_clipboard_text(const char *text);
 bool http_get_async(const char *url, const char *key);
 char *http_copy_result(const char *key);
 
-#define ASSET_TYPE_COUNT 0x6B
-#define MAX_ASSET_LIMIT 100000
-
-typedef struct _XAssetPool {
-    void *pool;
-    uint32_t itemSize;
-    int32_t itemCount;
-    bool isSingleton;
-    int32_t itemAllocCount;
-    void *freeHead;
-} XAssetPool;
-_Static_assert(sizeof(XAssetPool) == 0x20, "XAssetPool must match the game's layout");
-
 // the folder the mod's T7Overcharged DLL is in
 static char dll_dir[4096];
 
 bool t7o_is_overcharged_dll(const char *path) {
     const char *name = filename_from_path(path);
     return strcasecmp(name, "T7Overcharged.ff") == 0 || strcasecmp(name, "T7Overcharged.dll") == 0;
-}
-
-// Raises an asset pool's limit by chaining a new block of entries onto its free list.
-static void extend_asset_pool(int type, const char *name, int new_limit) {
-    if (type < 0 || type >= ASSET_TYPE_COUNT || new_limit > MAX_ASSET_LIMIT)
-        return;
-    // make sure the mod means the same asset type as us
-    const char *pool_name = ((const char **)(game_base_address + ADDR_g_assetNames))[type];
-    if (strcmp(pool_name, name) != 0) {
-        printf("T7Overcharged: asset type %i is '%s', not '%s'\n", type, pool_name, name);
-        return;
-    }
-    XAssetPool *pool = (XAssetPool *)(game_base_address + ADDR_DB_XAssetPool) + type;
-    if (pool->isSingleton || pool->itemSize < sizeof(void *) || new_limit <= pool->itemCount)
-        return;
-    int added = new_limit - pool->itemCount;
-    uint8_t *block = calloc(added, pool->itemSize);
-    if (block == NULL)
-        return;
-    for (int i = 0; i < added; i++) {
-        void **entry = (void **)(block + (size_t)i * pool->itemSize);
-        *entry = (i + 1 < added) ? block + (size_t)(i + 1) * pool->itemSize : pool->freeHead;
-    }
-    pool->freeHead = block;
-    printf("T7Overcharged: raised %s limit from %i to %i\n", name, pool->itemCount, new_limit);
-    pool->itemCount = new_limit;
 }
 
 // Applies the mod's T7Overcharged/assetlimits.txt, made of "<type> <name> <default limit> <new limit>" lines.
@@ -93,7 +54,7 @@ static void apply_asset_limits() {
         int type, default_limit, new_limit;
         char name[64];
         if (sscanf(line, "%i %63s %i %i", &type, name, &default_limit, &new_limit) == 4)
-            extend_asset_pool(type, name, new_limit);
+            t7o_small_raise_pool(type, name, new_limit); // under the game's database lock (t7o_small.c)
     }
     fclose(fp);
 }

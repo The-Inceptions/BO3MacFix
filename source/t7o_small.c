@@ -20,6 +20,7 @@
 #include <limits.h>
 #include <os/lock.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -558,6 +559,65 @@ static void freeunused_f(void) {
     CritSec_ScopedUnlock(zones_lock);
 }
 
+// T7Overcharged's asset_limits component, as the mod's T7Overcharged/assetlimits.txt asks: a pool of the game's assets
+// gets more entries. Its new entries are a block of our own, chained onto the pool's free list, and its count is
+// raised to say so (the game reads the count only for its "exceeded limit" message; nothing walks a pool by it). The
+// game takes entries off that list as it loads zones (0x10142a6b9, through 0x1013460f0), on its database thread, and
+// always with the asset hash's critical section 0x60 held: DB_FindXAssetHeader's default entry (0x101345b12: locked at
+// 0x101345c57, the entry made at 0x101345e5a, unlocked at 0x101345e67) and the link of a zone's assets (0x101349e1b),
+// whose two callers hold it around the call (0x1013455b8, and the zone loader at 0x101346a4d). T7Overcharged's start
+// runs on the game's main thread, while the database thread can be loading zones. Without that lock, an entry taken
+// off the list between our read of its head and our store would stay on our chain as well, and be handed out a second
+// time later: two assets in one entry. So the head is read and the list and count are changed under the same lock.
+// The game names 0x6B asset types but has a pool for the first 0x67 only: its pool array ends there (the last one it
+// sets up is 0x66's, at 0x11017d900, and other globals follow at 0x11017d920), and listassetpool walks it with
+// "cmp ebx, 0x67" (0x101348073). Types 0x67 to 0x6A ("string", "assetlist", "report", "depend") have no pool, so a
+// line of a mod's file that named one would have had its "pool" written into those globals.
+#define Asset_Pool_Count 0x67
+#define Asset_Limit_Most 100000
+typedef struct asset_pool_s {
+    void *pool;
+    uint32_t item_size;
+    int32_t item_count;
+    bool singleton;
+    int32_t item_alloc_count;
+    void *free_head;
+} asset_pool_t;
+_Static_assert(sizeof(asset_pool_t) == 0x20 && offsetof(asset_pool_t, free_head) == 0x18, "the game's XAssetPool");
+static asset_pool_t *asset_pools;      // the game's DB_XAssetPool, one per asset type that has a pool
+static const char *const *asset_names; // and its names of the types
+
+bool t7o_small_raise_pool(int type, const char *name, int new_limit) {
+    if (asset_pools == NULL || type < 0 || type >= Asset_Pool_Count || name == NULL || new_limit > Asset_Limit_Most)
+        return false;
+    // make sure the mod means the same asset type as us
+    const char *pool_name = asset_names[type];
+    if (pool_name == NULL || strcmp(pool_name, name) != 0) {
+        printf("T7Overcharged: asset type %i is '%s', not '%s'\n", type, pool_name != NULL ? pool_name : "?", name);
+        return false;
+    }
+    asset_pool_t *pool = &asset_pools[type];
+    int was = pool->item_count;
+    if (pool->singleton || pool->item_size < sizeof(void *) || new_limit <= was)
+        return false;
+    int added = new_limit - was;
+    uint8_t *block = calloc((size_t)added, pool->item_size);
+    if (block == NULL)
+        return false;
+    // the new entries chained to each other here; the last one to the pool's list under the lock
+    for (int i = 0; i + 1 < added; i++)
+        *(void **)(block + (size_t)i * pool->item_size) = block + (size_t)(i + 1) * pool->item_size;
+    void **last = (void **)(block + (size_t)(added - 1) * pool->item_size);
+    uint64_t assets_lock[2] = { 0, 0 };
+    CritSec_ScopedLock(assets_lock, Critical_Section_Assets, 0);
+    *last = pool->free_head;
+    pool->free_head = block;
+    pool->item_count = new_limit;
+    CritSec_ScopedUnlock(assets_lock);
+    printf("T7Overcharged: raised %s limit from %i to %i\n", name, was, new_limit);
+    return true;
+}
+
 // T7Overcharged's changes when it starts: on Windows its components start once, when the mod's Lua loads it
 static void *(*Dvar_FindByHash)(uint32_t hash);
 static void (*Dvar_SetFromStringByName)(const char *name, const char *value, bool create_if_missing);
@@ -633,6 +693,8 @@ void t7o_small_install(uint64_t base_address) {
     CritSec_ScopedLock = (void *)(base_address + ADDR_CritSec_ScopedLock);
     CritSec_ScopedUnlock = (void *)(base_address + ADDR_CritSec_ScopedUnlock);
     DB_FreeUnusedResources = (void *)(base_address + ADDR_DB_FreeUnusedResources);
+    asset_pools = (asset_pool_t *)(base_address + ADDR_DB_XAssetPool);
+    asset_names = (const char *const *)(base_address + ADDR_g_assetNames);
     Dvar_FindByHash = (void *)(base_address + ADDR_Dvar_FindByHash);
     Dvar_SetFromStringByName = (void *)(base_address + ADDR_Dvar_SetFromStringByName);
     session_mode_state = (const uint32_t *)(base_address + ADDR_sSessionModeState);
