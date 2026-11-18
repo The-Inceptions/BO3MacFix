@@ -1139,6 +1139,11 @@ static void start_power_watch(void) {
     });
 }
 
+bool gpu_tweaks_on_battery(void) {
+    start_power_watch();
+    return atomic_load(&limits.on_battery);
+}
+
 void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch) {
     const char *env = getenv("BO3MACFIX_BATTERYFPS");
     if (env != NULL)

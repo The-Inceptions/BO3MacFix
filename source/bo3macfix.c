@@ -64,6 +64,7 @@
 #include "dobby.h"
 #include "engine_display.h"
 #include "gpu_diag.h"
+#include "aae_engine_defaults.h"
 #include "gpu_tweaks.h"
 #include "havok.h"
 #include "utilities.h"
@@ -425,6 +426,7 @@ static void update_stream_stall_recovery(int localClientNum) {
 install_hook_name(CL_SetCGameTime, void, int localClientNum) {
     update_stream_stall_recovery(localClientNum);
     display_testhooks_frame(localClientNum);
+    aae_engine_defaults_frame();
     orig_CL_SetCGameTime(localClientNum);
 }
 
@@ -1291,6 +1293,8 @@ __attribute__((constructor)) static void dylib_main() {
     gpu_tweaks_metalfx_init(read_int_setting("MetalFXUpscale", 0), checked_code_patch);
     // DynamicResolution: lowers ResolutionPercent in steps while the GPU can't keep up, down to this share of it
     gpu_tweaks_dynres_init(read_int_setting("DynamicResolution", 0), checked_code_patch);
+    // the gun's shadow resolution at the game's own values while All-around Enhancement raises it (aae_engine_defaults.c)
+    aae_engine_defaults_init(game_base_address, read_int_setting_or_env("AAEEngineDefaults", 0));
 
     // log the frame rate every FrameStats seconds (0 = off), see gpu_tweaks.c
     gpu_tweaks_frame_stats_init(read_int_setting("FrameStats", 0), checked_code_patch);

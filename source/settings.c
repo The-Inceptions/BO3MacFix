@@ -21,6 +21,7 @@
 #include "cpu_tuning.h"
 #include "display_follow.h"
 #include "gc_bridge.h"
+#include "aae_engine_defaults.h"
 #include "gpu_tweaks.h"
 #include "notch.h"
 #include "notices.h"
@@ -84,6 +85,7 @@ static const setting_t settings[] = {
     { "BackgroundFPS", "Background frame limit", "Limits the frame rate while the game isn't the active app, or is hidden or minimized, to save power.", "Graphics", false, 4, { 0, 15, 30, 60 }, { "Off", "15", "30", "60" }, 30, Live_Present },
     { "IdleDisplaySleep", "Display sleep when idle", "Lets the display turn off after the Mac's own idle time while the game is paused, in the menus or in the background; the game otherwise keeps it on for as long as it runs. Needs ControllerBridge (it is how a controller's input counts as activity and wakes the display); without it the display stays on as before.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "On battery", "Always" }, 0, Live_Always },
     { "DynamicResolution", "Dynamic resolution", "Lowers the 3D scene's resolution a little while the GPU can't keep up with the refresh rate (down to this share of Render Resolution), and raises it again when it can.", "Graphics", false, 6, { 0, 85, 75, 70, 60, 50 }, { "Off", "Down to 85%", "Down to 75%", "Down to 70%", "Down to 60%", "Down to 50%" }, 0, Live_Present },
+    { "AAEEngineDefaults", "Game's own gun shadows", "Keeps the gun's shadow resolution at the game's own values, which All-around Enhancement raises at every match start. Saves a little GPU time; On battery saves it only there.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "On", "On battery" }, 0, Live_Always },
     { "MetalFXUpscale", "MetalFX upscaling", "Upscales with MetalFX when the game runs below the screen's resolution. \"Panel resolution\" is for scaled monitor modes.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "On", "On, panel resolution" }, 0, Live_Never },
     { "MetalHUD", "Metal performance HUD", "Shows macOS's Metal HUD with the frame rate and GPU time.", "Graphics", Toggle(0) },
     { "DisplayFollow", "Follow display changes", "Moves the game when displays are plugged in or unplugged, and adapts its resolution and refresh rate to the new display.", "Display", Toggle_Live(1, Live_Always) },
@@ -203,6 +205,10 @@ static bool apply_live(const setting_t *t, int value) {
         return gpu_tweaks_set_frame_stats(value);
     if (strcmp(n, "DynamicResolution") == 0)
         return gpu_tweaks_set_dynamic_resolution(value);
+    if (strcmp(n, "AAEEngineDefaults") == 0) {
+        aae_engine_defaults_set(value);
+        return true;
+    }
     if (strcmp(n, "IdleDisplaySleep") == 0)
         return gpu_tweaks_set_idle_display_sleep(value);
     if (strcmp(n, "JobIdleFix") == 0)

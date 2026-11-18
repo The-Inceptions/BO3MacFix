@@ -19,6 +19,9 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch);
 
 // fps: the frame rate limit while on battery, 30 to 240 (0 = off)
 void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch);
+// whether the Mac runs on battery, as BatteryFPS sees it (checked every 5 s from the first call; BO3MACFIX_ONBATTERY=1
+// pretends it does), for AAEEngineDefaults' battery choice
+bool gpu_tweaks_on_battery(void);
 // fps: the frame rate limit while macOS's Low Power Mode is on, 30 to 240 (0 = off)
 void gpu_tweaks_low_power_fps_init(int fps, code_patch_fn checked_code_patch);
 

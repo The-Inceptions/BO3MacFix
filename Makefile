@@ -18,6 +18,8 @@ TEST_TARGETS += tests/test_voice_mic
 # notices, and the game's half against a made-up loaded mod (start_mod.c, start_mod_game.c)
 TEST_TARGETS += tests/test_start_mod
 TEST_TARGETS += tests/test_frame_pace
+# AAEEngineDefaults: its rule and the game's half against made-up dvars (aae_engine_defaults.c)
+TEST_TARGETS += tests/test_aae_engine_defaults
 # the plugin's packets and rules for joining a game on the local network, its listener over the loopback (aae_lan.c)
 TEST_TARGETS += tests/test_aae_lan
 # compiled scripts and All-around Enhancement 4's patch scripts (gsc_obj.c)
@@ -161,6 +163,9 @@ FRAMEWORKS += -framework Foundation -weak_framework GameController -weak_framewo
 
 # MetalFX upscaling (metalfx.m), MetalFX is weak-linked because it needs macOS 13
 SOURCES += source/metalfx.m source/gpu_diag.m
+# AAEEngineDefaults: the gun's shadow resolution at the game's own values while All-around Enhancement raises it
+# (aae_engine_defaults.c)
+SOURCES += source/aae_engine_defaults.c
 # FrameStats' detail: the threads' CPU time by name and the frame's phases (thread_stats.c, thread_stats_game.c)
 SOURCES += source/thread_stats.c source/thread_stats_game.c
 
@@ -642,6 +647,11 @@ tests/test_notice_queue: tests/test_notice_queue.c source/notice_queue.c source/
 # which frame rate limit applies to a frame and the pause menu's state (frame_limit.c), plain C as well
 tests/test_frame_pace: tests/test_frame_pace.c source/frame_pace.c source/frame_pace.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_frame_pace.c source/frame_pace.c
+
+tests/test_aae_engine_defaults: tests/test_aae_engine_defaults.c source/aae_engine_defaults.c \
+		source/aae_engine_defaults.h source/gsc_obj.c source/gsc_obj.h source/offsets.h source/gpu_tweaks.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_aae_engine_defaults.c source/gsc_obj.c
 
 tests/test_frame_limit: tests/test_frame_limit.c source/frame_limit.c source/frame_limit.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_frame_limit.c source/frame_limit.c

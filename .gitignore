@@ -32,6 +32,7 @@ tests/test_display_sleep
 tests/test_battery_saver
 tests/test_voice_mic
 tests/test_frame_pace
+tests/test_aae_engine_defaults
 tests/test_players_cfg
 tests/test_aae_build
 tests/test_notch
