@@ -8,12 +8,18 @@
 // wrong, pieces of other inputs, words of the harness's dictionary). A fault stops the run through the address or
 // undefined behaviour sanitizer, which first lets this write the input that did it to <out>/crash-<hash>.
 //
+// Started by hand, it gets the same as from make fuzz with
+//     env DYLD_INSERT_LIBRARIES=$PWD/tests/quietcrash.dylib ASAN_OPTIONS=abort_on_error=0 \
+//         UBSAN_OPTIONS=abort_on_error=0:halt_on_error=1 tests/fuzz/out/bin/fuzz_<name> ...
+// so that nothing it finds leaves a crash report in ~/Library/Logs/DiagnosticReports.
+//
 // fuzz_<name> [-runs=N] [-seconds=S] [-max_len=N] [-seed=N] [-out=DIR] [CORPUS_DIR | FILE]...
 //   With files given and neither -runs nor -seconds, each file is run once (to repeat a crash). Otherwise the
 //   directories' files (and the harness's own seeds) start the corpus and it runs until N inputs or S seconds; new
 //   corpus entries are written to <out>/corpus.
 #include <dirent.h>
 #include <errno.h>
+#include <execinfo.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,9 +31,13 @@
 #include <unistd.h>
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
-// a harness may give seeds and words of its format; weak, so that one without them links too
-__attribute__((weak)) void fuzz_seeds(void (*add)(const void *data, size_t size));
-__attribute__((weak)) void fuzz_dictionary(void (*add)(const void *data, size_t size));
+// a harness may give seeds and words of its format: its own definitions take the place of these empty ones
+__attribute__((weak)) void fuzz_seeds(void (*add)(const void *data, size_t size)) {
+    (void)add;
+}
+__attribute__((weak)) void fuzz_dictionary(void (*add)(const void *data, size_t size)) {
+    (void)add;
+}
 
 // ---- coverage
 
@@ -156,6 +166,41 @@ static void save_current(const char *prefix) {
 void __sanitizer_set_death_callback(void (*callback)(void));
 static void on_death(void) {
     save_current("crash-");
+}
+
+// A fatal signal (a wild pointer, or a harness's abort() for a broken promise) doesn't pass the sanitizers' death
+// callback: the input is saved here, with the stack, and the signal goes on to the handler that was there before
+// (tests/quietcrash.dylib's, which make fuzz puts in: it ends the run with status 128 + the signal and no crash report)
+// or, without one, the run ends that way here. macOS writes a crash report for a fatal signal only when nothing
+// handles it. This handler takes the place of the address sanitizer's own for those signals (quietcrash's would take
+// it otherwise): a find by a wild pointer gives the stack's raw frames here, from backtrace_symbols_fd, and not the
+// sanitizer's "SEGV on unknown address" report; the input is saved all the same (a harness built with libFuzzer
+// instead of this engine gets the sanitizer's report). Faults the sanitizers find themselves (a read past a buffer,
+// undefined behaviour) are reported by them as usual.
+static struct sigaction before_ours[32];
+static void on_fatal_signal(int signal_number) {
+    void *frames[64];
+    int count = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, count, STDERR_FILENO);
+    save_current("crash-");
+    current = NULL;
+    const struct sigaction *was = &before_ours[signal_number];
+    if (!(was->sa_flags & SA_SIGINFO) && was->sa_handler != SIG_DFL && was->sa_handler != SIG_IGN)
+        was->sa_handler(signal_number);
+    _exit(128 + signal_number);
+}
+static void catch_fatal_signals(void) {
+    static char stack[65536]; // its own, so that a stack overflow is caught too
+    stack_t alternate = { .ss_sp = stack, .ss_size = sizeof(stack), .ss_flags = 0 };
+    sigaltstack(&alternate, NULL);
+    static const int fatal[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP, SIGSYS };
+    struct sigaction ours;
+    memset(&ours, 0, sizeof(ours));
+    ours.sa_handler = on_fatal_signal;
+    ours.sa_flags = SA_ONSTACK;
+    sigemptyset(&ours.sa_mask);
+    for (size_t i = 0; i < sizeof(fatal) / sizeof(fatal[0]); i++)
+        sigaction(fatal[i], &ours, &before_ours[fatal[i]]);
 }
 static unsigned timeout_seconds = 10;
 static void on_alarm(int signal) {
@@ -377,6 +422,7 @@ int main(int argc, char **argv) {
         }
     }
     __sanitizer_set_death_callback(on_death);
+    catch_fatal_signals();
     signal(SIGALRM, on_alarm);
 
     // the inputs given, each run once
@@ -396,10 +442,8 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    if (fuzz_dictionary != NULL)
-        fuzz_dictionary(add_word);
-    if (fuzz_seeds != NULL)
-        fuzz_seeds(add_seed);
+    fuzz_dictionary(add_word);
+    fuzz_seeds(add_seed);
     for (int i = 0; i < file_count; i++)
         if (is_directory(files[i]))
             load_directory(files[i]);

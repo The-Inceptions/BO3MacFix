@@ -647,9 +647,19 @@ source/checkpoint_lua.h: source/checkpoint.lua
 
 clean:
 	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
-	rm -rf -- tests/san tests/fuzz/out
+	rm -rf -- tests/san tests/fuzz/out tests/quietcrash.dylib
 
 .PHONY: all clean test sanitize fuzz fuzz-build
+
+# A test program that may crash is started with tests/quietcrash.dylib (a fatal signal then ends it with exit status
+# 128 + the signal, and macOS writes no crash report into ~/Library/Logs/DiagnosticReports) and with the sanitizers
+# exiting instead of aborting. The variables have to be set by env right before the program: macOS drops DYLD_
+# variables when it starts one of its own protected programs (sh, nice, env), and so for everything those start.
+QUIETCRASH = tests/quietcrash.dylib
+QUIET_RUN = env DYLD_INSERT_LIBRARIES=$(CURDIR)/$(QUIETCRASH) ASAN_OPTIONS=abort_on_error=0 \
+	UBSAN_OPTIONS=abort_on_error=0:halt_on_error=1
+$(QUIETCRASH): tests/quietcrash.c
+	$(CLANG) -arch arm64 -arch x86_64 -dynamiclib -O1 -o $@ tests/quietcrash.c
 
 # The fuzzers (tests/fuzz, see fuzz_engine.c): each harness feeds what another machine, a mod or a file can give to
 # the parsing functions, under the address and undefined behaviour sanitizers. make fuzz runs each for FUZZ_SECONDS
@@ -661,10 +671,10 @@ FUZZ_SECONDS ?= 60
 FUZZ_FLAGS = -std=gnu11 -O1 -g -fno-omit-frame-pointer -Wall -Wextra -Wno-unused-function -fsanitize=address,undefined \
 	-fno-sanitize-recover=all
 fuzz-build: $(FUZZERS:%=tests/fuzz/out/bin/fuzz_%)
-fuzz: fuzz-build
+fuzz: fuzz-build $(QUIETCRASH)
 	for name in $(FUZZERS); do \
 		mkdir -p tests/fuzz/out/$$name/corpus; \
-		nice -n 10 ./tests/fuzz/out/bin/fuzz_$$name -seconds=$(FUZZ_SECONDS) -out=tests/fuzz/out/$$name \
+		nice -n 10 $(QUIET_RUN) ./tests/fuzz/out/bin/fuzz_$$name -seconds=$(FUZZ_SECONDS) -out=tests/fuzz/out/$$name \
 			tests/fuzz/out/$$name/corpus || exit 1; \
 	done
 tests/fuzz/out/bin/fuzz_engine.o: tests/fuzz/fuzz_engine.c
@@ -685,8 +695,9 @@ FUZZ_LIBS_aae_build = -lz
 # SANITIZE_ARCHS=arm64 for one, SANITIZE_ONLY=<regular expression> for some tests); slow, so not part of make test.
 # SANITIZE_ONLY goes to the script as it was given, a "$" in it too (make would read "$|" and the like as its own
 # variables); only a single quote can't be in it.
-sanitize:
+sanitize: $(QUIETCRASH)
 	SANITIZE_ONLY='$(value SANITIZE_ONLY)' python3 tests/sanitize.py $(TEST_TARGETS)
+
 
 # FrameStats' detail: the threads' and the phases' lines (thread_stats.c), and this process's own threads read by name
 # with their CPU time (thread_stats_game.c)
