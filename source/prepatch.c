@@ -161,6 +161,7 @@ static const hook_def_t hook_defs[] = {
     { ADDR_PM_UpdateSprint_SlideStateCmp, 7, 0, { 0x83, 0xBB, 0x8C, 0x00, 0x00, 0x00, 0x03 } }, // cmp dword [rbx+0x8c], 3
     { ADDR_PM_WalkMove_StrafeScaled, 5, 0, { 0xF3, 0x0F, 0x59, 0x45, 0xD4 } },        // mulss xmm0, [rbp-0x2c]
     { ADDR_LUI_Startup, Push_R15 },
+    { ADDR_LUI_ReportError, Push_R15 }, // FixUIErrorOnRestart (t7o_uierror.c)
     { ADDR_Live_SystemInfo, Push_R15 },
     { ADDR_LanJoin_Connect, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53, 0x50 } }, // ...; push rbx; push rax
     { ADDR_LanJoin_Join, Push_R15 },

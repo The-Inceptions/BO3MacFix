@@ -75,6 +75,8 @@ TEST_TARGETS += tests/test_aae_move_jump
 TEST_TARGETS += tests/test_aae_clientfx
 # T7Overcharged's weapon attachment and local client guards (t7o_guards.c)
 TEST_TARGETS += tests/test_t7o_guards
+# T7Overcharged's FixUIErrorOnRestart: which UI errors are kept off the screen, and the stack they leave (t7o_uierror.c)
+TEST_TARGETS += tests/test_t7o_uierror
 # the pause for everybody in a co-op game: the plugin's packets and rules, machines playing together (aae_coop_pause.c)
 TEST_TARGETS += tests/test_aae_coop_pause
 # FrameStats' detail: the threads' line and the phases' line, and the process's own threads read by name
@@ -241,6 +243,8 @@ SOURCES += source/aae_skeleton.c
 SOURCES += source/t7o_subtitle.c
 # T7OCrashGuards: two of T7Overcharged's guards against crashes of the game itself (t7o_guards.c)
 SOURCES += source/t7o_guards.c
+# FixUIErrorOnRestart: a UI model subscriber's errors counted instead of shown, as T7Overcharged does (t7o_uierror.c)
+SOURCES += source/t7o_uierror.c
 # ClientFieldGuard: a script error instead of a crash for a client field nobody registered (clientfield_guard.c)
 SOURCES += source/clientfield_guard.c
 # MissingMapGuard: a lobby start the game's preload would refuse is refused before the teardown (missing_map_guard.c)
@@ -485,6 +489,12 @@ tests/test_t7o_guards: tests/test_t7o_guards.c source/t7o_guards.c source/t7o_gu
 		source/offsets.h source/dobby.h source/prepatch.h source/t7overcharged.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_t7o_guards.c
+
+# t7o_uierror.c: the LUI error handler's hook against a made-up Lua stack and handler
+tests/test_t7o_uierror: tests/test_t7o_uierror.c source/t7o_uierror.c source/t7o_uierror.h source/havok.h \
+		source/offsets.h source/dobby.h source/t7overcharged.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_t7o_uierror.c
 
 # aae_linkcam.c: the plugin's rules for entities linked to the camera, and its hooks against a made-up game
 tests/test_aae_linkcam: tests/test_aae_linkcam.c tests/linkcam_cases.h tests/linkcam_side.h source/aae_linkcam.c \

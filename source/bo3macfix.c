@@ -54,6 +54,7 @@
 #include "lua_unref.h"
 #include "mod_unload_fix.h"
 #include "t7o_guards.h"
+#include "t7o_uierror.h"
 #include "pmem_spill.h"
 #include "aae_clientfx.h"
 #include "bo3macnative.h"
@@ -1202,6 +1203,9 @@ __attribute__((constructor)) static void dylib_main() {
     // two of T7Overcharged's guards against crashes of the game itself, once the mod has loaded it, as on Windows
     // (T7OCrashGuards, on by default), see t7o_guards.c
     t7o_guards_init(game_base_address, read_int_setting_or_env("T7OCrashGuards", 1));
+    // the errors a UI model's subscribers throw after the mod's RESTART LEVEL are counted in log.txt instead of shown,
+    // once the mod has loaded T7Overcharged, as on Windows (FixUIErrorOnRestart, on by default), see t7o_uierror.c
+    t7o_uierror_init(game_base_address, read_int_setting_or_env("FixUIErrorOnRestart", 1));
     // 2 GB more address space for loaded files when the game's 2 GB are full, as All-around Enhancement's Windows
     // plugin gives it (MoreMapMemory, on by default), see pmem_spill.c
     pmem_spill_init(game_base_address, read_int_setting_or_env("MoreMapMemory", 1));

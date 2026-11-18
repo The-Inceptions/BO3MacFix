@@ -579,6 +579,9 @@
 #define ADDR_hks_obj_tolstring 0x146d28b // func - const char * (lua_State *, HksObject *, size_t *length): a number becomes its text in place, NULL for anything else but a string (Windows 0x141d3ec30)
 #define ADDR_hksi_lua_createtable 0x14467c8 // func - void (lua_State *, int narr, int nrec), pushes a new table (Windows 0x141d46bf0)
 #define ADDR_hksi_luaL_ref 0x1445261 // func - int (lua_State *, int table): pops the value, its reference or -1 for nil; 0x101474880 jumps to it (Windows 0x141d40710)
+// FixUIErrorOnRestart (t7o_uierror.c, wip/night/impl-smallfix.md)
+#define ADDR_LUI_ReportError 0x1528b3c // func - void (const char *context, lua_State *): reads the Lua error on top of the stack (hks_obj_tolstring), pops it, and with ui_error_report on shows "UI Error <djb2 of the text % 100000>" through Com_Error. 12 callers; the Mac's never reads the context, and two (0x101529656, 0x101529761) leave rdi as it was. Windows 0x141f05620
+#define ADDR_LUI_NotifySubscriptions_ReportReturn 0x1036875 // where the model-subscription notifier's call of it returns: 0x101036750 (Windows 0x14200d1d0, "Failed to notify model subscription") calls each Lua function subscribed to a changed UI model with lua_pcall(L, 1, 0, 0) and reports a failure at 0x101036870 unless ui_execdemo is on; T7Overcharged's FixUIErrorOnRestart jumps over that (the je at 0x101036851, Windows 0x14200d33a)
 // -- client fields (clientfield_guard.c). The lookup, and the places that read through what it returns without
 // checking it, each given as the instruction right after its call (where the lookup returns to). Windows places are
 // those of the build T7Overcharged's names fit (BlackOps3.exe CheckSum 0x6531394); see wip/night/impl-clientfield.md
