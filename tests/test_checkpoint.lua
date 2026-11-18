@@ -31,8 +31,11 @@ Engine = {
 }
 CoD = { GetGameRulePostFix = function() return "_Default" end }
 local tick
-local root = { addElement = function() end }
-LUI = { roots = { UIRootFull = root }, UITimer = { newElementTimer = function(ms, once, fn) tick = fn return {} end } }
+-- the game's elements are userdata, not tables (tests/lui_element.lua)
+local lui_element = dofile("tests/lui_element.lua")
+local root = lui_element{ addElement = function() end }
+LUI = { roots = { UIRootFull = root },
+    UITimer = { newElementTimer = function(ms, once, fn) tick = fn return lui_element{} end } }
 
 -- ---- a made-up checkpoint.c and zm_inventory.c
 local store, state, weapons, notices, saves, plans, allowed, cleared_with = {}, 0, nil, {}, {}, {}, nil, nil
@@ -262,7 +265,7 @@ check(state == 2, "a resumed game, its guns not back yet")
 local before = #saves
 -- the game's own loadout is the starting pistol's then; this older save (no Guns, no PerkList) must not take it
 loadout = "Guns=pistol_m1911_zm:0:0:\nGunInHand=pistol_m1911_zm\nPerkList="
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 loadout = nil
 check(#saves == before + 1 and saves[#saves].Weapons == "ray_gun_upgraded,pistol_burst" and
     saves[#saves].Equipment == "frag_grenade,knife", "quitting keeps the saved guns: " .. tostring(saves[#saves].Weapons))
@@ -290,7 +293,7 @@ polls(30)
 check(not string.find(table.concat(notices, "\n"), "Guns back", 1, true), "no Guns back while the game holds them: " ..
     tostring(notices[#notices]))
 local held_saves = #saves
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == held_saves + 1 and saves[#saves].Weapons == "ray_gun_upgraded,pistol_burst",
     "a save meanwhile keeps the saved guns: " .. tostring(saves[#saves].Weapons))
 -- unpaused: the game runs them
@@ -320,7 +323,7 @@ check(allowed == "", "and not let through any more: " .. tostring(allowed))
 check(string.find(table.concat(logs, "\n"), "gave up on the saved guns: 2 of the give and take commands", 1, true) ~= nil,
     "logged: " .. tostring(logs[#logs]))
 local gave_up_saves = #saves
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == gave_up_saves + 1 and saves[#saves].Weapons == "pistol_m1911",
     "a save then has the guns held: " .. tostring(saves[#saves].Weapons))
 leave_match()
@@ -344,7 +347,7 @@ resume_row.run()
 enter_match("zm_theater")
 weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
 execs, notices, logs, held_commands = {}, {}, {}, true
-local pause_menu = { getParent = function() return root end }
+local pause_menu = lui_element{ getParent = function() return root end }
 BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
 polls(13 + 1200)
 check(state == 3 and allowed == "take pistol_m1911\ngive ray_gun_upgraded\n" and
@@ -363,10 +366,10 @@ resume_row.run()
 enter_match("zm_theater")
 weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
 execs, notices, logs, held_commands = {}, {}, {}, true
-pause_menu = { getParent = function() return root end }
+pause_menu = lui_element{ getParent = function() return root end }
 BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
 polls(13)
-local options = { getParent = function() return root end }
+local options = lui_element{ getParent = function() return root end }
 BO3MacFix.CheckpointMenuCreated("StartMenu_Options", options)
 pause_menu.getParent = function() return nil end
 polls(1200)
@@ -374,7 +377,7 @@ check(state == 3 and allowed == "take pistol_m1911\ngive ray_gun_upgraded\n" and
     not string.find(table.concat(notices, "\n"), "not given back", 1, true), "kept for ten minutes in Options")
 -- back to the pause menu, a new one, then closed: the game runs them
 options.getParent = function() return nil end
-pause_menu = { getParent = function() return root end }
+pause_menu = lui_element{ getParent = function() return root end }
 BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
 polls(600)
 check(not string.find(table.concat(notices, "\n"), "not given back", 1, true), "and five more in the pause menu")
@@ -392,14 +395,14 @@ resume_row.run()
 enter_match("zm_theater")
 weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
 execs, notices, logs, held_commands = {}, {}, {}, true
-pause_menu = { getParent = function() return root end }
+pause_menu = lui_element{ getParent = function() return root end }
 BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
 polls(2)
 pause_menu.getParent = function() return nil end
 polls(2)
-BO3MacFix.CheckpointMenuCreated("SomeHudMenu", { getParent = function() return root end })
+BO3MacFix.CheckpointMenuCreated("SomeHudMenu", lui_element{ getParent = function() return root end })
 polls(9)
-BO3MacFix.CheckpointMenuCreated("SomeHudMenu", { getParent = function() return root end })
+BO3MacFix.CheckpointMenuCreated("SomeHudMenu", lui_element{ getParent = function() return root end })
 polls(600)
 check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true) ~= nil and allowed == "",
     "a menu made unpaused doesn't stop the five minutes: " .. tostring(notices[#notices]))
@@ -430,22 +433,22 @@ check(state == 0, "undone once it can be")
 enter_match("zm_theater")
 models["controller0.gameScore.roundsPlayed"] = 16
 local count = #saves
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == count + 1 and saves[#saves].Round == "15", "quitting saves")
-BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", lui_element{})
 check(#saves == count + 1, "other menus don't")
 -- but not over a deeper game this one didn't resume
 models["controller0.gameScore.roundsPlayed"] = 5
-BO3MacFix.CheckpointMenuCreated("EndGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("EndGamePopup", lui_element{})
 check(#saves == count + 1 and store.Round == "15", "a round 15 save stays")
 -- one round behind it too: roundsPlayed 15 is the HUD's round 14
 models["controller0.gameScore.roundsPlayed"] = 15
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == count + 1 and store.Round == "15", "a round 15 save stays when quitting at round 14: " ..
     tostring(store.Round))
 -- the same round replaces it
 models["controller0.gameScore.roundsPlayed"] = 16
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == count + 2 and store.Round == "15", "quitting at the same round saves")
 -- the quit and end-game popups are system overlays (CoD.OverlayUtility.CreateOverlay), not menus of their own name:
 -- the End Game popup of AAE's start menu didn't save live while only menus were watched
@@ -454,7 +457,7 @@ CoD.OverlayUtility = { CreateOverlay = function(controller, menu, name, extra)
     table.insert(overlays_made, name .. ":" .. tostring(extra))
     return { overlay = name }
 end }
-BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", lui_element{})
 local before_overlays = #saves
 local overlay = CoD.OverlayUtility.CreateOverlay(0, {}, "EndGamePopup", "x")
 check(#saves == before_overlays + 1 and overlay ~= nil and overlay.overlay == "EndGamePopup" and
@@ -464,17 +467,17 @@ check(#saves == before_overlays + 1 and #overlays_made == 2, "other overlays don
 -- something that wraps ours, then ours again around that: still one save for one overlay
 local inner = CoD.OverlayUtility.CreateOverlay
 CoD.OverlayUtility.CreateOverlay = function(...) return inner(...) end
-BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", lui_element{})
 CoD.OverlayUtility.CreateOverlay(0, {}, "QuitPCGamePopup")
 check(#saves == before_overlays + 2 and #overlays_made == 3, "one save through two wrappers: " ..
     (#saves - before_overlays))
 -- an overlay that can't be made still fails (after saving), and the next one saves again
 CoD.OverlayUtility = { CreateOverlay = function() error("no such overlay") end }
-BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", lui_element{})
 check(not pcall(CoD.OverlayUtility.CreateOverlay, 0, {}, "QuitGamePopup") and #saves == before_overlays + 3,
     "a failing overlay still fails")
 CoD.OverlayUtility = { CreateOverlay = function(controller, menu, name) return name end }
-BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", lui_element{})
 check(CoD.OverlayUtility.CreateOverlay(0, {}, "QuitGamePopup") == "QuitGamePopup" and #saves == before_overlays + 4,
     "and the next one saves again")
 CoD.OverlayUtility = nil
@@ -490,9 +493,9 @@ check(execs[1] == "take pistol_m1911" or execs[1] == "give ray_gun_upgraded", "t
 local logged = table.concat(logs, "\n")
 check(string.find(logged, "checkpoint test: saved true", 1, true) ~= nil, "the test save runs")
 check(string.find(logged, "checkpoint test: this match has round 12", 1, true) ~= nil, "the test report runs")
-BO3MacFix.CheckpointMenuCreated("StartMenu_Main", {})
-check(string.find(table.concat(logs, "\n"), "checkpoint test: menu StartMenu_Main", 1, true) ~= nil,
-    "the report switch logs the menus a match makes")
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", lui_element{})
+check(string.find(table.concat(logs, "\n"), "checkpoint test: menu StartMenu_Main (userdata)", 1, true) ~= nil,
+    "the report switch logs the menus a match makes, and what the game hands over as one")
 
 -- ---- the full loadout: each gun with its attachments, options and ammo type, and the perks
 leave_match()
@@ -579,7 +582,7 @@ check(notices[#notices] == "Saved loadout not restored: not for the local player
 local live = loadout
 loadout = "Guns=pistol_standard_zm:0:0:\nGunInHand=pistol_standard_zm\nPerkList="
 before = #saves
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 loadout = live
 check(#saves == before + 1 and saves[#saves].Guns == LOADOUT_GUNS, "a save after keeps the saved guns: " ..
     tostring(saves[#saves].Guns))
@@ -636,7 +639,7 @@ models["controller0.hudItems.perks.doubletap2"] = 0
 polls(1)
 check(state == 2, "resumed, not restored")
 before = #saves
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == before + 1 and saves[#saves].Guns == LOADOUT_GUNS and
     saves[#saves].PerkList == "specialty_armorvest,specialty_doubletap2" and
     saves[#saves].Perks == "juggernaut,quick_revive,doubletap2", "the saved loadout kept: " .. tostring(saves[#saves].Guns))
@@ -654,12 +657,12 @@ check(state == 1 and store.AppliedRound == "38", "a round 38 resume set up")
 enter_match("zm_cosmodrome")
 models["controller0.gameScore.roundsPlayed"] = nil -- the intro: no HUD round yet
 before = #saves
-BO3MacFix.CheckpointMenuCreated("EndGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("EndGamePopup", lui_element{})
 check(#saves == before and store.Round == "38", "no save during the intro: " .. tostring(store.Round))
 models["controller0.gameScore.roundsPlayed"] = 2 -- the HUD up at round 1 for a moment, the resume in use
 polls(1)
 check(state == 2, "in use")
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == before and store.Round == "38", "no round 1 over round 38: " .. tostring(store.Round))
 message = nil
 save_row.run()
@@ -667,10 +670,10 @@ check(#saves == before and message ~= nil and string.find(message, "saved round 
     "the page's row says why: " .. tostring(message))
 -- at its round: saved as before (the saved loadout kept while its restore is pending)
 models["controller0.gameScore.roundsPlayed"] = 39
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == before + 1 and store.Round == "38", "at round 38 a quit saves: " .. tostring(store.Round))
 models["controller0.gameScore.roundsPlayed"] = 41
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == before + 2 and store.Round == "40", "and deeper: " .. tostring(store.Round))
 leave_match()
 polls(1)

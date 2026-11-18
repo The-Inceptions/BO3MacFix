@@ -35,9 +35,11 @@ Enum = { LobbyType = { LOBBY_TYPE_GAME = 2 } }
 CoD = { GetGameRulePostFix = function() return "_Default" end }
 local tick -- the poll, checkpoint.lua's first timer; the ones after it (the Discord invite's waits) are kept in timers
 local timers = {}
-local root = { addElement = function() end }
+-- the game's elements are userdata, not tables (tests/lui_element.lua)
+local element = dofile("tests/lui_element.lua")
+local root = element{ addElement = function() end }
 LUI = { roots = { UIRootFull = root }, UITimer = { newElementTimer = function(ms, once, fn)
-    local timer = { ms = ms, once = once, fn = fn, close = function(self) self.closed = true end }
+    local timer = element{ ms = ms, once = once, fn = fn, close = function(self) self.closed = true end }
     if tick == nil then tick = fn else table.insert(timers, timer) end
     return timer
 end } }
@@ -205,12 +207,12 @@ saves[#saves] = nil -- (the counts below are without it)
 -- ---- L3 + R3: only in the pause menu
 store = {}
 local menu_parent = nil
-local pause_menu = { getParent = function() return menu_parent end }
+local pause_menu = element{ getParent = function() return menu_parent end }
 BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
 notices = {}
 last = press("pad")
 check(#saves == 8 and #notices == 0, "playing (the pause menu closed): nothing, not even a notice")
-menu_parent = { getParent = function() return root end }
+menu_parent = element{ getParent = function() return root end }
 last = press("pad")
 check(#saves == 9 and last == "Game saved: round 3, 2,340 points", "in the pause menu: saved")
 store = { Map = "zm_der_riese", Round = "38", Points = "105660", Saved = "1000" }
@@ -221,11 +223,11 @@ menu_parent = nil
 last = press("pad")
 check(#saves == 9, "the pause menu closed: nothing")
 -- another menu made doesn't count as the pause menu
-BO3MacFix.CheckpointMenuCreated("SomeOtherMenu", { getParent = function() return root end })
+BO3MacFix.CheckpointMenuCreated("SomeOtherMenu", element{ getParent = function() return root end })
 check(#saves == 9, "still nothing")
 
 -- only the input that asked confirms: L3 + R3 doesn't answer F5's question, nor F5 the controller's
-menu_parent = { getParent = function() return root end }
+menu_parent = element{ getParent = function() return root end }
 clock_now = 400
 last = press()
 check(#saves == 9 and last == "Saved game is round 38 on Der Riese: press F5 again to replace it",
@@ -253,7 +255,7 @@ end
 CoD.OverlayUtility = { CreateOverlay = game_create }
 local added = {} -- what the pause menu was given: the invite's wait
 pause_menu.addElement = function(self, element) table.insert(added, element) end
-menu_parent = { getParent = function() return root end }
+menu_parent = element{ getParent = function() return root end }
 BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu) -- the wrapper goes in here
 local create = CoD.OverlayUtility.CreateOverlay
 check(create ~= game_create, "CreateOverlay is wrapped")
@@ -267,8 +269,7 @@ local function fire()
     return waiting
 end
 local function closed_line()
-    return string.find(table.concat(logs, "\n"), "Discord invite left closed: L3 + R3 were held for the quick save",
-        1, true) ~= nil
+    return string.find(table.concat(logs, "\n"), "left closed: L3 + R3 were held for the quick save", 1, true) ~= nil
 end
 
 -- with no controller that can quick save (nil), it opens at once, as AAE opens it
@@ -285,7 +286,7 @@ check(timers[1].ms == 200 and timers[1].once == true, "for 200 ms, once: " .. to
 fire()
 check(#made == 1 and made[1].name == "DiscordInvite" and made[1].menu == pause_menu and made[1].n == 2 and
     made[1][1] == 0 and made[1][2] == nil and not closed_line(), "R3 alone: it opens after the wait")
-check(timers[1].closed == true, "and the wait's timer is closed")
+check(timers[1].closed == nil, "the wait's one-shot timer is left to LUI to close")
 fire()
 check(#made == 1, "a timer that fires again opens nothing more")
 -- L3 + R3 down together since just before R3: it stays closed
@@ -331,7 +332,7 @@ r3()
 menu_parent = nil
 fire()
 check(#made == 0, "the pause menu closed during the wait: nothing")
-menu_parent = { getParent = function() return root end }
+menu_parent = element{ getParent = function() return root end }
 r3()
 check(#timers == 1, "the next R3 waits again")
 fire()
@@ -339,15 +340,15 @@ check(#made == 1, "and opens")
 -- as LUI does it, the wait's timer closes with the menu and never fires; the next pause menu's R3 still waits and opens
 r3()
 menu_parent = nil
-local next_parent = { getParent = function() return root end }
-local next_menu = { getParent = function() return next_parent end, addElement = function(self, element) end }
+local next_parent = element{ getParent = function() return root end }
+local next_menu = element{ getParent = function() return next_parent end, addElement = function(self, element) end }
 BO3MacFix.CheckpointMenuCreated("StartMenu_Main", next_menu)
 r3(next_menu)
 check(#timers == 1 and #made == 0, "a new pause menu after one closed during a wait: its R3 waits")
 fire()
 check(#made == 1 and made[1].menu == next_menu, "and opens over it")
 BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
-menu_parent = { getParent = function() return root end }
+menu_parent = element{ getParent = function() return root end }
 -- the chord's answer failing at the end of the wait: it opens, as R3 alone
 r3()
 chord_fails = true
@@ -365,13 +366,41 @@ check(#made == 1 and made[1].name == "QuitPCGamePopup" and #timers == 0, "anothe
 menu_parent = nil
 r3()
 check(#made == 1 and #timers == 0, "the pause menu closed: at once")
-menu_parent = { getParent = function() return root end }
+menu_parent = element{ getParent = function() return root end }
 in_game = false
 r3()
 check(#made == 1 and #timers == 0, "outside a match (the lobby's R3): at once")
 in_game = true
-r3({ getParent = function() return root end })
+r3(element{ getParent = function() return root end })
 check(#made == 1 and #timers == 0, "a menu that takes no elements: at once")
+-- each wait's end is logged once, numbered in this UI state, one more for each wait
+made, timers, added, logs = {}, {}, {}, {}
+in_game, menu_parent, chord_answer = true, element{ getParent = function() return root end }, 1e9
+clock_now = 600
+create(0, pause_menu, "DiscordInvite", 0, nil)
+clock_now = 600.25
+fire()
+local number = tonumber(string.match(logs[1] or "",
+    "^checkpoint: AAE's Discord invite %(R3 #(%d+)%) opens, 250 ms after R3$"))
+check(#logs == 1 and number ~= nil and number > 1,
+    "R3 alone: one line, with its number and the wait: " .. tostring(logs[1]))
+logs = {}
+create(0, pause_menu, "DiscordInvite", 0, nil)
+chord_answer = 0.1
+fire()
+check(#logs == 1 and logs[1] == "checkpoint: AAE's Discord invite (R3 #" .. tostring((number or 0) + 1) ..
+    ") left closed: L3 + R3 were held for the quick save", "L3 + R3: one line, the next number: " .. tostring(logs[1]))
+chord_answer = 1e9
+-- a menu that refuses the timer (its method fails): the invite at once, as before, and the next R3 still waits
+made, timers = {}, {}
+local stubborn = element{ getParent = function() return root end,
+    addElement = function() error("no elements here") end }
+create(0, stubborn, "DiscordInvite", 0, nil)
+check(#made == 1 and made[1].menu == stubborn, "a menu that refuses the timer: at once")
+create(0, pause_menu, "DiscordInvite", 0, nil)
+check(#made == 1 and #timers == 2, "and the next R3 waits again")
+fire()
+check(#made == 2, "and opens")
 -- an overlay with more arguments gets them all back after the wait
 made, timers, added = {}, {}, {}
 create(0, pause_menu, "DiscordInvite", 1, nil, "three", nil)

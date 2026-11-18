@@ -38,8 +38,10 @@ Engine = {
 Enum = { LobbyType = { LOBBY_TYPE_GAME = 1 } }
 CoD = { GetGameRulePostFix = function() return "_Default" end }
 local tick
-LUI = { roots = { UIRootFull = { addElement = function() end } },
-    UITimer = { newElementTimer = function(ms, once, fn) tick = fn return {} end } }
+-- the game's elements are userdata, not tables (tests/lui_element.lua)
+local lui_element = dofile("tests/lui_element.lua")
+LUI = { roots = { UIRootFull = lui_element{ addElement = function() end } },
+    UITimer = { newElementTimer = function(ms, once, fn) tick = fn return lui_element{} end } }
 
 -- ---- a made-up C side
 local store, state, weapons, weapon_reads, posts, saves, deleted, cleared = {}, 0, nil, 0, {}, {}, 0, 0
@@ -303,10 +305,10 @@ delete_fails = false
 enter_match("zm_theater", 14)
 store = { Round = "15", Points = "1000", Map = "zm_theater" }
 local count = #saves
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == count and store.Round == "15", "round 14 doesn't replace a round 15 save")
 round(15)
-BO3MacFix.CheckpointMenuCreated("QuitGamePopup", {})
+BO3MacFix.CheckpointMenuCreated("QuitGamePopup", lui_element{})
 check(#saves == count + 1 and saves[#saves].Round == "15", "round 15 does")
 leave_match()
 

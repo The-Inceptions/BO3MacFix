@@ -31,6 +31,8 @@ local function engine_unregister(menu, name)
 end
 
 -- a root with an element on it, a menu or not
+-- the game's elements are userdata, not tables (tests/lui_element.lua)
+local lui_element = dofile("tests/lui_element.lua")
 local function element(menu_name)
     local e = { menuName = menu_name, children = {} }
     function e:getFirstChild() return self.children[1] end
@@ -44,7 +46,7 @@ local function element(menu_name)
         self.children[#self.children + 1] = child
         child.parent = self
     end
-    return e
+    return lui_element(e)
 end
 
 -- CoD.Menu as ui/t6/codmenu.lua makes and closes menus: NewFromState and close call the two globals if they're there

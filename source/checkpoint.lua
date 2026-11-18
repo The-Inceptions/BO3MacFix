@@ -21,11 +21,12 @@
 -- first (a PerkList line). Then the gun in hand after a restore made during a map's intro (zm_inventory_switch_poll).
 -- Then the quick save's request (quick_save.m: the QuickSave key, or L3 + R3 held in the pause menu) and the saved
 -- game's Saved time as text ("3 h ago"). Then ResumeKeepsBank's points, and how long ago a controller last had L3 + R3
--- down together (quick_save.m; nil while no controller can quick save), for AAE's R3 in the pause menu.
+-- down together (quick_save.m; nil while no controller can quick save), for AAE's R3 in the pause menu. Then a test
+-- switch: how many seconds after the first points earned ResumeKeepsBank hands the saved ones over (1.5 normally).
 local save_fn, read_fn, apply_fn, clear_fn, resume_fn, weapons_fn, weapon_commands_fn, allow_cheats_fn, notice_fn,
     save_after, give_test, report_after, autosave_fn, delete_fn, autosave_start, loadout_fn, restore_fn,
     restore_result_fn, test_loadout_fn, perks_test, restore_switch_fn, quick_save_fn, saved_when_fn, points_later_fn,
-    chord_age_fn = ...
+    chord_age_fn, points_wait = ...
 local bo3macfix = BO3MacFix
 if bo3macfix == nil or read_fn == nil then return end
 bo3macfix.SaveCheckpoint, bo3macfix.ReadCheckpoint, bo3macfix.ApplyCheckpoint = save_fn, read_fn, apply_fn
@@ -609,7 +610,9 @@ end
 -- round goes back) is owed them again.
 local POINTS_START_POLLS = 10       -- the match's first 5 s only set the points it starts with,
 local POINTS_START_WAIT_POLLS = 60  -- and so does the time until it shows the resume's, for 30 s at most (an intro)
-local POINTS_AFTER_EARNED_POLLS = 3 -- 1.5 s after the first points earned,
+-- 1.5 s after the first points earned (a check's BO3MACFIX_CHECKPOINT_POINTSWAIT sets it, to hold it into a pause),
+local POINTS_AFTER_EARNED_POLLS = 3
+if tonumber(points_wait) ~= nil then POINTS_AFTER_EARNED_POLLS = math.floor(tonumber(points_wait) * 1000 / POLL_MS) end
 local POINTS_WATCH_POLLS = 120      -- and for up to a minute more while the mod says its watch of the scores is still on
 local POINTS_SENDS = 5              -- the command is sent again if the game didn't run it (paused, or the player down),
 local POINTS_RETRY_POLLS = 10       -- 5 s later, this often at most
@@ -719,11 +722,21 @@ local function points_later_tick(controller, state, played, paused)
         end
         return
     end
-    -- (a paused game holds commands back: none is sent into a pause, so a long one doesn't use the sends up)
-    if paused or match.polls < owed.earned_at + POINTS_AFTER_EARNED_POLLS or
+    if match.polls < owed.earned_at + POINTS_AFTER_EARNED_POLLS or
         (owed.retry_at ~= nil and match.polls < owed.retry_at) then
         return
     end
+    -- a paused game holds commands back: none is sent into a pause, so a long one doesn't use the sends up. Said once
+    -- for each pause the points wait for.
+    if paused then
+        if not owed.pause_said then
+            owed.pause_said = true
+            log("checkpoint: the game is paused: the saved game's other " .. tostring(owed.rest) ..
+                " points wait until it goes on")
+        end
+        return
+    end
+    owed.pause_said = nil
     -- the mod sets level.is_earned_points at the first points earned, which ends its watch. Not set although the
     -- points rose: that rise wasn't points earned (or the mod's bank isn't running at all, which a minute settles)
     if tonumber(call(points_later_fn, 4)) == 0 and match.polls < owed.earned_at + POINTS_WATCH_POLLS then
@@ -811,15 +824,21 @@ local start_menu = nil  -- the pause menu (StartMenu_Main) made last
 -- on the root, and the game stays paused until the last of them has gone
 local pause_held, pause_seen = {}, false
 
+-- an element's parent, nil for none. The game's menus and elements are userdata, not Lua tables: their methods are
+-- reached through their metatable, so nothing here asks what type they are (a "table" test kept the pad's quick save
+-- and the pause from ever being seen); an element that can't be asked has no parent
+local function parent_of(element)
+    local ok, parent = pcall(function() return element:getParent() end)
+    if ok then return parent end
+    return nil
+end
+
 -- whether a menu is on one of LUI's roots, so open
 local function on_root(element)
-    if type(element) ~= "table" or type(element.getParent) ~= "function" or LUI == nil or LUI.roots == nil then
-        return false
-    end
-    local top, parent = element, element:getParent()
+    if element == nil or LUI == nil or LUI.roots == nil then return false end
+    local top, parent = element, parent_of(element)
     while parent ~= nil do
-        top = parent
-        parent = type(parent.getParent) == "function" and parent:getParent() or nil
+        top, parent = parent, parent_of(parent)
     end
     for _, root in pairs(LUI.roots) do
         if root == top then return true end
@@ -1101,10 +1120,13 @@ end
 -- open in a match and a controller can quick save, the invite waits DISCORD_WAIT_MS and opens only if L3 + R3 weren't
 -- down together since just before R3 went down (the wait as the notices' clock measured it: LUI's timers run late
 -- under load). R3 alone opens it as before, that much later; anywhere else, with the quick save off or with no
--- controller, it opens at once. The wait is a timer on the menu it opens over, so it goes when that menu does.
+-- controller, it opens at once. The wait is a one-shot timer on the menu it opens over, so it goes when that menu does;
+-- it isn't closed here (LUI closes a one-shot timer itself, and a flag keeps a second tick from doing anything). Each
+-- wait's end is logged with its number in this UI state ("R3 #N") and the time it took, so a check can count them.
 local DISCORD_WAIT_MS = 200
 local DISCORD_SLACK = 0.1 -- seconds before R3's press that still count: the controller's read just before it
 local discord_menu = nil  -- the menu an invite waits over
+local discord_waits_made = 0
 
 -- the overlay's arguments after its name, kept and given back as they came (any count, nils too), without unpack
 local function pack(...) return { n = select("#", ...), ... } end
@@ -1116,8 +1138,10 @@ end
 
 local function discord_waits(name, menu)
     if name ~= "DiscordInvite" or chord_age_fn == nil or LUI == nil or LUI.UITimer == nil then return false end
-    if type(menu) ~= "table" or type(menu.addElement) ~= "function" then return false end
     if not (in_match() and on_root(start_menu)) then return false end
+    -- the menu takes the wait's timer: asked for its method, as the game's menus aren't tables
+    local found, add = pcall(function() return menu.addElement end)
+    if not found or add == nil then return false end
     local ok, age = pcall(chord_age_fn)
     return ok and type(age) == "number"
 end
@@ -1125,25 +1149,33 @@ end
 local function discord_later(create, controller, menu, name, ...)
     -- a second R3 while one waits: one invite, as the first press would have opened
     if discord_menu ~= nil and on_root(discord_menu) then return end
-    discord_menu = menu
     local extra, decided, timer = pack(...), false, nil
     local asked = tonumber(call(bo3macfix.NoticeClock))
+    discord_waits_made = discord_waits_made + 1
+    local number = discord_waits_made
     timer = LUI.UITimer.newElementTimer(DISCORD_WAIT_MS, true, function()
         if decided then return end
         decided, discord_menu = true, nil
-        if type(timer) == "table" and type(timer.close) == "function" then pcall(timer.close, timer) end
         local waited, now = DISCORD_WAIT_MS / 1000, tonumber(call(bo3macfix.NoticeClock))
         if asked ~= nil and now ~= nil and now > asked then waited = now - asked end
         local ok, age = pcall(chord_age_fn)
         if ok and type(age) == "number" and age <= waited + DISCORD_SLACK then
-            log("checkpoint: AAE's Discord invite left closed: L3 + R3 were held for the quick save")
+            log("checkpoint: AAE's Discord invite (R3 #" .. number .. ") left closed: L3 + R3 were held for the " ..
+                "quick save")
             return
         end
         if not on_root(menu) then return end
+        log("checkpoint: AAE's Discord invite (R3 #" .. number .. ") opens, " ..
+            tostring(math.floor(waited * 1000 + 0.5)) .. " ms after R3")
         local made, err = pcall(make_overlay, create, controller, menu, name, unpacked(extra))
         if not made then log("checkpoint error: " .. tostring(err)) end
     end)
-    menu:addElement(timer)
+    -- a menu that won't take the timer gets the invite at once, as before
+    if not pcall(function() menu:addElement(timer) end) then
+        decided = true
+        return make_overlay(create, controller, menu, name, unpacked(extra))
+    end
+    discord_menu = menu
 end
 
 local function watch_overlays()
@@ -1171,7 +1203,9 @@ function bo3macfix.CheckpointMenuCreated(name, menu, kind)
         pause_held[menu] = true -- the give-up's time doesn't count while it's open, as the game is still paused
     end
     -- the report test switch also logs what a match makes, to tell which menu or overlay a popup is
-    if report_after ~= nil and in_match() then log("checkpoint test: " .. (kind or "menu") .. " " .. tostring(name)) end
+    if report_after ~= nil and in_match() then
+        log("checkpoint test: " .. (kind or "menu") .. " " .. tostring(name) .. " (" .. type(menu) .. ")")
+    end
     -- quitting a match saves it, unless that would replace a game saved at a higher round that this one didn't resume
     if QUIT_POPUPS[name] and in_match() and string.sub(current_map(), 1, 3) == "zm_" then
         local checkpoint = read_checkpoint()

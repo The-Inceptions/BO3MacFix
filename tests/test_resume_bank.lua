@@ -19,7 +19,9 @@ local store, state = {}, 0
 local waiting, given, banned, runs_commands = 0, false, 0, true
 local watch_over = 1 -- the mod's level.is_earned_points: 1 set, 0 not yet, -1 can't be read
 local map_starts, lobby_clients = 0, 1 -- zm_inventory.c's count of map starts; the players in the game's lobby
-local root = { addElement = function() end }
+-- the game's elements are userdata, not tables (tests/lui_element.lua)
+local lui_element = dofile("tests/lui_element.lua")
+local root = lui_element{ addElement = function() end }
 Enum = { LobbyType = { LOBBY_TYPE_GAME = 1 } }
 Engine = {
     GetModelForController = function(c) return model("controller" .. c) end,
@@ -44,7 +46,8 @@ Engine = {
 }
 CoD = { GetGameRulePostFix = function() return "_Default" end }
 local tick
-LUI = { roots = { UIRootFull = root }, UITimer = { newElementTimer = function(ms, once, fn) tick = fn return {} end } }
+LUI = { roots = { UIRootFull = root },
+    UITimer = { newElementTimer = function(ms, once, fn) tick = fn return lui_element{} end } }
 local later_calls = {}
 local fake = {
     Log = function(text) table.insert(logs, text) end,
@@ -325,14 +328,42 @@ leave_match()
 -- ---- the pause menu open: nothing is sent into the pause, and a long pause doesn't use the sends up
 resume(3880, 3380)
 polls(12)
-local pause_menu = { getParent = function() return root end }
+local pause_menu = lui_element{ getParent = function() return root end }
 BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
 score = 560 -- (the last hit before the pause)
 polls(600) -- five minutes paused
 check(count(execs, "bo3macfix_points") == 0 and count(notices, "not given back") == 0, "nothing sent while paused")
+check(count(logs, "the game is paused: the saved game's other 3380 points wait until it goes on") == 1,
+    "the wait for the pause is said, once")
 pause_menu.getParent = function() return nil end
 polls(3)
 check(count(execs, "bo3macfix_points") == 1 and score == 3940, "sent once the pause is over: " .. tostring(score))
+leave_match()
+
+-- ---- paused before the points are due: nothing said until they are; each pause they wait for is said once
+resume(3880, 3380)
+polls(12)
+score = 560
+polls(1) -- the first points earned
+pause_menu = lui_element{ getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+polls(1)
+check(count(logs, "points wait until it goes on") == 0, "not said before the points are due")
+polls(40)
+check(count(logs, "points wait until it goes on") == 1 and count(execs, "bo3macfix_points") == 0, "said when due")
+pause_menu.getParent = function() return nil end
+runs_commands = false -- the game doesn't run it at first (the player down, say): it is sent again later
+polls(1)
+check(count(execs, "bo3macfix_points") == 1, "sent when the pause ends")
+pause_menu = lui_element{ getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+polls(80)
+check(count(logs, "points wait until it goes on") == 2 and count(execs, "bo3macfix_points") == 1,
+    "a second pause, with the sending again due: said again, nothing sent into it")
+runs_commands = true
+pause_menu.getParent = function() return nil end
+polls(12)
+check(count(execs, "bo3macfix_points") == 2 and score == 560 + 3380, "sent again after it: " .. tostring(score))
 leave_match()
 
 -- ---- a game with other players: nothing is handed over
@@ -363,6 +394,21 @@ enter_match(6)
 polls(200)
 check(#later_calls == 0 and count(execs, "bo3macfix_points") == 0, "no resume, nothing asked or given")
 check(save_now().Points == "9000", "and saves are the game's points")
+leave_match()
+
+-- ---- the check's switch BO3MACFIX_CHECKPOINT_POINTSWAIT (the 26th argument): the hand-over so many seconds after the
+-- first points earned instead of 1.5 (a game check holds it into a pause that way)
+chunk(fake.SaveCheckpoint, fake.ReadCheckpoint, nil, fake.ClearCheckpoint, fake.CheckpointResume,
+    fake.CheckpointWeapons, nil, fake.CheckpointAllowCheats, fake.CheckpointNotice, nil, nil, nil, nil, nil, nil, nil,
+    nil, nil, nil, nil, nil, nil, nil, fake.CheckpointPointsLater, nil, "10")
+resume(3880, 3380)
+polls(12)
+score = 560
+polls(1)
+polls(19)
+check(count(execs, "bo3macfix_points") == 0, "the switch: not before 10 s")
+polls(1)
+check(count(execs, "bo3macfix_points") == 1 and score == 560 + 3380, "the switch: at 10 s: " .. tostring(score))
 leave_match()
 
 if failures == 0 then

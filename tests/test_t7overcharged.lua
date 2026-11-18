@@ -94,6 +94,8 @@ local function root(name)
     return r
 end
 -- an element as LUI's: a child knows its parent until it is closed
+-- the game's elements are userdata, not tables (tests/lui_element.lua)
+local lui_element = dofile("tests/lui_element.lua")
 local function element(fields)
     function fields:getParent() return self.parent end
     function fields:close()
@@ -108,7 +110,7 @@ local function element(fields)
         end
         self.parent, self.closed = nil, true
     end
-    return fields
+    return lui_element(fields)
 end
 local pending, enabled, called, clock, playing = {}, 0, {}, 0, false
 local function takeCustomKey() return table.remove(pending, 1) end
@@ -122,8 +124,8 @@ local function freshUI()
             UITimer = { newElementTimer = function(ms, disposable, tick)
                 return element({ ms = ms, disposable = disposable, tick = tick })
             end } }
-    CoD.Menu = { NewFromState = function(name) table.insert(made, name) return { menu = name } end,
-                 NewForUIEditor = function(name) table.insert(made, name) return { menu = name } end }
+    CoD.Menu = { NewFromState = function(name) table.insert(made, name) return lui_element{ menu = name } end,
+                 NewForUIEditor = function(name) table.insert(made, name) return lui_element{ menu = name } end }
     EnableGlobals = function() enabled = enabled + 1 end
     CoD.Mod = { CallCustomFunction = function(name) table.insert(called, name) end }
 end

@@ -10,6 +10,8 @@ local function check(condition, what)
     end
 end
 
+-- the game's elements are userdata, not tables (tests/lui_element.lua)
+local lui_element = dofile("tests/lui_element.lua")
 local function element()
     local e = { children = {}, alpha = 1 }
     function e:setLeftRight(left_anchor, right_anchor, left, right) self.width = right - left end
@@ -34,7 +36,7 @@ local function element()
         self.parent = nil
         self.closed = true
     end
-    return e
+    return lui_element(e)
 end
 
 local full, root0 = element(), element()
