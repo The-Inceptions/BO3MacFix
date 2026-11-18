@@ -1,10 +1,13 @@
 // VoiceMicrophone: the game has Steam record the microphone for its whole session, whether or not anybody can hear the
-// player. 0 keeps the microphone closed.
+// player. With 0 the game never asks Steam to record (Steam's own voice chat, friends or the overlay, can still open
+// the microphone: that is Steam's, not the game's).
 //
 // The engine's voice system (CoD's "winvoice": its init 0x100e1431a registers winvoice_mic_mute, winvoice_mic_reclevel,
 // winvoice_save_voice and winvoice_mic_scaler) starts recording at its first frame (0x100e14b85: when its capture layer
 // and its voice output came up, which on the Mac they always do) and stops only when it shuts down. Nothing gates it,
-// not a dvar, not being offline or alone. Aspyr's capture layer records through Steam: its start (0x100fb7cc6) calls
+// not a dvar, not being offline or alone. That is the engine's design: the Windows game has the same capture code (its
+// start at 0x141d1bec0) and also has Steam record from the first lobby frame. The capture layer records through Steam:
+// its start (0x100fb7cc6) calls
 // SteamUser()->StartVoiceRecording() (ISteamUser019's eighth virtual), and Steam opens the Mac's microphone in its own
 // process for as long as that lasts: macOS shows the microphone in use for the whole game (coreaudiod's
 // "BuiltInMicrophoneDevice" assertion, created for steam_osx about 16 s after the game starts), and Steam's capture runs
@@ -32,7 +35,7 @@ static bool said = false;
 install_hook_name(Voice_StartRecording, int, void *capture) {
     if (!said) {
         said = true;
-        printf("voice: the game asked to record the microphone; it stays closed (VoiceMicrophone 0)\n");
+        printf("voice: the game's voice system asked to record; Steam isn't asked (VoiceMicrophone 0)\n");
     }
     return -1;
 }
@@ -44,9 +47,11 @@ void voice_mic_init(uint64_t game_base_address, int setting) {
     static const uint8_t expected[] = { 0x55, 0x48, 0x89, 0xE5, 0x41, 0x56, 0x53, 0x49, 0x89, 0xFE };
     void *start = (void *)(game_base_address + ADDR_Voice_StartRecording);
     if (memcmp(prepatch_original_code(start, sizeof(expected)), expected, sizeof(expected)) != 0) {
-        printf("unexpected code at %08x, VoiceMicrophone 0 can't keep the microphone closed\n", ADDR_Voice_StartRecording);
+        printf("unexpected code at %08x, VoiceMicrophone 0 can't keep the game from having Steam record\n",
+               ADDR_Voice_StartRecording);
         return;
     }
     install_hook_Voice_StartRecording(start);
-    printf("voice: the microphone stays closed (VoiceMicrophone 0): no voice chat from this Mac, others are still heard\n");
+    printf("voice: the game won't have Steam record the microphone (VoiceMicrophone 0): no voice chat from this Mac, "
+           "others are still heard\n");
 }
