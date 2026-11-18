@@ -41,6 +41,7 @@
 #include "aae_viewmodel.h"
 #include "clientfield_guard.h"
 #include "texture_swap_guard.h"
+#include "asl_refcount.h"
 #include "material_sort_guard.h"
 #include "aae_arc.h"
 #include "aae_vmwidget.h"
@@ -1292,6 +1293,9 @@ __attribute__((constructor)) static void dylib_main() {
     // delayed release instead of dying at once, with or without a mod (TextureSwapGuard, on by default), see
     // texture_swap_guard.c
     texture_swap_guard_init(game_base_address, read_int_setting_or_env("TextureSwapGuard", 1));
+    // an object of Aspyr's Direct3D layer that two threads release at the same moment is destroyed once: Release and
+    // ReleaseInternal decide with one atomic exchange (AtomicRelease, on by default), see asl_refcount.c
+    asl_refcount_init(game_base_address, read_int_setting_or_env("AtomicRelease", 1));
 
     // a surface whose material the renderer hasn't sorted into its table yet is left out of the frame instead of
     // crashing the game (MaterialSortGuard, on by default), see material_sort_guard.c

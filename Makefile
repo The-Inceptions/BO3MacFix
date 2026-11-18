@@ -75,6 +75,9 @@ TEST_TARGETS += tests/test_clientfield_guard
 # texture views the game replaces while they may be drawn: which places hand them to the game's delayed release, and
 # the hook against a made-up untrack, delayed release and render thread (texture_swap_guard.c)
 TEST_TARGETS += tests/test_texture_swap_guard
+# the Direct3D layer's Release and ReleaseInternal deciding with one atomic exchange: against the game's own code one
+# thread at a time, and two threads releasing together, here and (x86_64) under Rosetta (asl_refcount.c)
+TEST_TARGETS += tests/test_asl_refcount tests/test_asl_refcount_x86_64
 # a surface whose material isn't in the renderer's sorted table yet is left out of the frame (material_sort_guard.c)
 TEST_TARGETS += tests/test_material_sort_guard
 # the grenade's prediction line: T7Overcharged's test, the plugin's sums and the hooks (aae_arc.c)
@@ -205,6 +208,8 @@ SOURCES += source/t7o_guards.c
 SOURCES += source/clientfield_guard.c
 # TextureSwapGuard: views the game replaces while they may be drawn die a few frames later (texture_swap_guard.c)
 SOURCES += source/texture_swap_guard.c
+# AtomicRelease: an object of the Direct3D layer released by two threads at once is destroyed once (asl_refcount.c)
+SOURCES += source/asl_refcount.c
 # MaterialSortGuard: a surface whose material isn't sorted in yet is left out, not a crash (material_sort_guard.c)
 SOURCES += source/material_sort_guard.c
 # AAELanJoin: joining a game of the mod on the local network as its plugin makes it work (aae_lan.c)
@@ -443,6 +448,17 @@ tests/test_aae_viewmodel: tests/test_aae_viewmodel.c source/aae_viewmodel.c sour
 		source/t7overcharged.h source/thread_stats.h source/thread_stats.c source/thread_stats_game.c
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_viewmodel.c source/gsc_obj.c source/thread_stats.c source/thread_stats_game.c
+
+# asl_refcount.c: its replacement of Release against the game's code and under two threads; the x86_64 build runs the
+# game's own four functions (tests/asl_refcount_game.s) next to it under Rosetta
+tests/test_asl_refcount: tests/test_asl_refcount.c source/asl_refcount.c source/asl_refcount.h source/offsets.h \
+		source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_asl_refcount.c
+tests/test_asl_refcount_x86_64: tests/test_asl_refcount.c tests/asl_refcount_game.s source/asl_refcount.c \
+		source/asl_refcount.h source/offsets.h source/dobby.h
+	$(CLANG) -arch x86_64 -std=gnu11 -O1 -g -Wall -Wextra -Werror -o $@ tests/test_asl_refcount.c \
+		tests/asl_refcount_game.s
 
 # texture_swap_guard.c: its places and rule, and its hook against a made-up untrack, delayed release and render thread
 tests/test_texture_swap_guard: tests/test_texture_swap_guard.c source/texture_swap_guard.c source/texture_swap_guard.h \

@@ -70,6 +70,9 @@ typedef struct {
 static const hook_def_t hook_defs[] = {
     { ADDR_ADS_FastAdsDouble, 8, 0, { 0xF3, 0x0F, 0x58, 0xC0, 0x0F, 0x29, 0x45, 0xC0 } }, // addss; movaps (a detour)
     { ADDR_ADS_FastAdsPerkTest, 5, 4, { 0x45, 0x84, 0xFF, 0x74, 0x34 } }, // test r15b, r15b; je +0x34 (a detour)
+    // AtomicRelease (asl_refcount.c): push rbp; mov rbp, rsp; push rbx; push rax
+    { ADDR_ASL_Release, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53, 0x50 } },
+    { ADDR_ASL_ReleaseInternal, 6, 0, { 0x55, 0x48, 0x89, 0xE5, 0x53, 0x50 } },
     { ADDR_ASL_BuildModeTable, Push_R15 },
     { ADDR_ASL_SleepEx, Push_R15 },
     { ADDR_ASL_ToNativePath, Push_R15 },

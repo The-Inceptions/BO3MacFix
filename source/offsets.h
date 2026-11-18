@@ -637,6 +637,11 @@
 #define ADDR_TextureSwap_ImageFreeRet2 0x129b2e8 // the same for +0xb0
 #define ADDR_TextureSwap_ImageAssignRet 0x129c15a // in 0x129c113 (stub, source): an image's own +0xa8 view untracked and released before the source's is stored (the default asset stubs of a zone unload, 0x1349650)
 #define ADDR_TextureSwap_ImageAssignRet2 0x129c19c // the same for +0xb0
+// AtomicRelease (asl_refcount.c): the reference counting every object of Aspyr's Direct3D 11 layer on Metal
+// (ASL::DX11Metal) shares through its virtual base IUnknown_Mac (vtable 0x197cd90): vtable at +0, external count at +8,
+// internal count at +0xc, one aligned 8-byte word; vtable entry 4 (+0x20) is the deleting destructor
+#define ADDR_ASL_Release 0x1061d2 // func - ULONG (IUnknown_Mac *): lock dec [this+8], then a plain read of [this+8] decides (and of [this+0xc]); destroys when both read 0; returns that read (0 if it was 0). 141 thunks of the classes jump to it
+#define ADDR_ASL_ReleaseInternal 0x106216 // func - ULONG (IUnknown_Mac *): the same for [this+0xc] (13 calls, 1 jump); AddRef 0x1061c0 and AddRefInternal 0x106204 are lock xadd dword
 // -- the renderer's sorted material table and the frame's draw lists (material_sort_guard.c, wip/night/crash-main.md)
 #define ADDR_rgp 0x1138a580 // r_global_permanent_t: Material *sortedMaterials[0x5800] at +0 (a draw surface's key holds its material's index in bits 27..42; the readers 0x10ae4a5, 0xfea391, 0xf31174, 0xfea546 take the material from here and its +0x278 at once), needSortMaterials byte +0x2c000, materialCount int +0x2c004 (the slots the last sort filled), world +0x2c320; the sort 0x109b84d (gated in 0xe25ae3: world, needSort, databaseCompletedEvent2 set, +0x2c001) fills it, R_Init 0xdcec47 zeroes all 0x2d300 bytes (Windows 0x14f437980)
 #define ADDR_R_MergeDrawSurfLists 0x100afa1 // func - void (int stage, int stageCount, GfxBackEndData *data): merges the draw surface buckets [stage, stage + stageCount) by key and appends their pointers to data + 0x14fb0 (count int at +0x8a36c, at most 60000) through 0x100af4a; every surface of the frame's lists comes in here, on the main thread (Windows 0x141ccc370: the same stage and count pairs in the same order, 0xf/4, 0x22/4, 0x26/2, 0x2b/1, 0x28/3, 0x2c/1)
