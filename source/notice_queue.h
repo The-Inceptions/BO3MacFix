@@ -41,7 +41,7 @@ typedef struct {
     bool waiting; // a pause was due while the game wasn't in front
 } pause_wait_t;
 
-// the Escape is due: true to press it now (the game is in front); otherwise the pause waits
+// the Escape is due: true to press it now (the game is in front, and nothing waits any more); otherwise it waits
 bool pause_wait_press(pause_wait_t *wait, bool game_in_front);
 // the game's window became key: true to ask for a waiting pause again now, once; a pause keeps waiting while the game
 // still isn't in front

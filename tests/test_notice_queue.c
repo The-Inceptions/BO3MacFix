@@ -131,6 +131,12 @@ static void test_pause_wait(void) {
     CHECK(!pause_wait_press(&wait, false));
     CHECK(pause_wait_in_front(&wait, true));
     CHECK(pause_wait_press(&wait, true) && !wait.waiting && !pause_wait_in_front(&wait, true));
+    // a wait left over (the game was in front only for a moment, or another window of it was key) and then a pause
+    // pressed in front: that pause is the one waited for, so a later return to the front asks for none
+    CHECK(!pause_wait_press(&wait, false) && wait.waiting);
+    CHECK(!pause_wait_in_front(&wait, false) && wait.waiting);
+    CHECK(pause_wait_press(&wait, true) && !wait.waiting);
+    CHECK(!pause_wait_in_front(&wait, true));
 }
 
 int main(void) {
