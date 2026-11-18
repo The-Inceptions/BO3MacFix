@@ -29,6 +29,7 @@ tests/test_controllers
 tests/test_gc_bridge
 tests/test_frame_limit
 tests/test_display_sleep
+tests/test_battery_saver
 tests/test_voice_mic
 tests/test_frame_pace
 tests/test_players_cfg

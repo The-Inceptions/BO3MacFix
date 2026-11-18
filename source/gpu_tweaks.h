@@ -57,6 +57,10 @@ void gpu_tweaks_ui_gone(void);
 // up, 10 to 240 (0 = off)
 void gpu_tweaks_background_fps_init(int fps, code_patch_fn checked_code_patch);
 
+// BatterySaver (battery_saver.h): 0 off, 1 Saver, 2 Longest: while on battery, the battery settings at the level's
+// values where those save more than the user's own; plugged in, nothing of it. After the settings it sets are read.
+void gpu_tweaks_battery_saver_init(int level, code_patch_fn checked_code_patch);
+
 // IdleDisplaySleep (display_sleep.h): 0 the game keeps the display on as it always did, 1 the display may turn off
 // while the game is paused, in the menus or in the background on battery, 2 the same always
 void gpu_tweaks_idle_display_sleep_init(int mode);
@@ -88,5 +92,6 @@ bool gpu_tweaks_set_background_fps(int fps);
 bool gpu_tweaks_set_frame_stats(int seconds);
 bool gpu_tweaks_set_dynamic_resolution(int setting);
 bool gpu_tweaks_set_idle_display_sleep(int mode);
+bool gpu_tweaks_set_battery_saver(int level);
 
 #endif

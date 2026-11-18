@@ -75,6 +75,7 @@ static const setting_t settings[] = {
     { "FramesInFlight", "Frames in flight", "How many frames the CPU may queue ahead of the GPU: fewer means less input lag.", "Graphics", false, 3, { 1, 2, 3 }, { "1 (least lag)", "2 (normal)", "3 (smoothest)" }, 2, false },
     { "FramePacingFPS", "Frame pacing", "Keeps each frame on screen for a minimum time, for even pacing below the refresh rate.", "Graphics", false, 6, { 0, 30, 45, 60, 90, 120 }, { "Off", "30", "45", "60", "90", "120" }, 0, Live_Present },
     { "BatteryFPS", "Battery frame limit", "Limits the frame rate only while the Mac runs on battery, to save power. 30, 40 and 60 divide a 120 Hz display's refresh evenly.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 0, Live_Present },
+    { "BatterySaver", "Battery saver", "On battery only. Saver: 40 fps, the 3D scene at 85% at most, 20 fps in an untouched menu, 15 behind another app, the display may sleep when idle. Longest: 30 fps, 70%, 15 and 10 fps, the same. Your own settings stay where they save more; the menu and display parts need ControllerBridge. Plugged in, nothing changes.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "Saver", "Longest" }, 0, Live_Present },
     { "BatteryResolution", "Battery resolution", "Renders the 3D scene at this share of Render Resolution at most while the Mac runs on battery, to save the GPU's power; the HUD stays sharp. Plugged in, it goes back up. Measured at 40 fps: 70% saves 1.2 W on Kino, more on heavy maps.", "Graphics", false, 5, { 0, 85, 75, 70, 60 }, { "Off", "85%", "75%", "70%", "60%" }, 0, Live_Present },
     { "LowPowerFPS", "Low Power Mode frame limit", "Limits the frame rate while macOS's Low Power Mode is on, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 0, Live_Present },
     { "PauseMenuFPS", "Pause menu frame limit", "Limits the frame rate while the pause menu is open in a match, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 30, Live_Present },
@@ -188,6 +189,8 @@ static bool apply_live(const setting_t *t, int value) {
         return gpu_tweaks_set_low_power_fps(value);
     if (strcmp(n, "BatteryResolution") == 0)
         return gpu_tweaks_set_battery_resolution(value);
+    if (strcmp(n, "BatterySaver") == 0)
+        return gpu_tweaks_set_battery_saver(value);
     if (strcmp(n, "PauseMenuFPS") == 0)
         return gpu_tweaks_set_pause_menu_fps(value);
     if (strcmp(n, "MenuFPS") == 0)

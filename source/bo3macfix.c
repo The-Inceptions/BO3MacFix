@@ -1318,6 +1318,9 @@ __attribute__((constructor)) static void dylib_main() {
     // let the display turn off after the Mac's own idle time while the game is paused, in the menus or in the
     // background (IdleDisplaySleep, off unless set: 1 on battery, 2 always), see display_sleep.h
     gpu_tweaks_idle_display_sleep_init(read_int_setting_or_env("IdleDisplaySleep", 0));
+    // the battery settings above at a level's values while on battery, where those save more (BatterySaver, off unless
+    // set: 1 Saver, 2 Longest); after them, since it starts from their values, see battery_saver.c
+    gpu_tweaks_battery_saver_init(read_int_setting_or_env("BatterySaver", 0), checked_code_patch);
 
     // quitting without Aspyr's shutdown crash, and game audio following the default output device (see qol.c)
     qol_init(read_int_setting("ExitFix", 1), read_int_setting("AudioFollowsDefault", 1));

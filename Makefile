@@ -10,6 +10,8 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 TEST_TARGETS += tests/test_launch_args
 # IdleDisplaySleep's decisions (display_sleep.c)
 TEST_TARGETS += tests/test_display_sleep
+# BatterySaver's levels against the user's settings (battery_saver.c)
+TEST_TARGETS += tests/test_battery_saver
 # VoiceMicrophone: the voice system's start of recording refused or left alone (voice_mic.c)
 TEST_TARGETS += tests/test_voice_mic
 # StartWithMod: which mods are remembered and when, the launcher's decisions, the marker of a start given the mod, its
@@ -145,6 +147,8 @@ SOURCES += source/frame_limit.c source/app_focus.m
 # IdleDisplaySleep: when the game's display sleep assertion goes (display_sleep.c, plain C) and the glue that finds it,
 # lets it go and declares a controller's input as activity (display_sleep_mac.c)
 SOURCES += source/display_sleep.c source/display_sleep_mac.c
+# BatterySaver: the battery settings at a level's values on battery (battery_saver.c, plain C)
+SOURCES += source/battery_saver.c
 # VoiceMicrophone: the voice system's start of recording refused, so Steam keeps the microphone closed (voice_mic.c)
 SOURCES += source/voice_mic.c
 # how many refreshes each frame stayed on screen, for FrameStats with BO3MACFIX_FRAMEPACESTATS=1 (frame_pace.c)
@@ -646,6 +650,10 @@ tests/test_frame_limit: tests/test_frame_limit.c source/frame_limit.c source/fra
 tests/test_voice_mic: tests/test_voice_mic.c source/voice_mic.c source/voice_mic.h source/offsets.h source/dobby.h
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined \
 		-fno-sanitize-recover=undefined -o $@ tests/test_voice_mic.c
+
+# what BatterySaver's levels set on battery and plugged in (battery_saver.c)
+tests/test_battery_saver: tests/test_battery_saver.c source/battery_saver.c source/battery_saver.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_battery_saver.c source/battery_saver.c
 
 # when IdleDisplaySleep lets the display sleep and declares a controller's input (display_sleep.c)
 tests/test_display_sleep: tests/test_display_sleep.c source/display_sleep.c source/display_sleep.h
