@@ -4,11 +4,15 @@
 // What it is for (wip/night/perf-gpu2.md has the runs): with the mod and its ProMod option off, the mod's HUD script
 // sets r_viewModelSunShadowResolution and r_viewModelSpotOmniShadowResolution to 4.0X at every match start (its ProMod
 // function with no argument; no stock script or fastfile sets them, and the game's own values are 2.0X and 1.0X). The
-// gun is then drawn into large tiles of the shadow atlas for the lamps near the player, each frame. The game's own
-// values gave back 0.40-0.44 ms of 14.4 ms a frame on the heavy custom map DEIMOS (three quiet on/off pairs) and
-// 0.97-1.05 ms of 8.0 on Kino (three pairs at the 120 Hz limit, a busy Mac), with no difference seen on the gun or
-// the arms. Nothing else below the graphics menu's floor tried in those runs saved more than the runs' noise without
-// a change in the picture, or else it was one of the menu's own values (ActorShadows).
+// gun is then drawn into large tiles of the shadow atlas for the lamps near the player, each frame. Through this
+// piece's own test switch (on and off every 8 s at a fixed spot, gcp6 savertest / kinosavertest, a busy Mac) the
+// game's own values gave back about 0.2 ms of 15 ms a frame on the heavy custom map DEIMOS (nine pairs, +0.15 to
+// -0.44) and about 0.45 ms of 8.1 on Kino at the 120 Hz limit (eight pairs, -0.03 to -0.75), with no difference seen
+// on the gun or the arms in eight picture pairs (none of which shows a sharp gun shadow). Nothing else below the
+// graphics menu's floor tried in those runs saved more than the runs' noise without a change in the picture, or
+// else it was one of the menu's own values (ActorShadows). It lowers a raised value whoever raised it (the mod,
+// another mod, the player's console): it doesn't ask which mod is loaded, because the saving is the same and a
+// player who turns it on asked for the game's values.
 //
 // How: the values are looked at twice a second on the game thread and set again when they are above the game's own
 // (the mod's HUD sets them at every match start and map restart), with the game's own Dvar_SetFromString and the
@@ -94,10 +98,20 @@ static uint64_t next_look = 0, test_start = 0;
 static int last_active = -1;
 _Static_assert(sizeof(aae_engine_defaults) / sizeof(aae_engine_defaults[0]) <= 2, "room for every dvar");
 
+// With 2 the battery is asked at every look. The first ask starts BatteryFPS's power watch (gpu_tweaks.c), whose first
+// check (IOPSCopyPowerSourcesInfo and NSProcessInfo, about 1.3 ms under Rosetta, measured by review-engine-defaults.md)
+// would otherwise run on the game thread in a match frame when neither BatteryFPS nor LowPowerFPS has started it: so
+// it is started here, at the library's start or when the settings page picks 2. After that an ask is a flag read.
+static void start_battery_watch(int setting) {
+    if (setting == 2)
+        gpu_tweaks_on_battery();
+}
+
 void aae_engine_defaults_init(uint64_t base, int setting) {
     Dvar_FindByHash = (void *)(base + ADDR_Dvar_FindByHash);
     Dvar_SetFromString = (void *)(base + ADDR_Dvar_SetFromString);
     atomic_store(&setting_now, setting);
+    start_battery_watch(setting);
     const char *env = getenv("BO3MACFIX_AAEENGINEDEFAULTSTEST");
     test_seconds = env != NULL ? atoi(env) : 0;
     ready = true;
@@ -106,6 +120,7 @@ void aae_engine_defaults_init(uint64_t base, int setting) {
 
 void aae_engine_defaults_set(int setting) {
     atomic_store(&setting_now, setting);
+    start_battery_watch(setting);
 }
 
 // the dvar's value, by index: the int32 at +0x28, once its type is known to be an enum (no engine call)

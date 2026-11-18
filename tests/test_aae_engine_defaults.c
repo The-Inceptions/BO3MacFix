@@ -13,7 +13,7 @@
 #include <string.h>
 
 static bool fake_on_battery = false;
-static int battery_asked = 0;
+static int battery_asked = 0, asked_at_init = 0;
 bool gpu_tweaks_on_battery(void) {
     battery_asked++;
     return fake_on_battery;
@@ -135,7 +135,9 @@ static void start(int setting, const char *test) {
     else
         unsetenv("BO3MACFIX_AAEENGINEDEFAULTSTEST");
     const uint64_t base = 0x7000000000ull;
+    battery_asked = 0;
     aae_engine_defaults_init(base, setting);
+    asked_at_init = battery_asked;
     CHECK(Dvar_FindByHash == (void *)(base + ADDR_Dvar_FindByHash) &&
           Dvar_SetFromString == (void *)(base + ADDR_Dvar_SetFromString));
     CHECK(ADDR_Dvar_FindByHash == 0xf9fffa && ADDR_Dvar_SetFromString == 0xfa2ef7 && dvar_Type == 0x1c &&
@@ -160,11 +162,13 @@ static void start(int setting, const char *test) {
 static void test_frames(void) {
     // off (the default): every frame a countdown, every 16th the clock, no dvar found, read or set, no battery asked
     start(0, NULL);
+    CHECK(asked_at_init == 0);
     for (int i = 0; i < 160; i++)
         aae_engine_defaults_frame();
     CHECK(clock_reads == 10 && finds == 0 && sets == 0 && battery_asked == 0);
     // on: the two set once, with the internal source; then nothing but reads of their values
     start(1, NULL);
+    CHECK(asked_at_init == 0);
     aae_engine_defaults_frame();
     CHECK(fakes[0].value == 2 && fakes[1].value == 1 && sets == 2 && wrong_source == 0 && finds == 2);
     for (int i = 0; i < 10; i++)
@@ -189,14 +193,23 @@ static void test_frames(void) {
     for (int i = 0; i < 10; i++)
         half_second();
     CHECK(sets == 6 && finds == finds_then);
+    // the settings page picking 2 starts the battery watch there and then (not in a match frame), 1 and 0 don't
+    battery_asked = 0;
+    aae_engine_defaults_set(2);
+    CHECK(battery_asked == 1);
+    aae_engine_defaults_set(0);
+    aae_engine_defaults_set(1);
+    CHECK(battery_asked == 1);
     // ProMod's 0.5X: left alone while on
     aae_engine_defaults_set(1);
     fakes[0].value = fakes[1].value = 3;
     half_second();
     CHECK(fakes[0].value == 3 && fakes[1].value == 3 && sets == 6);
 
-    // on battery only: nothing plugged in, the values when on battery, put back when plugged in again
+    // on battery only: the watch started at the start already; nothing plugged in, the values when on battery, put
+    // back when plugged in again
     start(2, NULL);
+    CHECK(asked_at_init == 1);
     half_second();
     CHECK(sets == 0 && battery_asked == 1);
     fake_on_battery = true;
