@@ -42,6 +42,7 @@
 #include "clientfield_guard.h"
 #include "texture_swap_guard.h"
 #include "asl_refcount.h"
+#include "workshop_preview.h"
 #include "material_sort_guard.h"
 #include "aae_arc.h"
 #include "aae_vmwidget.h"
@@ -188,51 +189,6 @@ install_hook_name(LobbyMsgRW_PrepWriteMsg, bool, void *lobbyMsg, uint8_t *data, 
         MSG_WriteByte(lobbyMsg, ZBR_PREFIX_BYTE2);
     }
     return orig;
-}
-
-// the parts of Direct3D 11 that Aspyr's Metal backend implements, which we need to make textures
-typedef struct _D3D11_TEXTURE2D_DESC {
-    uint32_t Width, Height, MipLevels, ArraySize, Format, SampleCount, SampleQuality, Usage, BindFlags, CPUAccessFlags, MiscFlags;
-} D3D11_TEXTURE2D_DESC;
-typedef struct _D3D11_SUBRESOURCE_DATA {
-    const void *pSysMem;
-    uint32_t SysMemPitch, SysMemSlicePitch;
-} D3D11_SUBRESOURCE_DATA;
-typedef struct _D3D11_SHADER_RESOURCE_VIEW_DESC {
-    uint32_t Format, ViewDimension, MostDetailedMip, MipLevels;
-    uint64_t unused;
-} D3D11_SHADER_RESOURCE_VIEW_DESC;
-#define DXGI_FORMAT_R8G8B8A8_UNORM 28
-#define D3D11_BIND_SHADER_RESOURCE 8
-#define D3D11_SRV_DIMENSION_TEXTURE2D 4
-#define COM_METHOD(obj, index, type) ((type)((*(void ***)(obj))[index]))
-static void (*R_TrackTextureMemory)(void *view, D3D11_TEXTURE2D_DESC *desc, int category);
-
-// Aspyr's png to texture conversion code is buggy and always crashes.
-// Decode workshop images with ImageIO and make an RGBA texture from them ourselves instead.
-install_hook_name(load_workshop_texture, void *, const char *path) {
-    uint32_t width, height;
-    uint8_t *pixels = decode_image_rgba(path, &width, &height);
-    if (pixels == NULL)
-        return NULL;
-    void *device = *(void **)(game_base_address + ADDR_g_d3d11Device);
-    D3D11_TEXTURE2D_DESC desc = { width, height, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 1, 0, 0, D3D11_BIND_SHADER_RESOURCE, 0, 0 };
-    D3D11_SUBRESOURCE_DATA data = { pixels, width * 4, width * 4 * height };
-    void *texture = NULL;
-    void *view = NULL;
-    if (device != NULL &&
-        COM_METHOD(device, 5, int (*)(void *, D3D11_TEXTURE2D_DESC *, D3D11_SUBRESOURCE_DATA *, void **))(device, &desc, &data, &texture) >= 0 &&
-        texture != NULL) {
-        D3D11_SHADER_RESOURCE_VIEW_DESC view_desc = { DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_SRV_DIMENSION_TEXTURE2D, 0, 0xFFFFFFFF, 0 };
-        if (COM_METHOD(device, 7, int (*)(void *, void *, D3D11_SHADER_RESOURCE_VIEW_DESC *, void **))(device, texture, &view_desc, &view) < 0)
-            view = NULL;
-        if (view != NULL)
-            R_TrackTextureMemory(view, &desc, 0);
-        COM_METHOD(texture, 2, unsigned long (*)(void *))(texture);
-    }
-    free(pixels);
-    printf("workshop image %s (%ux%u): %s\n", path, width, height, view != NULL ? "loaded" : "failed to create texture");
-    return view;
 }
 
 // Prints out logs to stdout that would normally go in the logging window
@@ -1095,7 +1051,9 @@ __attribute__((constructor)) static void dylib_main() {
     // a map started with All-around Enhancement keeps cheats off, so its bank and weapon locker load (AAEBankFix, on
     // by default), see aae_cheats.c
     aae_cheats_install(game_base_address, read_int_setting_or_env("AAEBankFix", 1) != 0);
-    install_hook_load_workshop_texture((void *)(game_base_address + ADDR_load_workshop_texture));
+    // the workshop preview pictures, decoded with ImageIO, and the last few kept (PreviewCache, on by default), see
+    // workshop_preview.c
+    workshop_preview_init(game_base_address, read_int_setting_or_env("PreviewCache", 1));
     install_hook_Live_SystemInfo((void *)(game_base_address + ADDR_Live_SystemInfo));
     install_hook_someLoggingFunction((void *)(game_base_address + ADDR_someLoggingFunction));
     //install_hook_someWindowCreationFunction((void *)(game_base_address + ADDR_someWindowCreationFunction));
@@ -1130,7 +1088,6 @@ __attribute__((constructor)) static void dylib_main() {
 
     // set up functions that we later call
     havok_init(game_base_address);
-    R_TrackTextureMemory = (void *)(game_base_address + ADDR_R_TrackTextureMemory);
     build_usermods_path = (void *)(game_base_address + ADDR_build_usermods_path);
     DB_FindXAssetHeader = (void *)(game_base_address + ADDR_DB_FindXAssetHeader);
     Com_Error = (void *)(game_base_address + ADDR_Com_Error);

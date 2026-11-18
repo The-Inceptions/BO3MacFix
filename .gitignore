@@ -66,6 +66,7 @@ tests/test_clientfield_guard
 tests/test_texture_swap_guard
 tests/test_asl_refcount
 tests/test_asl_refcount_x86_64
+tests/test_workshop_preview
 tests/test_material_sort_guard
 tests/test_aae_arc
 tests/test_aae_vmwidget

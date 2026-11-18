@@ -78,6 +78,9 @@ TEST_TARGETS += tests/test_texture_swap_guard
 # the Direct3D layer's Release and ReleaseInternal deciding with one atomic exchange: against the game's own code one
 # thread at a time, and two threads releasing together, here and (x86_64) under Rosetta (asl_refcount.c)
 TEST_TARGETS += tests/test_asl_refcount tests/test_asl_refcount_x86_64
+# the workshop preview pictures and the cache of the last few, against a made-up device, game and files
+# (workshop_preview.c)
+TEST_TARGETS += tests/test_workshop_preview
 # a surface whose material isn't in the renderer's sorted table yet is left out of the frame (material_sort_guard.c)
 TEST_TARGETS += tests/test_material_sort_guard
 # the grenade's prediction line: T7Overcharged's test, the plugin's sums and the hooks (aae_arc.c)
@@ -210,6 +213,8 @@ SOURCES += source/clientfield_guard.c
 SOURCES += source/texture_swap_guard.c
 # AtomicRelease: an object of the Direct3D layer released by two threads at once is destroyed once (asl_refcount.c)
 SOURCES += source/asl_refcount.c
+# the workshop preview pictures' loader and PreviewCache (workshop_preview.c)
+SOURCES += source/workshop_preview.c
 # MaterialSortGuard: a surface whose material isn't sorted in yet is left out, not a crash (material_sort_guard.c)
 SOURCES += source/material_sort_guard.c
 # AAELanJoin: joining a game of the mod on the local network as its plugin makes it work (aae_lan.c)
@@ -448,6 +453,12 @@ tests/test_aae_viewmodel: tests/test_aae_viewmodel.c source/aae_viewmodel.c sour
 		source/t7overcharged.h source/thread_stats.h source/thread_stats.c source/thread_stats_game.c
 	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_aae_viewmodel.c source/gsc_obj.c source/thread_stats.c source/thread_stats_game.c
+
+# workshop_preview.c: the loader and the cache against a made-up device, texture memory table, decoder and files
+tests/test_workshop_preview: tests/test_workshop_preview.c source/workshop_preview.c source/workshop_preview.h \
+		source/bo3macnative.h source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_workshop_preview.c
 
 # asl_refcount.c: its replacement of Release against the game's code and under two threads; the x86_64 build runs the
 # game's own four functions (tests/asl_refcount_game.s) next to it under Rosetta
