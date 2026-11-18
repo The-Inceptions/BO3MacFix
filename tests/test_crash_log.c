@@ -100,12 +100,13 @@ static void write_file(const char *path, const char *text) {
     fclose(file);
 }
 
+// the file's text, "" when there's none (so that a check of a wrong result fails instead of the test crashing)
 static const char *read_file(const char *path) {
     static char text[1 << 20];
     text[0] = '\0';
     FILE *file = fopen(path, "rb");
     if (file == NULL)
-        return NULL;
+        return text;
     size_t length = fread(text, 1, sizeof(text) - 1, file);
     text[length] = '\0';
     fclose(file);
@@ -130,6 +131,10 @@ static void make_folder(char *out, size_t size, const char *name) {
 static void in(char *out, size_t size, const char *folder, const char *name) {
     snprintf(out, size, "%s/%s", folder, name);
 }
+
+// a file's time, seconds since 1970; and seconds ago (a link's own)
+static void set_time(const char *path, long long when);
+static void set_age(const char *path, long long seconds);
 
 // ---- output to a file and back, as dylib_main sends it to log.txt
 static int saved_output = -1;
@@ -206,20 +211,54 @@ static void test_start_line(void) {
         }
 }
 
-// ---- the quit line in a log's end
-static void test_quit_line(void) {
+// ---- the line that says how a run ended, in a log's end, with its exit status
+static bool ended(const char *text, size_t length, bool from_file_start, int *status) {
+    *status = 12345;
+    return crash_log_end_in_tail(text, length, from_file_start, status);
+}
+
+static void test_end_line(void) {
+    int status;
     const char *quit = "a\n" Crash_Log_Quit_Line ", exit status 0 (time 10:00:00)\nafter it\n";
-    CHECK(crash_log_quit_in_tail(quit, strlen(quit), false));
-    CHECK(crash_log_quit_in_tail(Crash_Log_Quit_Line "\n", strlen(Crash_Log_Quit_Line) + 1, true));
-    CHECK(!crash_log_quit_in_tail(Crash_Log_Quit_Line "\n", strlen(Crash_Log_Quit_Line) + 1, false));
-    const char *inside = "a line about " Crash_Log_Quit_Line "\n";
-    CHECK(!crash_log_quit_in_tail(inside, strlen(inside), true));
+    CHECK(ended(quit, strlen(quit), false, &status) && status == 0);
+    // an error: Sys_Error's exit(-1), as this writes it now, and as the first builds wrote it
+    const char *error = "a\n" Crash_Log_Error_Line ", exit status -1, so the next start keeps this log as a crash log "
+                        "(time 10:00:00)\n";
+    CHECK(ended(error, strlen(error), false, &status) && status == -1);
+    const char *first_builds = "a\n" Crash_Log_Quit_Line ", exit status -1 (time 10:00:00)\n";
+    CHECK(ended(first_builds, strlen(first_builds), false, &status) && status == -1);
+    const char *other = "a\n" Crash_Log_Quit_Line ", exit status 3 (time 10:00:00)\n";
+    CHECK(ended(other, strlen(other), false, &status) && status == 3);
+    // the last such line counts
+    const char *both = "a\n" Crash_Log_Quit_Line ", exit status 0 (x)\n" Crash_Log_Error_Line ", exit status 2 (x)\n";
+    CHECK(ended(both, strlen(both), false, &status) && status == 2);
+    const char *again = "a\n" Crash_Log_Error_Line ", exit status 2 (x)\n" Crash_Log_Quit_Line ", exit status 0 (x)\n";
+    CHECK(ended(again, strlen(again), false, &status) && status == 0);
+    // without a readable status: quitting is 0, an error isn't
+    const char *no_status = "a\n" Crash_Log_Quit_Line "\n";
+    CHECK(ended(no_status, strlen(no_status), false, &status) && status == 0);
+    const char *no_error_status = "a\n" Crash_Log_Error_Line ", exit status x\n";
+    CHECK(ended(no_error_status, strlen(no_error_status), false, &status) && status == INT_MIN);
+    const char *huge = "a\n" Crash_Log_Error_Line ", exit status 99999999999\n";
+    CHECK(ended(huge, strlen(huge), false, &status) && status == INT_MIN);
+    // only at a line's start, the first line only in a whole log, never cut off
+    CHECK(ended(Crash_Log_Quit_Line "\n", strlen(Crash_Log_Quit_Line) + 1, true, &status));
+    CHECK(!ended(Crash_Log_Quit_Line "\n", strlen(Crash_Log_Quit_Line) + 1, false, &status));
+    CHECK(!ended(Crash_Log_Error_Line "\n", strlen(Crash_Log_Error_Line) + 1, false, &status));
+    const char *inside = "a line about " Crash_Log_Quit_Line "\nand " Crash_Log_Error_Line "\n";
+    CHECK(!ended(inside, strlen(inside), true, &status));
     const char *cut = "a\n" Crash_Log_Quit_Line;
-    CHECK(crash_log_quit_in_tail(cut, strlen(cut), false));
-    CHECK(!crash_log_quit_in_tail(cut, strlen(cut) - 1, false));
-    CHECK(!crash_log_quit_in_tail("", 0, true) && !crash_log_quit_in_tail(NULL, 5, true));
+    CHECK(ended(cut, strlen(cut), false, &status) && status == 0);
+    CHECK(!ended(cut, strlen(cut) - 1, false, &status));
+    CHECK(!ended("", 0, true, &status) && !crash_log_end_in_tail(NULL, 5, true, &status));
     const char *older = "BO3MacFix: the game quit with status 0, ending it without running static destructors\n";
-    CHECK(!crash_log_quit_in_tail(older, strlen(older), true));
+    CHECK(!ended(older, strlen(older), true, &status));
+    // a long line is read up to where it can be
+    static char long_line[600];
+    memset(long_line, 'x', sizeof(long_line) - 1);
+    memcpy(long_line + 2, Crash_Log_Error_Line, strlen(Crash_Log_Error_Line));
+    long_line[1] = '\n';
+    CHECK(ended(long_line, strlen(long_line), false, &status) && status == INT_MIN);
 }
 
 // ---- keeping logs
@@ -314,6 +353,22 @@ static void test_keep(void) {
     CHECK(kept.previous == Previous_Crashed && strcmp(kept.crash_name, "crash-20261113-182501.txt") == 0);
     CHECK(strcmp(read_file(crash), "kept before") == 0 && strcmp(read_file(previous), crashed_log) == 0);
 
+    // a crash log older by its time than the ten there (a clock set back): the one this start kept still stays
+    make_folder(folder, sizeof(folder), "older-clock");
+    in(path, sizeof(path), folder, "log.txt");
+    in(crash, sizeof(crash), folder, "crash-20261113-182501.txt");
+    write_file(path, crashed_log);
+    set_age(path, 86400LL * 30);
+    for (int i = 0; i < 10; i++) {
+        char other[1200];
+        snprintf(other, sizeof(other), "%s/crash-2026120%d-000000.txt", folder, i % 10);
+        write_file(other, "newer by its time");
+        set_age(other, 3600LL * (i + 1));
+    }
+    crash_log_keep(folder, 10, fake_running, &kept);
+    CHECK(kept.previous == Previous_Crashed && strcmp(kept.crash_name, "crash-20261113-182501.txt") == 0);
+    CHECK(exists(crash) && kept.removed == 1);
+
     // a folder nothing can be written in: judged, but neither moved nor kept apart, and said so (no crash log named)
     make_folder(folder, sizeof(folder), "readonly");
     in(path, sizeof(path), folder, "log.txt");
@@ -353,15 +408,86 @@ static void test_keep(void) {
     write_file(path, big);
     crash_log_keep(folder, 10, fake_running, &kept);
     CHECK(kept.previous == Previous_Unknown);
+
+    // ended with an error (Sys_Error's exit(-1)): kept as a crash log like a crash, with its status; also from the line
+    // the first builds wrote for it ("ended by quitting, exit status -1")
+    const char *error_logs[] = {
+        "BO3MacFix: log of the start on 2026-11-15 09:00:00 +1100, pid 777\nSys_Error: out of memory\n"
+        Crash_Log_Error_Line ", exit status -1, so the next start keeps this log as a crash log (time 09:10:00)\n",
+        "BO3MacFix: log of the start on 2026-11-15 09:00:00 +1100, pid 777\nSys_Error: out of memory\n"
+        Crash_Log_Quit_Line ", exit status -1 (time 09:10:00, 600.0 s since the start, in the menus)\n",
+    };
+    for (int i = 0; i < 2; i++) {
+        make_folder(folder, sizeof(folder), i == 0 ? "error" : "error-first-builds");
+        in(path, sizeof(path), folder, "log.txt");
+        in(previous, sizeof(previous), folder, "log-previous.txt");
+        in(crash, sizeof(crash), folder, "crash-20261115-090000.txt");
+        write_file(path, error_logs[i]);
+        running_asked = 0;
+        crash_log_keep(folder, 10, fake_running, &kept);
+        CHECK(kept.previous == Previous_Error && kept.status == -1 && running_asked == 0 && kept.moved);
+        CHECK(strcmp(kept.crash_name, "crash-20261115-090000.txt") == 0 && inode(crash) == inode(previous));
+        CHECK(strcmp(read_file(crash), error_logs[i]) == 0);
+    }
+
+    // a log bigger than a kept log may be: log-previous.txt and the crash log keep its end, with a line that says so
+    kept_log_limit = 64 * 1024;
+    static char long_log[300000];
+    memset(long_log, 'y', sizeof(long_log) - 1);
+    for (size_t i = 79; i < sizeof(long_log) - 1; i += 80)
+        long_log[i] = '\n';
+    memcpy(long_log, first, strlen(first));
+    memcpy(long_log + sizeof(long_log) - 9, "THE END\n", 8);
+    make_folder(folder, sizeof(folder), "long");
+    in(path, sizeof(path), folder, "log.txt");
+    in(previous, sizeof(previous), folder, "log-previous.txt");
+    in(crash, sizeof(crash), folder, "crash-20261113-182501.txt");
+    write_file(path, long_log);
+    write_file(previous, "older");
+    crash_log_keep(folder, 10, fake_running, &kept);
+    CHECK(kept.previous == Previous_Crashed && kept.moved && !exists(path) && kept.left_out > 0);
+    CHECK(strcmp(kept.crash_name, "crash-20261113-182501.txt") == 0 && inode(crash) == inode(previous));
+    const char *kept_text = read_file(previous);
+    size_t kept_length = strlen(kept_text);
+    const char *rest = strchr(kept_text, '\n') != NULL ? strchr(kept_text, '\n') + 1 : kept_text;
+    CHECK(strncmp(kept_text, "BO3MacFix: crash logs: the first ", 33) == 0);
+    CHECK(strstr(kept_text, " were left out to keep its size down, its last ") < rest);
+    CHECK(strlen(rest) <= 64 * 1024 && strlen(rest) > 60 * 1024);
+    CHECK(long_log[sizeof(long_log) - 1 - strlen(rest) - 1] == '\n'); // from a line's start
+    CHECK(strcmp(kept_text + kept_length - 8, "THE END\n") == 0 && strstr(kept_text, "log of the start") == NULL);
+    CHECK((long long)strlen(rest) + kept.left_out == (long long)sizeof(long_log) - 1);
+    // the same for a run that quit: log-previous.txt its end, no crash log
+    const char *quit_end = "\n" Crash_Log_Quit_Line ", exit status 0 (x)\n";
+    memcpy(long_log + sizeof(long_log) - 200, quit_end, strlen(quit_end));
+    make_folder(folder, sizeof(folder), "long-quit");
+    in(path, sizeof(path), folder, "log.txt");
+    in(previous, sizeof(previous), folder, "log-previous.txt");
+    write_file(path, long_log);
+    crash_log_keep(folder, 10, fake_running, &kept);
+    CHECK(kept.previous == Previous_Quit && kept.moved && !exists(path) && kept.left_out > 0);
+    CHECK(strlen(read_file(previous)) < 65 * 1024 && kept.crash_name[0] == '\0');
+    kept_log_limit = Crash_Log_Max_Size;
 }
 
-// ---- removing old crash logs: only crash logs, the oldest first
+// ---- removing old crash logs: only crash logs, the oldest first by their own time
+
+// a file's (a link's own) time, seconds ago
+static void set_age(const char *path, long long seconds) {
+    struct timeval now_time;
+    gettimeofday(&now_time, NULL);
+    struct timeval times[2] = { { now_time.tv_sec - (time_t)seconds, 0 }, { now_time.tv_sec - (time_t)seconds, 0 } };
+    lutimes(path, times);
+}
+
 static void test_prune(void) {
     char folder[1024], path[1200], outside[1200];
     make_folder(folder, sizeof(folder), "prune");
+    // twelve crash logs whose names sort the other way round from their age, as after flights west: January's is the
+    // newest, December's the oldest
     for (int i = 0; i < 12; i++) {
         snprintf(path, sizeof(path), "%s/crash-2025%02d01-120000.txt", folder, i + 1);
         write_file(path, "crash");
+        set_age(path, 86400LL * (i + 1));
     }
     // names in other cases are on dates of their own: on a disk that ignores case (APFS as macOS sets it up) they would
     // be the crash logs of their date
@@ -372,20 +498,28 @@ static void test_prune(void) {
     for (size_t i = 0; i < sizeof(near) / sizeof(near[0]); i++) {
         in(path, sizeof(path), folder, near[i]);
         write_file(path, "keep me");
+        set_age(path, 86400LL * 400);
     }
-    // a folder by a crash log's name stays, a link by one goes but not what it points to
+    // a folder by a crash log's name stays and isn't counted; a link by one is old by its own time and goes, not what it
+    // points to
     in(path, sizeof(path), folder, "crash-20000101-000000.txt");
     mkdir(path, 0755);
+    set_age(path, 3600); // newer than every crash log: counted, it would take a place
     in(outside, sizeof(outside), root, "outside.txt");
     write_file(outside, "outside");
     in(path, sizeof(path), folder, "crash-19990101-000000.txt");
     CHECK(symlink(outside, path) == 0);
-    CHECK(crash_log_prune(folder, 0) == 0 && crash_log_prune(folder, -3) == 0);
-    int removed = crash_log_prune(folder, 10);
-    CHECK(removed == 3); // two files and the link; the folder can't go
+    set_age(path, 86400LL * 100);
+    CHECK(crash_log_prune(folder, 0, Crash_Logs_Max_Total, NULL) == 0);
+    CHECK(crash_log_prune(folder, -3, Crash_Logs_Max_Total, NULL) == 0);
+    int removed = crash_log_prune(folder, 10, Crash_Logs_Max_Total, NULL);
+    CHECK(removed == 3); // the two oldest files and the link
     for (int i = 0; i < 12; i++) {
         snprintf(path, sizeof(path), "%s/crash-2025%02d01-120000.txt", folder, i + 1);
-        CHECK(exists(path) == (i >= 2));
+        if (exists(path) != (i < 10)) {
+            printf("FAIL %s:%d: crash log of month %d %s\n", __FILE__, __LINE__, i + 1, exists(path) ? "kept" : "removed");
+            failures++;
+        }
     }
     for (size_t i = 0; i < sizeof(near) / sizeof(near[0]); i++) {
         in(path, sizeof(path), folder, near[i]);
@@ -398,13 +532,46 @@ static void test_prune(void) {
     CHECK(exists(path));
     in(path, sizeof(path), folder, "crash-19990101-000000.txt");
     CHECK(!exists(path) && strcmp(read_file(outside), "outside") == 0);
-    CHECK(crash_log_prune(folder, 1) == 9 && crash_log_prune(folder, 1) == 0);
-    snprintf(path, sizeof(path), "%s/crash-20251201-120000.txt", folder);
+    CHECK(crash_log_prune(folder, 1, Crash_Logs_Max_Total, NULL) == 9);
+    CHECK(crash_log_prune(folder, 1, Crash_Logs_Max_Total, NULL) == 0);
+    snprintf(path, sizeof(path), "%s/crash-20250101-120000.txt", folder);
+    CHECK(exists(path)); // the newest by its time, not by its name
+    CHECK(crash_log_prune("/nonexistent/folder", 1, Crash_Logs_Max_Total, NULL) == 0);
+
+    // all of them together at most total bytes: the newest stay while they fit, and once one doesn't, every older one
+    // goes, also a small one that would fit
+    make_folder(folder, sizeof(folder), "prune-size");
+    static char hundred_k[100 * 1024 + 1];
+    memset(hundred_k, 'z', sizeof(hundred_k) - 1);
+    for (int i = 0; i < 4; i++) {
+        snprintf(path, sizeof(path), "%s/crash-2026010%d-000000.txt", folder, i + 1);
+        write_file(path, i == 0 ? "small" : hundred_k);
+        set_age(path, 3600LL * (4 - i)); // the 4th is the newest, the small 1st the oldest
+    }
+    CHECK(crash_log_prune(folder, 10, 250 * 1024, NULL) == 2); // the 4th and 3rd fit, the 2nd doesn't
+    for (int i = 0; i < 4; i++) {
+        snprintf(path, sizeof(path), "%s/crash-2026010%d-000000.txt", folder, i + 1);
+        CHECK(exists(path) == (i >= 2));
+    }
+    // one alone bigger than the total stays, being the newest
+    CHECK(crash_log_prune(folder, 10, 1000, NULL) == 1);
+    snprintf(path, sizeof(path), "%s/crash-20260104-000000.txt", folder);
     CHECK(exists(path));
-    CHECK(crash_log_prune("/nonexistent/folder", 1) == 0);
+    CHECK(crash_log_prune(folder, 10, 1000, NULL) == 0);
+
+    // the crash log this start kept stays whatever its time says
+    make_folder(folder, sizeof(folder), "prune-stays");
+    for (int i = 0; i < 3; i++) {
+        snprintf(path, sizeof(path), "%s/crash-2026020%d-000000.txt", folder, i + 1);
+        write_file(path, "crash");
+        set_age(path, 3600LL * (i + 1)); // the 1st is the newest
+    }
+    CHECK(crash_log_prune(folder, 1, Crash_Logs_Max_Total, "crash-20260203-000000.txt") == 2);
+    snprintf(path, sizeof(path), "%s/crash-20260203-000000.txt", folder);
+    CHECK(exists(path));
 }
 
-// ---- copying, where a second name can't be made
+// ---- copying, where a second name can't be made: all of a log, or its end; with the log's own time
 static void test_copy(void) {
     char folder[1024], from[1200], to[1200], link_path[1200];
     make_folder(folder, sizeof(folder), "copy");
@@ -412,17 +579,31 @@ static void test_copy(void) {
     in(to, sizeof(to), folder, "to.txt");
     static char text[300000];
     for (size_t i = 0; i < sizeof(text) - 1; i++)
-        text[i] = (char)('a' + i % 26);
+        text[i] = i % 50 == 49 ? '\n' : (char)('a' + i % 26);
     write_file(from, text);
-    CHECK(crash_log_copy(from, to, Copy_Limit) && strcmp(read_file(to), text) == 0);
-    CHECK(!crash_log_copy(from, to, Copy_Limit) && strcmp(read_file(to), text) == 0); // never over a file
+    set_time(from, 1700000000);
+    struct stat st;
+    CHECK(crash_log_copy(from, to, Crash_Log_Max_Size) == 0 && strcmp(read_file(to), text) == 0);
+    CHECK(stat(to, &st) == 0 && st.st_mtime == 1700000000);
+    CHECK(crash_log_copy(from, to, Crash_Log_Max_Size) == -1 && strcmp(read_file(to), text) == 0); // never over a file
     unlink(to);
-    CHECK(crash_log_copy(from, to, 1000) && strlen(read_file(to)) == 1000);
+    // its end: from the first line's start among the last 1000 bytes, after a line that says what was left out
+    long long left_out = crash_log_copy(from, to, 1000);
+    const char *copied = read_file(to);
+    const char *rest = strchr(copied, '\n') != NULL ? strchr(copied, '\n') + 1 : copied;
+    CHECK(left_out > (long long)sizeof(text) - 1 - 1000 && left_out < (long long)sizeof(text) - 1 - 950);
+    CHECK(strlen(rest) == sizeof(text) - 1 - (size_t)left_out && memcmp(rest, text + left_out, strlen(rest)) == 0);
+    CHECK(text[left_out - 1] == '\n');
+    char first[200];
+    snprintf(first, sizeof(first), "BO3MacFix: crash logs: the first %lld bytes of this log (0.3 MB) were left out to "
+             "keep its size down, its last %zu follow\n", left_out, strlen(rest));
+    CHECK(strncmp(copied, first, strlen(first)) == 0);
+    CHECK(stat(to, &st) == 0 && st.st_mtime == 1700000000);
     unlink(to);
     in(link_path, sizeof(link_path), folder, "link.txt");
     CHECK(symlink(from, link_path) == 0);
-    CHECK(!crash_log_copy(link_path, to, Copy_Limit) && !exists(to)); // a link isn't followed
-    CHECK(!crash_log_copy("/nonexistent", to, Copy_Limit) && !exists(to));
+    CHECK(crash_log_copy(link_path, to, Crash_Log_Max_Size) == -1 && !exists(to)); // a link isn't followed
+    CHECK(crash_log_copy("/nonexistent", to, Crash_Log_Max_Size) == -1 && !exists(to));
 }
 
 // ---- macOS's report, picked by time and pid
@@ -600,6 +781,7 @@ static void test_after_crash(void) {
     for (int i = 0; i < 10; i++) {
         snprintf(crash, sizeof(crash), "%s/crash-2025%02d01-000000.txt", folder, i + 1);
         write_file(crash, "an older crash");
+        set_age(crash, 86400LL * (300 - 20 * i));
     }
     in(settings, sizeof(settings), folder, "settings.ini");
     write_file(settings, "// BO3MacFix's settings\n// ExitFix = 0 would turn it off\nExitFix = 1\n  BatteryFPS = 40\n\n"
@@ -616,15 +798,19 @@ static void test_after_crash(void) {
     CHECK(strcmp(log_path, path) == 0 && state.enabled && state.rotating && !state.test);
     CHECK(state.kept.previous == Previous_Crashed && strcmp(state.kept.crash_name, "crash-20261113-182501.txt") == 0);
     CHECK(state.kept.removed == 1 && !exists(path));
+    // macOS writes the report a moment after the game starts again: at the first look it is only half there, which is
+    // no reason to stop looking; the second look, a clock_interval later, finds it whole
+    char half[sizeof(report_of_48812)];
+    snprintf(half, sizeof(report_of_48812) / 2, "%s", report_of_48812);
+    write_file(report, half);
     output_to(log_path); // what dylib_main's freopen does
     crash_log_started(made_up_base(), settings);
     in(crash, sizeof(crash), folder, "crash-20261113-182501.txt");
-    // macOS writes the report a moment after the game starts again: the first look finds nothing and says nothing,
-    // the second, a clock_interval later, finds it
     usleep(100000);
     CHECK(strstr(read_file(crash), "---- added by BO3MacFix") == NULL);
     write_file(report, report_of_48812);
     CHECK(shows(crash, "rip 0x1010ae4f1", 3.0));
+    CHECK(strstr(read_file(crash), "couldn't be read whole") == NULL);
     crash_log_notice();
     crash_log_map("core_frontend");
     set_stack(2, "menu: Lobby opened", "Lobby");
@@ -639,6 +825,18 @@ static void test_after_crash(void) {
         lua_menu_line(L);
     }
     CHECK(shows(log_path, ", menu Spam, 2 menu lines left out\n", 3.0));
+    // the Mac sleeps for forty ticks: CLOCK_MONOTONIC counts them, so they are all past at once when it wakes; one line
+    // says how long nothing was written, not forty
+    int time_lines_before = 0;
+    for (const char *at = read_file(log_path); (at = strstr(at, "BO3MacFix: time ")) != NULL; at++)
+        time_lines_before++;
+    state.started -= 40 * clock_interval;
+    CHECK(shows(log_path, " s before this (the Mac slept, or the game was stopped)\n", 3.0));
+    usleep(300000);
+    int time_lines_after = 0;
+    for (const char *at = read_file(log_path); (at = strstr(at, "BO3MacFix: time ")) != NULL; at++)
+        time_lines_after++;
+    CHECK(time_lines_after - time_lines_before <= 4);
     crash_log_quit(0);
     crash_log_quit(1);
     clock_interval = 1e9; // no more time lines
@@ -660,7 +858,8 @@ static void test_after_crash(void) {
     CHECK(strstr(log, "BO3MacFix: crash logs: the run before (started 2026-11-13 18:25:01, pid 48812) didn't end by "
                       "quitting (a crash, a force quit or a power cut); its log is kept as crash-20261113-182501.txt") !=
           NULL);
-    CHECK(strstr(log, "BO3MacFix: crash logs: removed the 1 oldest, keeping the newest 10 (KeepCrashLogs)\n") != NULL);
+    CHECK(strstr(log, "BO3MacFix: crash logs: removed the 1 oldest, keeping the newest 10 and 64 MB at most "
+                      "(KeepCrashLogs)\n") != NULL);
     CHECK(strstr(log, "BO3MacFix: crash logs: macOS's report of the run before is ") != NULL);
     CHECK(strstr(log, "/steam-reports-user/CoDBlkOps3_Exe.bo3macfix-2026-11-13-182631.ips; exception: EXC_BAD_ACCESS, "
                       "SIGSEGV, KERN_INVALID_ADDRESS at 0x0000000000000278; crashed thread 0 \"Main\", rip 0x1010ae4f1; "
@@ -683,7 +882,12 @@ static void test_after_crash(void) {
     CHECK(left_out_lines == 1);
     CHECK(strstr(log, "exit status 1") == NULL);
     // the next start will see that this one ended by quitting
-    CHECK(crash_log_quit_in_tail(log, strlen(log), true));
+    int status = 12345;
+    CHECK(crash_log_end_in_tail(log, strlen(log), true, &status) && status == 0);
+    int gaps = 0;
+    for (const char *at = log; (at = strstr(at, "nothing written for")) != NULL; at++)
+        gaps++;
+    CHECK(gaps == 1);
 
     const char *kept = read_file(crash);
     CHECK(strncmp(kept, crashed_log, strlen(crashed_log)) == 0);
@@ -702,6 +906,117 @@ static void test_after_crash(void) {
     CHECK(lua_asked.loads == 1 && strcmp(lua_asked.chunk_name, "=BO3MacFix crash log") == 0);
     CHECK(lua_asked.source_length == crash_log_lua_len && lua_asked.pushed == lua_menu_line);
     CHECK(lua_asked.pcall_arguments == 2 && !lua_asked.pushed_boolean && HKS_TOP(L) == stack);
+}
+
+// what the start says about the run before, in every case; the exit line of an error; the notice for one
+static void test_wording(void) {
+    char out[1200];
+    in(out, sizeof(out), root, "wording-output.txt");
+    crash_log_kept_t saved = state.kept;
+    const crash_log_start_t quit_start = { 2026, 11, 14, 10, 24, 0, -480, 5000 };
+    const crash_log_start_t crash_start = { 2026, 11, 13, 18, 25, 1, -480, 48812 };
+    struct {
+        crash_log_previous_t previous;
+        const crash_log_start_t *start;
+        int status;
+        const char *crash_name;
+        bool moved;
+        long long left_out;
+        const char *says;
+    } cases[] = {
+        { Previous_Quit, &quit_start, 0, "", true, 0,
+          "BO3MacFix: crash logs: the run before (started 2026-11-14 10:24:00) ended by quitting; its log is "
+          "log-previous.txt\n" },
+        { Previous_Quit, &quit_start, 0, "", false, 0,
+          "BO3MacFix: crash logs: the run before (started 2026-11-14 10:24:00) ended by quitting; it couldn't be moved "
+          "to log-previous.txt, so this start writes over it\n" },
+        { Previous_Quit, &quit_start, 0, "", true, 3 << 20,
+          "BO3MacFix: crash logs: the run before (started 2026-11-14 10:24:00) ended by quitting; its log is "
+          "log-previous.txt (its end: the first 3.0 MB were left out)\n" },
+        { Previous_Crashed, &crash_start, 0, "", false, 0,
+          "BO3MacFix: crash logs: the run before (started 2026-11-13 18:25:01, pid 48812) didn't end by quitting (a "
+          "crash, a force quit or a power cut), and its log couldn't be kept: this start writes over it\n" },
+        { Previous_Crashed, &crash_start, 0, "", true, 0,
+          "BO3MacFix: crash logs: the run before (started 2026-11-13 18:25:01, pid 48812) didn't end by quitting (a "
+          "crash, a force quit or a power cut), and its log couldn't be kept apart; it is log-previous.txt\n" },
+        { Previous_Crashed, &crash_start, 0, "crash-20261113-182501.txt", false, 0,
+          "BO3MacFix: crash logs: the run before (started 2026-11-13 18:25:01, pid 48812) didn't end by quitting (a "
+          "crash, a force quit or a power cut); its log is kept as crash-20261113-182501.txt, macOS's crash report of "
+          "it is looked for\n" },
+        { Previous_Error, &crash_start, -1, "crash-20261113-182501.txt", true, 0,
+          "BO3MacFix: crash logs: the run before (started 2026-11-13 18:25:01, pid 48812) ended with an error (exit "
+          "status -1); its log is kept as crash-20261113-182501.txt, macOS's crash report of it is looked for\n" },
+        { Previous_Error, &crash_start, INT_MIN, "crash-20261113-182501.txt", true, 20 << 20,
+          "BO3MacFix: crash logs: the run before (started 2026-11-13 18:25:01, pid 48812) ended with an error; its log "
+          "is kept as crash-20261113-182501.txt (its end: the first 20.0 MB were left out), macOS's crash report of it "
+          "is looked for\n" },
+        { Previous_Unknown, &crash_start, 0, "", false, 0,
+          "BO3MacFix: crash logs: the log before is from a build that doesn't say how it ended; it couldn't be moved to "
+          "log-previous.txt, so this start writes over it\n" },
+        { Previous_Running, &crash_start, 0, "", false, 0,
+          "BO3MacFix: crash logs: the run before (started 2026-11-13 18:25:01, pid 48812) is still running; it couldn't "
+          "be moved to log-previous.txt, so this start writes over it\n" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        memset(&state.kept, 0, sizeof(state.kept));
+        state.kept.previous = cases[i].previous;
+        state.kept.start = *cases[i].start;
+        state.kept.status = cases[i].status;
+        snprintf(state.kept.crash_name, sizeof(state.kept.crash_name), "%s", cases[i].crash_name);
+        state.kept.moved = cases[i].moved;
+        state.kept.left_out = cases[i].left_out;
+        output_to(out);
+        say_previous();
+        output_back();
+        if (strcmp(read_file(out), cases[i].says) != 0) {
+            printf("FAIL %s:%d: case %zu says:\n%s", __FILE__, __LINE__, i, read_file(out));
+            failures++;
+        }
+    }
+    // macOS's report is looked for after a crash or an error whose log was kept, not otherwise
+    crash_log_kept_t asked = { 0 };
+    snprintf(asked.crash_name, sizeof(asked.crash_name), "crash-20261113-182501.txt");
+    asked.previous = Previous_Crashed;
+    CHECK(report_wanted(&asked));
+    asked.previous = Previous_Error;
+    CHECK(report_wanted(&asked));
+    asked.previous = Previous_Quit;
+    CHECK(!report_wanted(&asked));
+    asked.previous = Previous_Running;
+    CHECK(!report_wanted(&asked));
+    asked.previous = Previous_Crashed;
+    asked.crash_name[0] = '\0';
+    CHECK(!report_wanted(&asked));
+    // the notice for an error, with its status and without one
+    state.kept.previous = Previous_Error;
+    state.kept.status = -1;
+    snprintf(state.kept.crash_name, sizeof(state.kept.crash_name), "crash-20261115-090000.txt");
+    notices = 0;
+    crash_log_notice();
+    CHECK(notices == 1 && strcmp(notice, "The game ended with an error last time (exit status -1). Its log: "
+                                         "BO3MacFix/crash-20261115-090000.txt") == 0);
+    state.kept.status = INT_MIN;
+    crash_log_notice();
+    CHECK(notices == 2 && strcmp(notice, "The game ended with an error last time. Its log: "
+                                         "BO3MacFix/crash-20261115-090000.txt") == 0);
+    // a run that quit (status 0) gets none, even with a crash log's name about
+    state.kept.previous = Previous_Quit;
+    state.kept.status = 0;
+    crash_log_notice();
+    CHECK(notices == 2);
+    // the exit line of an error, which the next start reads back
+    atomic_store(&state.quit_written, false);
+    output_to(out);
+    crash_log_quit(-1);
+    crash_log_quit(0);
+    output_back();
+    const char *line = read_file(out);
+    int status = 0;
+    const char *error_line = Crash_Log_Error_Line ", exit status -1, so the next start keeps this log as a crash log (time ";
+    CHECK(strncmp(line, error_line, strlen(error_line)) == 0);
+    CHECK(strstr(line, "exit status 0") == NULL);
+    CHECK(crash_log_end_in_tail(line, strlen(line), true, &status) && status == -1);
+    state.kept = saved;
 }
 
 // macOS wrote no report: the last look says so in the crash log and the log, the first says nothing
@@ -729,6 +1044,37 @@ static void test_no_report(void) {
     CHECK(strstr(read_file(out), "BO3MacFix: crash logs: no crash report of macOS for the run before (pid 4242) a minute "
                                  "after this start; a force quit or a power cut leaves none\n") != NULL);
     CHECK(strstr(read_file(crash), "macOS wrote no crash report of this run (pid 4242) in ") != NULL);
+
+    // a run that ended with an error: words of its own
+    write_file(crash, "the log of a run that ended with an error\n");
+    crash_log_previous_t was = state.kept.previous;
+    state.kept.previous = Previous_Error;
+    output_to(out);
+    CHECK(look_for_report(true));
+    output_back();
+    CHECK(strstr(read_file(out), "BO3MacFix: crash logs: no crash report of macOS for the run before (pid 4242) a minute "
+                                 "after this start; a run that ends with an error leaves none\n") != NULL);
+    CHECK(strstr(read_file(crash), "by a minute after the next start: it ended with an error, which leaves none.\n") !=
+          NULL);
+    state.kept.previous = was;
+
+    // one half written (macOS still at it) is no reason to stop at the first look; the last names it
+    char half_path[1200], half[600];
+    snprintf(half, sizeof(half), "{\"bug_type\":\"309\"}\n{\"pid\":4242,\"procPath\":\"%s\",\"exception\":{\"ty",
+             the_game[1]);
+    in(half_path, sizeof(half_path), empty_folder, "CoDBlkOps3_Exe.bo3macfix-2026-11-18-210400.ips");
+    write_file(half_path, half);
+    set_time(half_path, crash_log_start_epoch(&state.kept.start) + 60); // written after that run began
+    write_file(crash, "the log of a run that was killed\n");
+    output_to(out);
+    done = look_for_report(false);
+    output_back();
+    CHECK(!done && strcmp(read_file(out), "") == 0 && strcmp(read_file(crash), "the log of a run that was killed\n") == 0);
+    output_to(out);
+    done = look_for_report(true);
+    output_back();
+    CHECK(done && strstr(read_file(out), "may be the run before's, but couldn't be read whole") != NULL);
+    CHECK(strstr(read_file(crash), "of this run's time couldn't be read whole: cut off or damaged") != NULL);
 }
 
 // the checks' folder: the runner's own file becomes its log.txt
@@ -796,7 +1142,7 @@ int main(void) {
         return 1;
     }
     test_start_line();
-    test_quit_line();
+    test_end_line();
     test_keep();
     test_prune();
     test_copy();
@@ -805,6 +1151,7 @@ int main(void) {
     test_running();
     test_off();
     test_after_crash();
+    test_wording();
     test_no_report();
     test_checks_folder();
     char command[1200];
