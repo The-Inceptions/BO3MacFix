@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include "crash_log.h"
 #include "gc_bridge.h"
 #include "gpu_tweaks.h"
 #include "display_testhooks.h"
@@ -353,6 +354,8 @@ static int lua_load_ui(lua_State *s) {
         hks_pcall(s, 2, 0);
     }
     HKS_TOP(s) = HKS_BASE(s) + top;
+    // the menus' lines in the log (KeepCrashLogs, crash_log.lua), in place before this first menu is made
+    crash_log_lua_install(s);
     return 0;
 }
 

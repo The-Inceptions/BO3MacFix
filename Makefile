@@ -98,6 +98,9 @@ TEST_TARGETS += tests/test_aae_vmwidget_tsan
 TEST_TARGETS += tests/test_aae_skeleton
 # T7Overcharged's smaller pieces: customkeymap (t7o_small.c)
 TEST_TARGETS += tests/test_t7o_small
+# KeepCrashLogs: macOS's crash report read with every read checked, on real reports, every cut of them and random
+# bytes (crash_report.c); the logs kept, the start's and the time lines, the report looked for (crash_log.c)
+TEST_TARGETS += tests/test_crash_report tests/test_crash_log
 # the navmesh converter's map names and arguments, against a made-up wine (navmesh_convert.c)
 TEST_TARGETS += tests/test_navmesh_convert
 # utilities.c's file and text helpers: Mac binaries told from others without keeping files open, hex, file names
@@ -266,6 +269,14 @@ SOURCES += source/notices.m source/notice_queue.c
 SOURCES += source/quick_save.m source/quick_save_rules.c
 # ColorSync for display UUIDs, CoreVideo for the refresh rate of SDL's display modes
 FRAMEWORKS += -framework ColorSync -framework CoreVideo
+# KeepCrashLogs: the log of a run that didn't end by quitting kept, with macOS's crash report summarised into it, and
+# the time, menus and maps in every log (crash_log.c, crash_log.lua, crash_report.c)
+SOURCES += source/crash_log.c source/crash_report.c
+
+# what names this build in the log's first lines (KeepCrashLogs): the commit it was built from, "+" when tracked files
+# differ from it (source/build_name.h, below)
+BUILD_NAME := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git status --porcelain --untracked-files=no \
+	2>/dev/null | grep -q . && echo +)
 
 all: $(TARGET)
 
@@ -290,6 +301,8 @@ test: $(TEST_TARGETS)
 	if command -v lua >/dev/null; then lua tests/test_autosave.lua; else echo "no lua, skipping tests/test_autosave.lua"; fi
 	@# the quick save (a key, or L3 + R3 in the pause menu) and the saved game's details on the settings page
 	if command -v lua >/dev/null; then lua tests/test_quick_save.lua; else echo "no lua, skipping tests/test_quick_save.lua"; fi
+	@# KeepCrashLogs' menu lines: the engine's RegisterOpenedMenu and UnregisterOpenedMenu wrapped, against a made-up UI
+	if command -v lua >/dev/null; then lua tests/test_crash_log.lua; else echo "no lua, skipping tests/test_crash_log.lua"; fi
 
 tests/test_weapon_anim: tests/test_weapon_anim.c source/weapon_anim.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_weapon_anim.c
@@ -644,6 +657,19 @@ tests/test_t7o_subtitle: tests/test_t7o_subtitle.c source/t7o_subtitle.c source/
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -o $@ tests/test_t7o_subtitle.c \
 		source/t7o_subtitle.c
 
+# crash_log.c against made-up logs in a temporary folder, made-up reports in made-up report folders, and its game side
+# with the output in a file, a made-up frame counter, notices and Lua; the address and undefined behaviour sanitizers
+tests/test_crash_log: tests/test_crash_log.c source/crash_log.c source/crash_log.h source/crash_report.c \
+		source/crash_report.h source/crash_log_lua.h source/offsets.h source/notices.h source/havok.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-framework CoreFoundation -framework IOKit -o $@ tests/test_crash_log.c source/crash_report.c
+
+# crash_report.c against a made-up report, the game's real ones on this Mac cut at every length, random bytes and nesting
+# past its limit, with the address and undefined behaviour sanitizers since it reads files anybody could have written
+tests/test_crash_report: tests/test_crash_report.c source/crash_report.c source/crash_report.h
+	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+		-o $@ tests/test_crash_report.c source/crash_report.c
+
 # t7o_small.c: T7Overcharged's rules, and its game side against a made-up game (the test includes the source)
 tests/test_t7o_small: tests/test_t7o_small.c source/t7o_small.c source/t7o_small.h source/offsets.h source/dobby.h \
 		source/havok.h source/t7overcharged.h source/gsc_obj.c source/gsc_obj.h
@@ -708,7 +734,8 @@ tests/test_gc_bridge: tests/test_gc_bridge.m source/gc_bridge.m source/gc_bridge
 	$(CLANG) -O1 -Wall -Wextra -Werror -Wno-unused-parameter -mmacosx-version-min=$(OSXVER) -framework Foundation \
 		-weak_framework GameController -weak_framework CoreHaptics -framework IOKit -o $@ tests/test_gc_bridge.m
 
-$(TARGET): $(SOURCES) $(wildcard source/*.h) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
+$(TARGET): $(SOURCES) $(wildcard source/*.h) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h \
+		source/crash_log_lua.h source/build_name.h
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(DEFINES) $(LDFLAGS) -o $@ $(SOURCES)
 
 # the Lua half of our T7Overcharged support, embedded as a byte array
@@ -726,11 +753,23 @@ source/notices_lua.h: source/notices.lua
 source/checkpoint_lua.h: source/checkpoint.lua
 	cd source && xxd -i checkpoint.lua > checkpoint_lua.h
 
+# KeepCrashLogs' menu lines (crash_log.c), embedded as a byte array
+source/crash_log_lua.h: source/crash_log.lua
+	cd source && xxd -i crash_log.lua > crash_log_lua.h
+
+# the build's name (BUILD_NAME), rewritten only when it changes, so a commit builds the library again and nothing else
+# does; outside a git checkout it is empty and the log names the time of the build instead
+source/build_name.h: FORCE
+	@printf '#define MACFIX_BUILD "%s"\n' '$(BUILD_NAME)' | cmp -s - $@ || \
+		printf '#define MACFIX_BUILD "%s"\n' '$(BUILD_NAME)' > $@
+FORCE:
+
 clean:
-	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h
+	rm -f -- $(TARGET) $(TEST_TARGETS) source/t7overcharged_lua.h source/settings_menu_lua.h source/notices_lua.h source/checkpoint_lua.h \
+		source/crash_log_lua.h source/build_name.h
 	rm -rf -- tests/san tests/fuzz/out tests/quietcrash.dylib
 
-.PHONY: all clean test sanitize fuzz fuzz-build
+.PHONY: all clean test sanitize fuzz fuzz-build FORCE
 
 # A test program that may crash is started with tests/quietcrash.dylib (a fatal signal then ends it with exit status
 # 128 + the signal, and macOS writes no crash report into ~/Library/Logs/DiagnosticReports) and with the sanitizers

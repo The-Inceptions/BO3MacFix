@@ -15,6 +15,7 @@
 #include <time.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudio.h>
+#include "crash_log.h"
 #include "display_follow.h"
 #include "dyld-interposing.h"
 #include "gc_bridge.h"
@@ -34,6 +35,9 @@ static atomic_bool audio_follow = false;
 // destructors, like Aspyr's own exit path on the main thread can. Nothing registered with atexit runs then either,
 // so save what display_follow remembers about each display first, and turn the DualSense's adaptive triggers off.
 __attribute__((noreturn)) void exit_new(int status) {
+    // every orderly way out of the game ends here, ExitFix or not: the line that says so, before anything that can
+    // crash on the way out (KeepCrashLogs, crash_log.c)
+    crash_log_quit(status);
     if (exit_fix && !pthread_main_np()) {
         printf("BO3MacFix: the game quit with status %i, ending it without running static destructors\n", status);
         prepatch_report_at_quit();

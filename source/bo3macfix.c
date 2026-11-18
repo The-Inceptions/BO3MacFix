@@ -89,6 +89,7 @@
 #include "controllers.h"
 #include "gc_bridge.h"
 #include "launch_args.h"
+#include "crash_log.h"
 #include "start_mod.h"
 #include "start_mod_game.h"
 
@@ -430,6 +431,8 @@ install_hook_name(CL_SetCGameTime, void, int localClientNum) {
 #define C2M_Path Macfix_Path "/cod2map/cod2map64.exe"
 install_hook_name(HKAI_InitMapData, void, const char *mapname, char restart) {
     printf("HKAI_InitMapData for %s\n", mapname);
+    // the time lines say "in the menus" from core_frontend on, "in a game on <map>" from a map on (KeepCrashLogs)
+    crash_log_map(mapname);
     // each map shows each repeated script error 3 times again
     script_errors_new_map();
     // and a shield's health still waiting is the last game's
@@ -997,14 +1000,20 @@ __attribute__((constructor)) static void dylib_main() {
     if (strcmp(image_name, "CoDBlkOps3_Exe") != 0 && strcmp(image_name, Prepatched_Exe_Name) != 0)
         return;
 
-    // started from Steam our log goes nowhere, so keep it in BO3MacFix/log.txt (replaced every launch)
+    // started from Steam our log goes nowhere, so keep it in BO3MacFix/log.txt (replaced every launch). KeepCrashLogs
+    // (crash_log.c, the newest 10 by default) first keeps the one before as log-previous.txt, and as
+    // crash-<its start>.txt when that run didn't end by quitting; BO3MACFIX_CRASHLOGDIR does it in a folder for checks
     struct stat out_stat;
-    if (!isatty(STDOUT_FILENO) && (fstat(STDOUT_FILENO, &out_stat) != 0 || !S_ISREG(out_stat.st_mode))) {
-        if (freopen(Macfix_Path "/log.txt", "w", stdout) != NULL)
+    bool log_to_file = !isatty(STDOUT_FILENO) && (fstat(STDOUT_FILENO, &out_stat) != 0 || !S_ISREG(out_stat.st_mode));
+    const char *log_path = crash_log_prepare(read_int_setting_or_env("KeepCrashLogs", 10), Macfix_Path, log_to_file);
+    if (log_to_file) {
+        if (freopen(log_path, "w", stdout) != NULL)
             dup2(fileno(stdout), STDERR_FILENO);
     }
     // write the log out line by line, so nothing is lost if the game crashes or is killed
     setvbuf(stdout, NULL, _IOLBF, 0);
+    // the log's first lines: when, which build, on what; what became of the run before; then the time once a minute
+    crash_log_started(get_base_address(), Settings_Path);
 
     // OfflineMode (offline_mode.c, off by default): the game's process without the internet, always (for a flight) or
     // when the online service doesn't answer quickly at launch. First, so that it's in place before the game makes any
@@ -1301,6 +1310,8 @@ __attribute__((constructor)) static void dylib_main() {
     notices_init(read_int_setting_or_env("Notices", 1), read_int_setting_or_env("PauseOnDisconnect", 0));
     // OfflineMode's automatic test deciding "offline" tells the player (offline_mode.c), now that notices can be shown
     offline_mode_set_notice(offline_notice);
+    // and the run before that didn't end by quitting, once (KeepCrashLogs)
+    crash_log_notice();
     // StartWithMod (on by default; the launcher reads it and starts the game with the mod loaded at the last quit):
     // what the launcher did for this start, with a notice when it left the mod out for a reason the player must know,
     // and the loaded mod noted at each first menu (notices.m), see start_mod_game.c
