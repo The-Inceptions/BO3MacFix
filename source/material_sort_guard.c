@@ -26,7 +26,8 @@
 // whose slot is empty, are taken out again (the rest keep their order) and the array's count is lowered. So neither
 // the main thread nor the render thread meets them: the render thread only draws lists of a frame whose surfaces
 // were checked against the table it draws with (the sort waits for it, and only the sort and R_Init write the
-// table). Such a thing is missing for the frames until the sort has taken its material in, usually a few frames.
+// table). Such a thing is missing for the frames until the sort has taken its material in: the sort waits until no
+// zone is being loaded, about three seconds on the start that crashed.
 // A surface whose index names another material's filled slot is drawn with that one for those frames, as the game
 // does; only slots that would crash it are guarded. A game whose keys all name filled slots is unchanged, and each
 // surface costs a read of its key and of its slot, both just read by the game's own sort of the same lists.
