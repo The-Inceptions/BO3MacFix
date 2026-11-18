@@ -82,7 +82,7 @@ typedef enum {
     Start_Mod_Off,      // StartWithMod is off (or NoCodePatches is on)
     Start_Mod_Nothing,  // no mod was loaded at the last quit
     Start_Mod_Damaged,  // lastmod.txt holds no name of ours: ignored
-    Start_Mod_Failed,   // the last start with the mod didn't get as far as the menus: the stock game, the mod forgotten
+    Start_Mod_Failed,   // the last start with the mod didn't finish loading it: the stock game, the mod forgotten
     Start_Mod_Busy,     // the command line has an fs_game of its own or starts a map
     Start_Mod_Missing,  // the mod's files aren't there
     Start_Mod_Updating, // Steam is downloading the mod

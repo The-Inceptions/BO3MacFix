@@ -271,7 +271,7 @@ static const struct {
     { Start_Mod_Off, "off", "StartWithMod is off" },
     { Start_Mod_Nothing, "nothing", "no mod was loaded at the last quit" },
     { Start_Mod_Damaged, "damaged", "lastmod.txt holds no mod's name, so it is ignored" },
-    { Start_Mod_Failed, "failed", "the last start with it didn't get as far as the menus, so this one is without it" },
+    { Start_Mod_Failed, "failed", "the last start with it didn't finish loading it, so this one is without it" },
     { Start_Mod_Busy, "busy", "the command line has an fs_game of its own or starts a map" },
     { Start_Mod_Missing, "missing", "its files aren't there" },
     { Start_Mod_Updating, "updating", "Steam is downloading it" },
@@ -598,7 +598,7 @@ void start_mod_title(const start_mod_paths_t *paths, const char *name, char *out
 bool start_mod_notice_text(start_mod_plan_t plan, const char *title, char *out, size_t size) {
     switch (plan) {
     case Start_Mod_Failed:
-        snprintf(out, size, "The last start with %s didn't reach the menus. This one is without it: load it from MODS.",
+        snprintf(out, size, "The last start with %s didn't finish loading. This one is without it: load it from MODS.",
                  title);
         return true;
     case Start_Mod_Missing:

@@ -78,7 +78,7 @@ gone "$macfix/lastmod.pending" "given"
 
 # that start never got to the menus (the game removes the marker there): this one is the stock game, the mod forgotten
 run --
-expect "StartWithMod: 2631943123: the last start with it didn't get as far as the menus" "failed"
+expect "StartWithMod: 2631943123: the last start with it didn't finish loading it" "failed"
 expect "environment: BO3MACFIX_STARTWITHMOD_LAUNCH=failed 2631943123" "failed"
 forbid "fs_game" "failed"
 gone "$own/lastmod.pending" "failed"

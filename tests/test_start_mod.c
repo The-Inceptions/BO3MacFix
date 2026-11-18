@@ -799,8 +799,8 @@ static void test_game(void) {
     static const struct {
         const char *note, *log, *notice;
     } told[] = {
-        { "failed " AAE, "StartWithMod on: " AAE ": the last start with it didn't get as far as the menus",
-          "The last start with [ZM] All-around Enhancement didn't reach the menus. This one is without it: load it "
+        { "failed " AAE, "StartWithMod on: " AAE ": the last start with it didn't finish loading it",
+          "The last start with [ZM] All-around Enhancement didn't finish loading. This one is without it: load it "
           "from MODS." },
         { "missing zm_mymod", "zm_mymod: its files aren't there",
           "The game started without the mod zm_mymod: it was loaded at the last quit, but its files are gone." },
@@ -808,7 +808,7 @@ static void test_game(void) {
           "Steam is downloading [ZM] All-around Enhancement, so the game started without it. Load it from MODS once "
           "it's done." },
         { "failed ", "StartWithMod on: the last start with it",
-          "The last start with the mod didn't reach the menus. This one is without it: load it from MODS." },
+          "The last start with the mod didn't finish loading. This one is without it: load it from MODS." },
     };
     for (size_t i = 0; i < sizeof(told) / sizeof(told[0]); i++) {
         posted_count = 0;
