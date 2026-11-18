@@ -49,10 +49,36 @@ DYLD_INTERPOSE(exit_new, exit);
 // The game's SDL 2.0.7 pins its audio queue to the output device that was the default when it started, and when
 // that device goes away (AirPods disconnecting) it treats audio as unplugged and plays nothing. Instead, move the
 // game's audio queues to whatever becomes the default output, and keep SDL from giving up on a device that died.
+//
+// Where a move runs: SDL makes its queue on an audio thread of its own (0x100142270), on that thread's run loop, sets
+// it up there (buffers, start) and then turns that run loop in 0.1 s slices until it closes the device. Its close
+// (0x100141f50) disposes the queue first (0x100141fa4), while that thread still turns its run loop, and only then
+// stops and joins the thread. The device can only change while the queue is stopped, and AudioQueueStop with
+// "immediate" waits for the thread the queue's callbacks come on to turn its run loop: asked from another thread that
+// is up to about 15 s (CoreAudio's own limit) when that thread doesn't turn it (measured on this macOS, arm64 and
+// x86_64: 14.7 s, against 0.01 s while it turns). The default output's listener runs on another thread, and it used to
+// stop the queues there, holding queues_lock, which SDL's thread takes while it sets a queue up: a device change while
+// the game opened its audio (the opening waits for SDL's set-up) froze both for those 15 s. (At the close the thread
+// still turns, so a stop came back at once there; only after an open that failed, whose thread had ended before the
+// close, did it wait too.) Done on the queue's own thread, the stop waits for nothing (measured too). So the listener
+// only hands each queue's move to the run loop the queue was made with, where it runs the next time that thread turns
+// it, and never once the thread has ended. A dispose takes the queue out of the table first: a move still waiting then
+// finds nothing, and one already running holds queues_lock, so the close waits for its end, at most about half a
+// second. queues_lock is only taken there and for the table's short changes, never while waiting on CoreAudio for
+// another thread.
+//
+// A move right after the queue was started (a second change in a row, or one right after SDL's set-up) spends about
+// half a second in the stop (0.52 s, measured on both CPUs): that much without sound then. One while it plays takes
+// about 0.02 s.
 #define Max_Queues 8
 #define Max_Buffers 16
-static AudioQueueRef queues[Max_Queues];
-static AudioQueueBufferRef buffers[Max_Queues][Max_Buffers];
+typedef struct {
+    AudioQueueRef queue;        // NULL for a free place
+    CFRunLoopRef run_loop;      // the run loop its callbacks come on (retained)
+    CFStringRef run_loop_mode;  // and their mode (retained)
+    AudioQueueBufferRef buffers[Max_Buffers];
+} queue_entry_t;
+static queue_entry_t queues[Max_Queues];
 static os_unfair_lock queues_lock = OS_UNFAIR_LOCK_INIT;
 
 static CFStringRef copy_default_output_uid(void) {
@@ -71,33 +97,60 @@ static CFStringRef copy_default_output_uid(void) {
     return uid;
 }
 
-static void move_queues_to_default_output(void) {
-    CFStringRef uid = copy_default_output_uid();
+// what a move calls: CoreAudio's own (the tests put stand-ins here)
+static OSStatus (*queue_stop)(AudioQueueRef queue, Boolean immediate) = AudioQueueStop;
+static OSStatus (*queue_set_property)(AudioQueueRef queue, AudioQueuePropertyID id, const void *data,
+                                      UInt32 size) = AudioQueueSetProperty;
+static OSStatus (*queue_enqueue)(AudioQueueRef queue, AudioQueueBufferRef buffer, UInt32 descriptions,
+                                 const AudioStreamPacketDescription *description) = AudioQueueEnqueueBuffer;
+static OSStatus (*queue_start)(AudioQueueRef queue, const AudioTimeStamp *start) = AudioQueueStart;
+static CFStringRef (*copy_default_uid)(void) = copy_default_output_uid;
+
+// one queue to the default output, on the thread its callbacks come on; nothing if it was disposed meanwhile
+static void move_queue(AudioQueueRef queue) {
+    CFStringRef uid = copy_default_uid();
     if (uid == NULL)
         return;
     char name[256] = "?";
     CFStringGetCString(uid, name, sizeof(name), kCFStringEncodingUTF8);
     os_unfair_lock_lock(&queues_lock);
     for (int i = 0; i < Max_Queues; i++) {
-        if (queues[i] == NULL)
+        queue_entry_t *entry = &queues[i];
+        if (entry->queue != queue)
             continue;
         // the device can only change while the queue is stopped. Stopping hands its buffers back to SDL's
         // callback, which queues them again once it's started.
-        OSStatus status = AudioQueueStop(queues[i], true);
+        OSStatus status = queue_stop(queue, true);
         if (status == noErr)
-            status = AudioQueueSetProperty(queues[i], kAudioQueueProperty_CurrentDevice, &uid, sizeof(uid));
+            status = queue_set_property(queue, kAudioQueueProperty_CurrentDevice, &uid, sizeof(uid));
         // changing the device drops the buffers SDL had queued, so queue them again (silent) to get its callback
         // going; ones still queued just fail
-        for (int b = 0; b < Max_Buffers && buffers[i][b] != NULL; b++) {
-            memset(buffers[i][b]->mAudioData, 0, buffers[i][b]->mAudioDataBytesCapacity);
-            buffers[i][b]->mAudioDataByteSize = buffers[i][b]->mAudioDataBytesCapacity;
-            AudioQueueEnqueueBuffer(queues[i], buffers[i][b], 0, NULL);
+        for (int b = 0; b < Max_Buffers && entry->buffers[b] != NULL; b++) {
+            AudioQueueBufferRef buffer = entry->buffers[b];
+            memset(buffer->mAudioData, 0, buffer->mAudioDataBytesCapacity);
+            buffer->mAudioDataByteSize = buffer->mAudioDataBytesCapacity;
+            queue_enqueue(queue, buffer, 0, NULL);
         }
-        OSStatus started = AudioQueueStart(queues[i], NULL);
+        OSStatus started = queue_start(queue, NULL);
         printf("BO3MacFix: moved the game's audio to the default output %s (%d, %d)\n", name, (int)status, (int)started);
     }
     os_unfair_lock_unlock(&queues_lock);
     CFRelease(uid);
+}
+
+// each queue's move handed to the run loop its callbacks come on (see above): this thread waits for none of them
+static void move_queues_to_default_output(void) {
+    os_unfair_lock_lock(&queues_lock);
+    for (int i = 0; i < Max_Queues; i++) {
+        AudioQueueRef queue = queues[i].queue;
+        if (queue == NULL)
+            continue;
+        CFRunLoopPerformBlock(queues[i].run_loop, queues[i].run_loop_mode, ^{
+            move_queue(queue);
+        });
+        CFRunLoopWakeUp(queues[i].run_loop);
+    }
+    os_unfair_lock_unlock(&queues_lock);
 }
 
 static OSStatus default_output_changed(AudioObjectID object, UInt32 count, const AudioObjectPropertyAddress *addresses,
@@ -107,53 +160,81 @@ static OSStatus default_output_changed(AudioObjectID object, UInt32 count, const
     return noErr;
 }
 
+// A queue made with a run loop for its callbacks is kept, with that run loop. One whose callbacks come on CoreAudio's
+// own thread (none of the game's) isn't: its move would have no thread of its own to run on.
+static void remember_queue(AudioQueueRef queue, CFRunLoopRef run_loop, CFStringRef run_loop_mode) {
+    if (run_loop == NULL)
+        return;
+    os_unfair_lock_lock(&queues_lock);
+    for (int i = 0; i < Max_Queues; i++) {
+        if (queues[i].queue == NULL) {
+            memset(&queues[i], 0, sizeof(queues[i]));
+            queues[i].queue = queue;
+            queues[i].run_loop = (CFRunLoopRef)CFRetain(run_loop);
+            // (no mode is the common modes, as AudioQueueNewOutput takes it)
+            queues[i].run_loop_mode = (CFStringRef)CFRetain(run_loop_mode != NULL ? run_loop_mode
+                                                                                  : kCFRunLoopCommonModes);
+            break;
+        }
+    }
+    os_unfair_lock_unlock(&queues_lock);
+}
+
+static void remember_buffer(AudioQueueRef queue, AudioQueueBufferRef buffer) {
+    os_unfair_lock_lock(&queues_lock);
+    for (int i = 0; i < Max_Queues; i++) {
+        if (queues[i].queue != queue)
+            continue;
+        for (int b = 0; b < Max_Buffers; b++) {
+            if (queues[i].buffers[b] == NULL) {
+                queues[i].buffers[b] = buffer;
+                break;
+            }
+        }
+    }
+    os_unfair_lock_unlock(&queues_lock);
+}
+
+// the queue goes: out of the table first, so that a move still waiting for its run loop finds nothing
+static void forget_queue(AudioQueueRef queue) {
+    CFRunLoopRef run_loops[Max_Queues];
+    CFStringRef modes[Max_Queues];
+    int forgotten = 0;
+    os_unfair_lock_lock(&queues_lock);
+    for (int i = 0; i < Max_Queues; i++) {
+        if (queues[i].queue == queue) {
+            run_loops[forgotten] = queues[i].run_loop;
+            modes[forgotten++] = queues[i].run_loop_mode;
+            memset(&queues[i], 0, sizeof(queues[i]));
+        }
+    }
+    os_unfair_lock_unlock(&queues_lock);
+    for (int i = 0; i < forgotten; i++) {
+        CFRelease(run_loops[i]);
+        CFRelease(modes[i]);
+    }
+}
+
 OSStatus AudioQueueNewOutput_new(const AudioStreamBasicDescription *format, AudioQueueOutputCallback callback,
                                  void *user_data, CFRunLoopRef run_loop, CFStringRef run_loop_mode, UInt32 flags,
                                  AudioQueueRef *out_queue) {
     OSStatus status = AudioQueueNewOutput(format, callback, user_data, run_loop, run_loop_mode, flags, out_queue);
-    if (status == noErr && atomic_load(&audio_follow)) {
-        os_unfair_lock_lock(&queues_lock);
-        for (int i = 0; i < Max_Queues; i++) {
-            if (queues[i] == NULL) {
-                queues[i] = *out_queue;
-                break;
-            }
-        }
-        os_unfair_lock_unlock(&queues_lock);
-    }
+    if (status == noErr && atomic_load(&audio_follow))
+        remember_queue(*out_queue, run_loop, run_loop_mode);
     return status;
 }
 DYLD_INTERPOSE(AudioQueueNewOutput_new, AudioQueueNewOutput);
 
 OSStatus AudioQueueDispose_new(AudioQueueRef queue, Boolean immediate) {
-    os_unfair_lock_lock(&queues_lock);
-    for (int i = 0; i < Max_Queues; i++) {
-        if (queues[i] == queue) {
-            queues[i] = NULL;
-            memset(buffers[i], 0, sizeof(buffers[i]));
-        }
-    }
-    os_unfair_lock_unlock(&queues_lock);
+    forget_queue(queue);
     return AudioQueueDispose(queue, immediate);
 }
 DYLD_INTERPOSE(AudioQueueDispose_new, AudioQueueDispose);
 
 OSStatus AudioQueueAllocateBuffer_new(AudioQueueRef queue, UInt32 size, AudioQueueBufferRef *out_buffer) {
     OSStatus status = AudioQueueAllocateBuffer(queue, size, out_buffer);
-    if (status == noErr && atomic_load(&audio_follow)) {
-        os_unfair_lock_lock(&queues_lock);
-        for (int i = 0; i < Max_Queues; i++) {
-            if (queues[i] != queue)
-                continue;
-            for (int b = 0; b < Max_Buffers; b++) {
-                if (buffers[i][b] == NULL) {
-                    buffers[i][b] = *out_buffer;
-                    break;
-                }
-            }
-        }
-        os_unfair_lock_unlock(&queues_lock);
-    }
+    if (status == noErr && atomic_load(&audio_follow))
+        remember_buffer(queue, *out_buffer);
     return status;
 }
 DYLD_INTERPOSE(AudioQueueAllocateBuffer_new, AudioQueueAllocateBuffer);

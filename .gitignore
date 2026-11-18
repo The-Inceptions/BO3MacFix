@@ -19,6 +19,7 @@ source/checkpoint_lua.h
 tests/test_stream_stall_recovery
 tests/test_navmesh_convert
 tests/test_utilities
+tests/test_qol_audio
 tests/test_display_policy
 tests/test_sdl_displays
 tests/test_prepatch

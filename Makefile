@@ -86,6 +86,8 @@ TEST_TARGETS += tests/test_t7o_small
 TEST_TARGETS += tests/test_navmesh_convert
 # utilities.c's file and text helpers: Mac binaries told from others without keeping files open, hex, file names
 TEST_TARGETS += tests/test_utilities
+# AudioFollowsDefault's moves of the game's audio queues, against CoreAudio stand-ins that wait as CoreAudio does (qol.c)
+TEST_TARGETS += tests/test_qol_audio
 
 DEBUG   ?= 0
 ARCH    ?= x86_64
@@ -579,6 +581,12 @@ tests/test_t7o_small: tests/test_t7o_small.c source/t7o_small.c source/t7o_small
 tests/test_navmesh_convert: tests/test_navmesh_convert.c source/navmesh_convert.c source/navmesh_convert.h
 	$(CLANG) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 		-o $@ tests/test_navmesh_convert.c source/navmesh_convert.c
+
+# qol.c's audio moves (the test includes the source): a made-up SDL audio thread and CoreAudio stand-ins
+tests/test_qol_audio: tests/test_qol_audio.c source/qol.c source/qol.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined \
+		-fno-sanitize-recover=undefined -mmacosx-version-min=$(OSXVER) -framework AudioToolbox -framework CoreAudio \
+		-framework CoreFoundation -o $@ tests/test_qol_audio.c
 
 # utilities.c's helpers (the test includes the source)
 tests/test_utilities: tests/test_utilities.c source/utilities.c source/utilities.h
