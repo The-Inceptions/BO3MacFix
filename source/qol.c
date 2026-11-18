@@ -10,6 +10,9 @@
 #include <dlfcn.h>
 #include <os/lock.h>
 #include <mach-o/dyld.h>
+#include <dispatch/dispatch.h>
+#include <notify.h>
+#include <time.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudio.h>
 #include "display_follow.h"
@@ -106,8 +109,18 @@ static OSStatus (*queue_enqueue)(AudioQueueRef queue, AudioQueueBufferRef buffer
 static OSStatus (*queue_start)(AudioQueueRef queue, const AudioTimeStamp *start) = AudioQueueStart;
 static CFStringRef (*copy_default_uid)(void) = copy_default_output_uid;
 
-// one queue to the default output, on the thread its callbacks come on; nothing if it was disposed meanwhile
-static void move_queue(AudioQueueRef queue) {
+static uint64_t now_ns(void) {
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+}
+static double ms_since(uint64_t start_ns) {
+    return (double)(now_ns() - start_ns) / 1e6;
+}
+static atomic_uint moves_done; // for the log
+
+// one queue to the default output, on the thread its callbacks come on; nothing if it was disposed meanwhile. asked_ns:
+// when the listener handed it over
+static void move_queue(AudioQueueRef queue, uint64_t asked_ns) {
+    double waited_ms = ms_since(asked_ns);
     CFStringRef uid = copy_default_uid();
     if (uid == NULL)
         return;
@@ -120,9 +133,12 @@ static void move_queue(AudioQueueRef queue) {
             continue;
         // the device can only change while the queue is stopped. Stopping hands its buffers back to SDL's
         // callback, which queues them again once it's started.
-        OSStatus status = queue_stop(queue, true);
-        if (status == noErr)
-            status = queue_set_property(queue, kAudioQueueProperty_CurrentDevice, &uid, sizeof(uid));
+        uint64_t stop_began = now_ns();
+        OSStatus stopped = queue_stop(queue, true);
+        double stop_ms = ms_since(stop_began);
+        OSStatus device = stopped == noErr ? queue_set_property(queue, kAudioQueueProperty_CurrentDevice, &uid,
+                                                                sizeof(uid))
+                                           : -1;
         // changing the device drops the buffers SDL had queued, so queue them again (silent) to get its callback
         // going; ones still queued just fail
         for (int b = 0; b < Max_Buffers && entry->buffers[b] != NULL; b++) {
@@ -132,7 +148,13 @@ static void move_queue(AudioQueueRef queue) {
             queue_enqueue(queue, buffer, 0, NULL);
         }
         OSStatus started = queue_start(queue, NULL);
-        printf("BO3MacFix: moved the game's audio to the default output %s (%d, %d)\n", name, (int)status, (int)started);
+        // where and when it ran: on the queue's own thread (SDL's is "AudioQueue thread"), soon after it was asked
+        char thread[64] = "";
+        pthread_getname_np(pthread_self(), thread, sizeof(thread));
+        printf("BO3MacFix: moved the game's audio to the default output %s (stop %d, device %d, start %d; the stop took "
+               "%.0f ms) on its thread \"%s\"%s, %.0f ms after the move was asked (move %u)\n", name, (int)stopped,
+               (int)device, (int)started, stop_ms, thread, pthread_main_np() ? " (the main thread)" : "", waited_ms,
+               atomic_fetch_add(&moves_done, 1) + 1);
     }
     os_unfair_lock_unlock(&queues_lock);
     CFRelease(uid);
@@ -145,8 +167,9 @@ static void move_queues_to_default_output(void) {
         AudioQueueRef queue = queues[i].queue;
         if (queue == NULL)
             continue;
+        uint64_t asked = now_ns();
         CFRunLoopPerformBlock(queues[i].run_loop, queues[i].run_loop_mode, ^{
-            move_queue(queue);
+            move_queue(queue, asked);
         });
         CFRunLoopWakeUp(queues[i].run_loop);
     }
@@ -215,12 +238,79 @@ static void forget_queue(AudioQueueRef queue) {
     }
 }
 
+// ---- test hooks (BO3MACFIX_TESTHOOKS=1), so that a game check can drive the moves: CoreAudio calls the listener only
+// when the default output really changes
+//
+// com.bo3macfix.test.audiomove does what the default output's listener does, as many times as the notification's
+// value says (at least once, at most 8), on the main queue (where CoreAudio calls the listener):
+//     notifyutil -s com.bo3macfix.test.audiomove 2; notifyutil -p com.bo3macfix.test.audiomove
+// With one output device (this Mac has one) the move goes to the device the sound is on already; it still runs whole.
+// With BO3MACFIX_AUDIOMOVEATSETUP=1 as well, once, when the game's SDL makes its audio queue, a move is asked from
+// another thread, and SDL's set-up goes on only once that ask is under way: the moment that froze the game for 15 s
+// before (above).
+static atomic_bool move_at_setup, setup_ask_under_way;
+static atomic_long setup_ask_ms = -1; // how long that ask's listener took (for the tests)
+
+static void ask_for_moves(unsigned count) {
+    for (unsigned i = 0; i < count; i++)
+        default_output_changed(kAudioObjectSystemObject, 0, NULL, NULL);
+}
+
+static void *ask_during_setup(void *unused) {
+    (void)unused;
+    uint64_t start = now_ns();
+    atomic_store(&setup_ask_under_way, true);
+    ask_for_moves(1);
+    double took = ms_since(start);
+    atomic_store(&setup_ask_ms, (long)took);
+    printf("audio tests: a move asked from another thread while the game's SDL sets its audio queue up (the listener "
+           "took %.0f ms)\n", took);
+    return NULL;
+}
+
+// a queue is made (on the thread its callbacks will come on)
+static void queue_made(AudioQueueRef queue, CFRunLoopRef run_loop, CFStringRef run_loop_mode) {
+    remember_queue(queue, run_loop, run_loop_mode);
+    if (run_loop == NULL || !atomic_exchange(&move_at_setup, false))
+        return;
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, ask_during_setup, NULL) != 0)
+        return;
+    pthread_detach(thread);
+    // the set-up goes on once the ask is under way, and a little after (as CoreAudio's notification would come)
+    for (int i = 0; i < 2000 && !atomic_load(&setup_ask_under_way); i++)
+        usleep(1000);
+    usleep(20000);
+}
+
+static void audio_test_hooks(void) {
+    int token;
+    uint32_t status = notify_register_dispatch("com.bo3macfix.test.audiomove", &token, dispatch_get_main_queue(),
+                                               ^(int t) {
+        uint64_t value = 0;
+        notify_get_state(t, &value);
+        unsigned count = value == 0 ? 1 : value > 8 ? 8 : (unsigned)value;
+        uint64_t start = now_ns();
+        ask_for_moves(count);
+        printf("audio tests: asked for %u move%s of the game's audio, as the default output's listener does (the "
+               "listener took %.0f ms)\n", count, count == 1 ? "" : "s", ms_since(start));
+    });
+    if (status != NOTIFY_STATUS_OK) {
+        printf("audio tests: couldn't listen for com.bo3macfix.test.audiomove\n");
+        return;
+    }
+    const char *at_setup = getenv("BO3MACFIX_AUDIOMOVEATSETUP");
+    atomic_store(&move_at_setup, at_setup != NULL && atoi(at_setup) != 0);
+    printf("audio tests: com.bo3macfix.test.audiomove asks for moves of the game's audio%s\n",
+           atomic_load(&move_at_setup) ? "; one is asked while the game's SDL sets its audio queue up" : "");
+}
+
 OSStatus AudioQueueNewOutput_new(const AudioStreamBasicDescription *format, AudioQueueOutputCallback callback,
                                  void *user_data, CFRunLoopRef run_loop, CFStringRef run_loop_mode, UInt32 flags,
                                  AudioQueueRef *out_queue) {
     OSStatus status = AudioQueueNewOutput(format, callback, user_data, run_loop, run_loop_mode, flags, out_queue);
     if (status == noErr && atomic_load(&audio_follow))
-        remember_queue(*out_queue, run_loop, run_loop_mode);
+        queue_made(*out_queue, run_loop, run_loop_mode);
     return status;
 }
 DYLD_INTERPOSE(AudioQueueNewOutput_new, AudioQueueNewOutput);
@@ -278,6 +368,9 @@ void qol_init(int exit_fix_setting, int audio_follow_setting) {
         if (AudioObjectAddPropertyListener(kAudioObjectSystemObject, &address, default_output_changed, NULL) == noErr) {
             atomic_store(&audio_follow, true);
             printf("BO3MacFix: game audio follows the default output device (AudioFollowsDefault)\n");
+            const char *hooks = getenv("BO3MACFIX_TESTHOOKS");
+            if (hooks != NULL && atoi(hooks) != 0)
+                audio_test_hooks();
         }
     }
 }

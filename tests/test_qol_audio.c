@@ -122,8 +122,9 @@ static AudioQueueBuffer buffer_records[3] = {
 
 static void *sdl_audio_thread(void *unused) {
     (void)unused;
+    pthread_setname_np("AudioQueue thread"); // SDL's name for it (0x10163bd3b)
     queue_run_loop = CFRunLoopGetCurrent();
-    remember_queue(Queue, queue_run_loop, kCFRunLoopDefaultMode); // what AudioQueueNewOutput_new keeps
+    queue_made(Queue, queue_run_loop, kCFRunLoopDefaultMode); // what AudioQueueNewOutput_new does
     atomic_store(&registered, 1);
     // during the set-up, the default output changes: SDL goes on as soon as the listener has been asked
     if (phase == Setup)
@@ -253,6 +254,44 @@ static void test_disposed_first(void) {
     pthread_join(thread, NULL);
 }
 
+// The test hook BO3MACFIX_AUDIOMOVEATSETUP: when SDL makes its queue, a move is asked from another thread, and the
+// set-up goes on once that ask is under way. The listener returns at once, and the move runs on SDL's thread after
+// the set-up, with its three buffers, once only.
+static void test_hook_at_setup(void) {
+    reset(Running);
+    unsigned before = atomic_load(&moves_done);
+    atomic_store(&move_at_setup, true);
+    atomic_store(&setup_ask_ms, -1);
+    pthread_t thread;
+    pthread_create(&thread, NULL, sdl_audio_thread, NULL);
+    CHECK(wait_for(&starts, 1, 3.0));
+    CHECK(atomic_load(&setup_ask_ms) >= 0 && atomic_load(&setup_ask_ms) < 500);
+    CHECK(stops == 1 && stops_elsewhere == 0 && enqueued == 3 && starts == 1);
+    CHECK(atomic_load(&moves_done) == before + 1);
+    CHECK(!atomic_load(&move_at_setup)); // once
+    atomic_store(&closing, 1);
+    pthread_join(thread, NULL);
+    forget_queue(Queue);
+}
+
+// com.bo3macfix.test.audiomove with the value 2: two moves asked at once run one after the other on SDL's thread
+static void test_hook_two_at_once(void) {
+    reset(Running);
+    unsigned before = atomic_load(&moves_done);
+    pthread_t thread;
+    pthread_create(&thread, NULL, sdl_audio_thread, NULL);
+    CHECK(wait_for(&turning, 1, 2.0) && turns_within(queue_run_loop, 2.0));
+    double start = now();
+    ask_for_moves(2);
+    CHECK(now() - start < 0.5);
+    CHECK(wait_for(&starts, 2, 3.0));
+    CHECK(stops == 2 && stops_elsewhere == 0 && set_devices == 2 && enqueued == 6 && starts == 2);
+    CHECK(atomic_load(&moves_done) == before + 2);
+    atomic_store(&closing, 1);
+    pthread_join(thread, NULL);
+    forget_queue(Queue);
+}
+
 // a queue whose callbacks come on CoreAudio's own thread isn't kept, and nothing is posted for it
 static void test_without_run_loop(void) {
     reset(Running);
@@ -275,6 +314,8 @@ int main(void) {
     test_close_while_turning();
     test_gone();
     test_disposed_first();
+    test_hook_at_setup();
+    test_hook_two_at_once();
     test_without_run_loop();
     if (failures != 0) {
         printf("test_qol_audio: %d failed\n", failures);
