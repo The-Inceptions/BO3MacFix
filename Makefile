@@ -10,6 +10,8 @@ TEST_TARGETS = tests/test_stream_stall_recovery tests/test_display_policy tests/
 TEST_TARGETS += tests/test_launch_args
 # IdleDisplaySleep's decisions (display_sleep.c)
 TEST_TARGETS += tests/test_display_sleep
+# VoiceMicrophone: the voice system's start of recording refused or left alone (voice_mic.c)
+TEST_TARGETS += tests/test_voice_mic
 # StartWithMod: which mods are remembered and when, the launcher's decisions, the marker of a start given the mod, its
 # notices, and the game's half against a made-up loaded mod (start_mod.c, start_mod_game.c)
 TEST_TARGETS += tests/test_start_mod
@@ -143,6 +145,8 @@ SOURCES += source/frame_limit.c source/app_focus.m
 # IdleDisplaySleep: when the game's display sleep assertion goes (display_sleep.c, plain C) and the glue that finds it,
 # lets it go and declares a controller's input as activity (display_sleep_mac.c)
 SOURCES += source/display_sleep.c source/display_sleep_mac.c
+# VoiceMicrophone: the voice system's start of recording refused, so Steam keeps the microphone closed (voice_mic.c)
+SOURCES += source/voice_mic.c
 # how many refreshes each frame stayed on screen, for FrameStats with BO3MACFIX_FRAMEPACESTATS=1 (frame_pace.c)
 SOURCES += source/frame_pace.c
 # DynamicResolution's controller (dynres.c), plain C like frame_limit.c
@@ -637,6 +641,11 @@ tests/test_frame_pace: tests/test_frame_pace.c source/frame_pace.c source/frame_
 
 tests/test_frame_limit: tests/test_frame_limit.c source/frame_limit.c source/frame_limit.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_frame_limit.c source/frame_limit.c
+
+# VoiceMicrophone 0 refuses the voice system's start of recording, 1 hooks nothing (voice_mic.c, against a made-up game)
+tests/test_voice_mic: tests/test_voice_mic.c source/voice_mic.c source/voice_mic.h source/offsets.h source/dobby.h
+	$(CLANG) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined \
+		-fno-sanitize-recover=undefined -o $@ tests/test_voice_mic.c
 
 # when IdleDisplaySleep lets the display sleep and declares a controller's input (display_sleep.c)
 tests/test_display_sleep: tests/test_display_sleep.c source/display_sleep.c source/display_sleep.h

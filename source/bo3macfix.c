@@ -67,6 +67,7 @@
 #include "gpu_tweaks.h"
 #include "havok.h"
 #include "utilities.h"
+#include "voice_mic.h"
 #include "navmesh_convert.h"
 #include "notch.h"
 #include "notices.h"
@@ -1278,6 +1279,9 @@ __attribute__((constructor)) static void dylib_main() {
     // a surface whose material the renderer hasn't sorted into its table yet is left out of the frame instead of
     // crashing the game (MaterialSortGuard, on by default), see material_sort_guard.c
     material_sort_guard_init(game_base_address, read_int_setting_or_env("MaterialSortGuard", 1));
+    // keep the microphone closed instead of having Steam record it for the whole game (VoiceMicrophone 0; 1, the
+    // default, is the game's own path), see voice_mic.c
+    voice_mic_init(game_base_address, read_int_setting_or_env("VoiceMicrophone", 1));
 
     // Metal frame queue depth and present pacing from settings.ini or at env, see gpu_tweaks.c
     gpu_tweaks_init(read_int_setting("FramesInFlight", 2), read_int_setting("FramePacingFPS", 0), checked_code_patch);
