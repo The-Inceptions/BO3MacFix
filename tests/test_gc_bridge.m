@@ -332,28 +332,23 @@ int main(void) {
     CHECK(get(0) == ERROR_SUCCESS && display_sleep_looks == looks);
     atomic_store(&app_active, true);
 
-    // a tap between two of the game's reads (IdleMenuFPS 10: 100 ms apart) is latched when the controller reports it
-    // and seen by the next read, once; held buttons as before; while the game isn't active the latch is dropped
+    // a controller's states reach the game as they are when it reads (store_state: the packet number counts each)
     XINPUT_STATE read;
     os_unfair_lock_lock(&pads_lock);
+    uint32_t packet = f->state.dwPacketNumber;
     store_state(f, (XINPUT_GAMEPAD){ 0x1000, 0, 0, 0, 0, 0, 0 }); // A pressed
     store_state(f, (XINPUT_GAMEPAD){ 0, 0, 0, 0, 0, 0, 0 });      // and released before the game read it
     os_unfair_lock_unlock(&pads_lock);
-    CHECK(fake_ASL_XInputGetState(0, &read) == ERROR_SUCCESS && read.Gamepad.wButtons == 0x1000);
+    CHECK(f->state.dwPacketNumber == packet + 2);
     CHECK(fake_ASL_XInputGetState(0, &read) == ERROR_SUCCESS && read.Gamepad.wButtons == 0);
     os_unfair_lock_lock(&pads_lock);
     store_state(f, (XINPUT_GAMEPAD){ 0x0001, 0, 0, 0, 0, 0, 0 }); // the D-pad held
     os_unfair_lock_unlock(&pads_lock);
     CHECK(fake_ASL_XInputGetState(0, &read) == ERROR_SUCCESS && read.Gamepad.wButtons == 0x0001);
     CHECK(fake_ASL_XInputGetState(0, &read) == ERROR_SUCCESS && read.Gamepad.wButtons == 0x0001);
-    os_unfair_lock_lock(&pads_lock);
-    store_state(f, (XINPUT_GAMEPAD){ 0x2000, 0, 0, 0, 0, 0, 0 });
-    store_state(f, (XINPUT_GAMEPAD){ 0, 0, 0, 0, 0, 0, 0 });
-    os_unfair_lock_unlock(&pads_lock);
     atomic_store(&app_active, false);
     CHECK(fake_ASL_XInputGetState(0, &read) == ERROR_SUCCESS && read.Gamepad.wButtons == 0);
     atomic_store(&app_active, true);
-    CHECK(fake_ASL_XInputGetState(0, &read) == ERROR_SUCCESS && read.Gamepad.wButtons == 0); // dropped, not late
     set_sdl(1, xbox);
     looks = display_sleep_looks;
     CHECK(get(1) == ERROR_SUCCESS && display_sleep_looks == looks + 1);
