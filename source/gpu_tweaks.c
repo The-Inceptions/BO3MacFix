@@ -1020,8 +1020,10 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch) 
     const char *detail = getenv("BO3MACFIX_FRAMESTATSDETAIL");
     frame_stats_detail = detail != NULL && atoi(detail) != 0;
     // the threads' CPU time by name and the time in the server's and the client's frame, two more lines a window
-    if (frame_stats_detail)
+    if (frame_stats_detail) {
         thread_stats_init();
+        thread_stats_set_contexts((const volatile uint64_t *)(game_base_address + ADDR_Sys_ThreadIds));
+    }
     printf("logging frame stats every %i s%s\n", seconds, frame_pace_stats ? ", and when the frames are shown" : "");
 }
 

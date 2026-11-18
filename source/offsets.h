@@ -39,6 +39,7 @@
 #define ADDR_hksi_luaL_unref 0x1445693 // func - void (lua_State *, int index, int ref); 0x147488a jumps to it
 #define ADDR_hks_pushnamedcclosure 0x1476385 // func
 #define ADDR_R_TrackTextureMemory 0x126dad2 // func - name is a guess
+#define ADDR_Sys_ThreadIds 0x2354c00 // uint64_t[23] - each game thread context's thread number (Aspyr's GetCurrentThreadId 0x1001116c0, the n of "Win (WinID n)"), written by Sys_CreateThread 0x100d05745 (func, context); names 0_Main 2_Backend 1_Worker0-7 3_Server Database Stream StreamAsync "Sound Mix" ... at 0x101b610d0 (Sys_GetThreadContextName 0x100d05fc8, Sys_GetThreadContext 0x100d05fe5)
 #define ADDR_ASL_SleepEx 0x111752 // func - Aspyr's Sleep/SleepEx(milliseconds, alertable)
 #define ADDR_Scr_LoadSourceText 0x149347d // func - void (script *), loads its source text from scriptsrc.zip (the mod's zone_source/, else zone/) into script+0x28, for script error call stacks - name is a guess
 #define ADDR_Scr_ErrorInternal 0x11a2292 // func - void (scriptInstance_t inst), throws scrVarPub's error_message: with developer on it prints "throwing script exception" first, then longjmps

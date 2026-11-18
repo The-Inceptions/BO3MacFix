@@ -2,6 +2,7 @@
 // samples, biggest first, roles, the rest summed), the phases' line, and this process's own threads read by name with
 // their CPU time, which is what the game's log shows.
 #include <pthread.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 #include "../source/thread_stats_game.c"
@@ -179,10 +180,70 @@ static void test_in_process(void) {
     CHECK(!window_first);
 }
 
+// a thread Aspyr named "Win (WinID n)" gets its game context's name when the game's table has its number
+static volatile int naming = 1;
+static void *named_thread(void *argument) {
+    pthread_setname_np((const char *)argument);
+    while (naming)
+        usleep(1000);
+    return NULL;
+}
+
+static void test_context_names(void) {
+    char name[64] = "Win (WinID 14)";
+    thread_stats_context_name(name, sizeof(name)); // no table yet: unchanged
+    CHECK(strcmp(name, "Win (WinID 14)") == 0);
+    volatile uint64_t table[23] = { 0 };
+    table[0] = 2;   // 0_Main
+    table[1] = 14;  // 2_Backend
+    table[10] = 21; // 3_Server
+    table[22] = 9;  // Input, the last
+    thread_stats_set_contexts(table);
+    thread_stats_context_name(name, sizeof(name));
+    CHECK(strcmp(name, "Win (WinID 14) 2_Backend") == 0);
+    char server[64] = "Win (WinID 21)", input[64] = "Win (WinID 9)", unknown[64] = "Win (WinID 7)";
+    char zero[64] = "Win (WinID 0)", other[64] = "JQ Worker 1 (Processor 3)", near[64] = "Win (WinID 140)";
+    thread_stats_context_name(server, sizeof(server));
+    thread_stats_context_name(input, sizeof(input));
+    thread_stats_context_name(unknown, sizeof(unknown));
+    thread_stats_context_name(zero, sizeof(zero));
+    thread_stats_context_name(other, sizeof(other));
+    thread_stats_context_name(near, sizeof(near));
+    CHECK(strcmp(server, "Win (WinID 21) 3_Server") == 0);
+    CHECK(strcmp(input, "Win (WinID 9) Input") == 0);
+    CHECK(strcmp(unknown, "Win (WinID 7)") == 0);
+    CHECK(strcmp(zero, "Win (WinID 0)") == 0); // an empty entry of the table is no thread
+    CHECK(strcmp(other, "JQ Worker 1 (Processor 3)") == 0);
+    // only Aspyr's "Win (WinID n)" names carry the number: a worker's own numbers are no thread number, even one the
+    // table has (2, Main's here)
+    char worker[64] = "JQ Worker 2 (Processor 4)";
+    thread_stats_context_name(worker, sizeof(worker));
+    CHECK(strcmp(worker, "JQ Worker 2 (Processor 4)") == 0);
+    CHECK(strcmp(near, "Win (WinID 140)") == 0);
+    // a name that would be too long is cut at the field's end
+    char tight[20] = "Win (WinID 14)";
+    thread_stats_context_name(tight, sizeof(tight));
+    CHECK(strcmp(tight, "Win (WinID 14) 2_Ba") == 0);
+    // in the process: a thread named so is listed with its context
+    pthread_t thread;
+    CHECK(pthread_create(&thread, NULL, named_thread, (void *)"Win (WinID 21)") == 0);
+    usleep(20000);
+    thread_sample_t sampled[Most_Threads];
+    int count = sample_threads(sampled, Most_Threads);
+    bool found = false;
+    for (int i = 0; i < count; i++)
+        found |= strcmp(sampled[i].name, "Win (WinID 21) 3_Server") == 0;
+    CHECK(found);
+    naming = 0;
+    pthread_join(thread, NULL);
+    thread_stats_set_contexts(NULL);
+}
+
 int main(void) {
     test_threads_line();
     test_phases_line();
     test_in_process();
+    test_context_names();
     if (failures == 0)
         printf("thread_stats: all tests passed\n");
     return failures != 0;

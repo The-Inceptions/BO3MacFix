@@ -1,9 +1,10 @@
 // FrameStats' detail (BO3MACFIX_FRAMESTATSDETAIL=1): where the game's CPU time goes, two more lines each window.
 // - "frame stats: threads": each thread's CPU time over the window, by the name the thread gave itself ("Main",
-//   "JQ Worker n (Processor m)", "Win (WinID n)", Apple's and the library's threads), tagged with what the library saw
-//   it do: [present] the thread that presents (the render thread), [server] the one that runs SV_Frame, [client] the
-//   one that runs the client's frame. Read from the process's own threads (task_threads and thread_info on
-//   mach_task_self(): nothing attaches to anything), once a window, on the render thread.
+//   "JQ Worker n (Processor m)", "Win (WinID n)", Apple's and the library's threads), a "Win (WinID n)" thread also by
+//   the game's own name for its job ("Win (WinID 12) 2_Backend": the render backend; 3_Server, Database, Sound Mix,
+//   Window ...), tagged with what the library saw it do: [present] the thread that presents, [server] the one that
+//   runs SV_Frame, [client] the one that runs the client's frame. Read from the process's own threads (task_threads
+//   and thread_info on mach_task_self(): nothing attaches to anything), once a window, on the presenting thread.
 // - "frame stats: phases": the time a frame spends in the server's frame (SV_Frame) and the client's frame (CL_Frame),
 //   wall clock (the thread's own CPU clock, CLOCK_THREAD_CPUTIME_ID, hardly moves within a call under Rosetta: 4 us
 //   for 200 us of spinning, so it isn't used), timed in the co-op pause's hooks on those two functions
@@ -61,6 +62,12 @@ int thread_stats_format_phases(const phase_sum_t sums[Phase_Count], int frames, 
 
 // turns the two lines on (FrameStats' detail); before this nothing here runs or reads a clock
 void thread_stats_init(void);
+
+// the game's table of its threads' numbers by context (Sys_CreateThread's, see thread_stats_game.c): the threads'
+// line then names each "Win (WinID n)" thread by its context too
+void thread_stats_set_contexts(const volatile uint64_t *ids);
+// adds the game context of a thread named "Win (WinID n)" to its name, when the table has n (see thread_stats_game.c)
+void thread_stats_context_name(char *name, size_t size);
 
 // whether the phases are timed: the co-op pause's hooks ask this before anything else, so with the detail off they do
 // exactly what they did

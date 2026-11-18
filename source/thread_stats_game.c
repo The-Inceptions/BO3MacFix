@@ -24,6 +24,38 @@ void thread_stats_init(void) {
     thread_stats_phases_on = true;
 }
 
+// The game's thread contexts, in its own order and with its own names (the table of names at 0x101b610d0, which
+// Sys_GetThreadContextName 0x100d05fc8 reads). Sys_CreateThread (0x100d05745) stores the number of each thread it makes
+// at 0x102354c00 + 8 * context; that number is Aspyr's GetCurrentThreadId (0x1001116c0), the same one Aspyr puts into
+// the thread's name "Win (WinID n)". Aspyr hands the numbers out as threads first need one, so which number a context
+// gets differs between runs (the user's crash reports and the test runs disagree on WinID 7, for one): the threads'
+// line names them by context too.
+static const char *const context_names[] = { "0_Main", "2_Backend", "1_Worker0", "1_Worker1", "1_Worker2", "1_Worker3",
+                                             "1_Worker4", "1_Worker5", "1_Worker6", "1_Worker7", "3_Server",
+                                             "Database", "Stream", "StreamAsync", "Sound Mix", "Video Decode",
+                                             "Sound Decode", "WebM Decode", "Netchan", "Devhost", "Save Profile",
+                                             "Window", "Input" };
+#define Contexts ((int)(sizeof(context_names) / sizeof(context_names[0])))
+static const volatile uint64_t *context_ids = NULL; // the game's table, NULL outside the game
+
+void thread_stats_set_contexts(const volatile uint64_t *ids) {
+    context_ids = ids;
+}
+
+// "Win (WinID 14)" becomes "Win (WinID 14) 2_Backend" when the game's table has 14 for a context
+void thread_stats_context_name(char *name, size_t size) {
+    unsigned int number = 0;
+    if (context_ids == NULL || sscanf(name, "Win (WinID %u)", &number) != 1 || number == 0)
+        return;
+    for (int context = 0; context < Contexts; context++) {
+        if (context_ids[context] != number)
+            continue;
+        size_t length = strnlen(name, size);
+        snprintf(name + length, size - length, " %s", context_names[context]);
+        return;
+    }
+}
+
 static uint64_t current_thread_id(void) {
     uint64_t id = 0;
     pthread_threadid_np(NULL, &id);
@@ -75,6 +107,7 @@ static int sample_threads(thread_sample_t *samples, int most) {
             samples[taken].cpu_ns = extended.pth_user_time + extended.pth_system_time;
             memcpy(samples[taken].name, extended.pth_name, sizeof(samples[taken].name));
             samples[taken].name[sizeof(samples[taken].name) - 1] = '\0';
+            thread_stats_context_name(samples[taken].name, sizeof(samples[taken].name));
             taken++;
         }
         mach_port_deallocate(mach_task_self(), threads[i]);
