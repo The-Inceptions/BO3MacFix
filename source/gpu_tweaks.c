@@ -232,8 +232,9 @@ static bool dynres_start_low_pending = false;
 // and the user's own value then, for config.ini (gpu_tweaks_dynres_held_base)
 static atomic_int dynres_written = 0, dynres_base = 0;
 static atomic_bool dynres_reconfigure = false; // the setting changed in the menu: start again from the user's value
-// BO3MACFIX_DYNRESTEST="100,85,70" cycles through these every BO3MACFIX_DYNRESTESTSECONDS (8) instead, for testing
-static int dynres_test[8], dynres_test_count = 0, dynres_test_seconds = 8;
+// BO3MACFIX_DYNRESTEST="100,85,70" cycles through these every BO3MACFIX_DYNRESTESTSECONDS (8) instead, for testing;
+// with BO3MACFIX_DYNRESTESTFRAMES=n every n frames (dynres_test_fast_tick)
+static int dynres_test[8], dynres_test_count = 0, dynres_test_seconds = 8, dynres_test_frames = 0;
 
 static char *scene_multiplier_dvar(void) {
     return *(char *volatile *)(game_base_address + ADDR_dvar_r_sceneResolutionMultiplier);
@@ -264,8 +265,15 @@ static void dynres_pressure_event(unsigned long events) {
 
 // macOS's memory pressure events, from the first frame DynamicResolution runs. With BO3MACFIX_TESTHOOKS=1, also
 // com.bo3macfix.test.mempressure: `notifyutil -s com.bo3macfix.test.mempressure 2` (warn; 1 normal) then `notifyutil -p`
-// it, as if macOS sent that event.
+// it, as if macOS sent that event. BO3MACFIX_DYNRESPRESSURE=1 (a test switch) acts as if macOS reported memory
+// pressure for the whole run: nothing is kept, so every step makes its set and the engine frees the one before.
 static void dynres_pressure_watch(void) {
+    const char *forced = getenv("BO3MACFIX_DYNRESPRESSURE");
+    if (forced != NULL && atoi(forced) != 0) {
+        printf("dynamic resolution: BO3MACFIX_DYNRESPRESSURE, as if macOS reported memory pressure all the time\n");
+        dynres_pressure_event(DISPATCH_MEMORYPRESSURE_WARN);
+        return;
+    }
     // the level now (the source only tells changes): 1 normal, 2 warn, 4 critical, the DISPATCH_MEMORYPRESSURE_* bits
     int level = 0;
     size_t length = sizeof(level);
@@ -306,11 +314,69 @@ static bool rt_sets_read(uint32_t sizes[Dynres_Sets], uint64_t last_use[Dynres_S
     return true;
 }
 
-// each frame: learn the sets that appear right after a step, and set the last use of those sizes' sets to the frame
-// counter, so the engine's lookup doesn't free them after 11 frames. Only the last use is written, never a size or a
-// render target: which sets are valid stays the engine's own (a set is in use while its size isn't 0). Returns how
-// many sets appeared; *view_3d says whether the engine's lookup used a set in the last 2 frames (the 3D view renders),
-// not counting the last uses this wrote itself.
+// BO3MACFIX_DYNRESKEEPNEWEST=1, a test switch (off by default): hold the kept sets at the newest frame, as before
+// (dynres.h, Dynres_Keep_Age), to compare
+static int dynres_keep_newest = -1;
+
+// what the engine did to its sets since the last frame (dynres_table_changes): a set it took while all 8 were in
+// use is always said (rare, and the frame being drawn may still read it); with BO3MACFIX_DYNRESDEBUG=1 also each set
+// made, freed by the sweep or rebuilt
+static void dynres_log_changes(const uint32_t sizes[Dynres_Sets], uint64_t frame) {
+    static bool seen = false;
+    static uint32_t seen_sizes[Dynres_Sets];
+    static uint64_t seen_use[Dynres_Sets], seen_frame;
+    static int taken = 0, taken_young = 0, debug_lines = 0, debug = -1;
+    if (debug < 0)
+        debug = getenv("BO3MACFIX_DYNRESDEBUG") != NULL;
+    uint64_t *use = (uint64_t *)(game_base_address + ADDR_rt_set_last_use);
+    if (seen) {
+        dynres_set_change_t change[Dynres_Sets];
+        dynres_table_changes(seen_sizes, seen_use, sizes, frame, change);
+        for (int i = 0; i < Dynres_Sets; i++) {
+            int w0 = (int)(seen_sizes[i] >> 16), h0 = (int)(seen_sizes[i] & 0xffff);
+            int w = (int)(sizes[i] >> 16), h = (int)(sizes[i] & 0xffff);
+            // its age at the last look; the engine took it a frame or so later. A view using it in between would
+            // have made it the newest set, which the engine takes only when every set was used in that frame.
+            long long age = seen_use[i] <= seen_frame ? (long long)(seen_frame - seen_use[i]) : 0;
+            long long now_age = (long long)(frame - seen_use[i]);
+            if (change[i] == Dynres_Set_Taken) {
+                bool young = age <= Dynres_In_Flight_Age;
+                taken++;
+                taken_young += young;
+                if (taken <= 3 || (taken & (taken - 1)) == 0)
+                    printf("dynamic resolution: the engine took set %i (%ix%i, last used %lld frames before) for "
+                           "%ix%i, all 8 sets being in use%s (%i times, %i of them at most %i frames old)\n", i, w0,
+                           h0, age, w, h, young ? "; the frame being drawn may still read it" : "", taken,
+                           taken_young, Dynres_In_Flight_Age);
+            } else if (debug && change[i] != Dynres_Set_Same && (++debug_lines <= 40 || debug_lines % 64 == 0)) {
+                if (change[i] == Dynres_Set_Made)
+                    printf("dynamic resolution: the engine made set %i (%ix%i) (%i)\n", i, w, h, debug_lines);
+                else if (change[i] == Dynres_Set_Freed && sizes[i] == 0)
+                    printf("dynamic resolution: the engine freed set %i (%ix%i) %lld frames after its last use "
+                           "(%i)\n", i, w0, h0, now_age, debug_lines);
+                else if (change[i] == Dynres_Set_Freed)
+                    printf("dynamic resolution: the engine freed set %i (%ix%i) %lld frames after its last use and "
+                           "made it %ix%i (%i)\n", i, w0, h0, now_age, w, h, debug_lines);
+                else if (change[i] == Dynres_Set_Rebuilt && i == 0)
+                    printf("dynamic resolution: the engine rebuilt its render targets, set 0 %ix%i (%i)\n", w, h,
+                           debug_lines);
+            }
+        }
+    }
+    seen = true;
+    seen_frame = frame;
+    for (int i = 0; i < Dynres_Sets; i++) {
+        seen_sizes[i] = sizes[i];
+        seen_use[i] = __atomic_load_n(&use[i], __ATOMIC_RELAXED); // with the marks this tick wrote
+    }
+}
+
+// each frame: learn the sets that appear right after a step, and hold the sets of those sizes at a last use
+// Dynres_Keep_Age frames old, so the engine's lookup doesn't free them after 11 frames, and frees one of them first
+// when it has to make room (dynres.h). Only the last use is written, never a size or a render target: which sets are
+// valid stays the engine's own (a set is in use while its size isn't 0). Returns how many sets appeared; *view_3d says
+// whether the engine's lookup used a set in the last 2 frames (the 3D view renders), not counting the last uses this
+// wrote itself.
 static int dynres_keep_tick(bool *view_3d) {
     static uint64_t written_use[Dynres_Sets]; // the last use this wrote to each set, 0 for none
     uint32_t sizes[Dynres_Sets];
@@ -320,6 +386,12 @@ static int dynres_keep_tick(bool *view_3d) {
     if (!rt_sets_read(sizes, last_use))
         return 0;
     uint64_t frame = *(volatile uint64_t *)(game_base_address + ADDR_rt_frame_counter);
+    if (dynres_keep_newest < 0) {
+        const char *env = getenv("BO3MACFIX_DYNRESKEEPNEWEST");
+        dynres_keep_newest = env != NULL && atoi(env) != 0;
+        if (dynres_keep_newest)
+            printf("dynamic resolution: BO3MACFIX_DYNRESKEEPNEWEST, holding kept render targets at the newest frame\n");
+    }
     for (int i = 0; i < Dynres_Sets; i++)
         *view_3d |= sizes[i] != 0 && last_use[i] <= frame && frame - last_use[i] <= 2 && last_use[i] != written_use[i];
     if (dynres_learn_frames > 0) {
@@ -354,13 +426,20 @@ static int dynres_keep_tick(bool *view_3d) {
     // the engine frees what isn't refreshed any more after 11 frames; the steps learn the sizes again afterwards
     if (pressure && dynres_keep_release(&dynres_keep))
         printf("dynamic resolution: letting the engine free the kept render targets\n");
-    unsigned mask = dynres_keep_mask(&dynres_keep, sizes, last_use, frame);
-    volatile uint64_t *use = (volatile uint64_t *)(game_base_address + ADDR_rt_set_last_use);
+    int hold_age = dynres_keep_newest ? 0 : Dynres_Keep_Age;
+    unsigned mask = dynres_keep_mask(&dynres_keep, sizes, last_use, frame, hold_age);
+    uint64_t *use = (uint64_t *)(game_base_address + ADDR_rt_set_last_use);
     for (int i = 1; i < Dynres_Sets; i++) {
-        if (mask & (1u << i))
-            use[i] = frame;
-        written_use[i] = mask & (1u << i) ? frame : 0;
+        written_use[i] = 0;
+        if (!(mask & (1u << i)))
+            continue;
+        // only over the mark read above: if the engine marked the set since (a view used it, or the sweep freed it
+        // and set 0), its own mark stays
+        uint64_t expected = last_use[i], mark = frame - (uint64_t)hold_age;
+        if (__atomic_compare_exchange_n(&use[i], &expected, mark, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+            written_use[i] = mark;
     }
+    dynres_log_changes(sizes, frame);
     return appeared;
 }
 
@@ -550,6 +629,36 @@ static void dynres_trace_present(uint64_t now) {
     printf("%s\n", line);
 }
 
+// BO3MACFIX_DYNRESTESTFRAMES=n with BO3MACFIX_DYNRESTEST, a stress test (off by default): after the match's warm-up,
+// the next size of the test's list every n frames, as fast as the engine can change its render target sets. The sizes
+// aren't learned meanwhile (the warm-up's stay kept beside them), so a list of more sizes than the sets the engine has
+// left makes its lookup take a set in use at every step, as when all 8 are taken (dynres_log_changes says which and
+// how old). A line every 2 s.
+static void dynres_test_fast_tick(char *dvar, uint64_t now) {
+    static uint64_t since = 0;
+    static int frames = 0, index = 0, steps = 0;
+    dynres_learn_frames = 0; // the warm-up's sizes stay the kept ones
+    if (since == 0) {
+        since = now;
+        printf("dynamic resolution: test, the next of %i sizes every %i frames from now on\n", dynres_test_count,
+               dynres_test_frames);
+    }
+    if (++frames >= dynres_test_frames) {
+        frames = 0;
+        index = (index + 1) % dynres_test_count;
+        int percent = dynres_test[index];
+        scene_multiplier_set(dvar, percent);
+        atomic_store(&dynres_written, percent == dynres.base ? 0 : percent);
+        steps++;
+    }
+    if (now - since >= 2000000000ULL) {
+        printf("dynamic resolution: test, %i steps in %.1f s (one every %i frames), now %i%%\n", steps,
+               (now - since) / 1e9, dynres_test_frames, dynres_test[index]);
+        since = now;
+        steps = 0;
+    }
+}
+
 // from the render thread, for each frame
 static void dynres_tick(int frame_limit_fps) {
     static uint64_t window_start = 0, last_present = 0, test_start = 0;
@@ -605,6 +714,10 @@ static void dynres_tick(int frame_limit_fps) {
     }
     if (dynres_prewarm_tick(dvar, now, view_3d, appeared)) {
         window_start = 0; // the controller's first window starts after it
+        return;
+    }
+    if (dynres_test_frames > 0 && dynres_test_count > 0 && !dynres_prewarm.armed) { // in a match, after its warm-up
+        dynres_test_fast_tick(dvar, now);
         return;
     }
     if (window_start == 0) {
@@ -683,6 +796,9 @@ static void dynres_read_test(void) {
     env = getenv("BO3MACFIX_DYNRESTESTSECONDS");
     if (env != NULL && atoi(env) > 0)
         dynres_test_seconds = atoi(env);
+    env = getenv("BO3MACFIX_DYNRESTESTFRAMES");
+    if (env != NULL && atoi(env) > 0)
+        dynres_test_frames = atoi(env);
 }
 
 void gpu_tweaks_dynres_init(int setting, code_patch_fn checked_code_patch) {

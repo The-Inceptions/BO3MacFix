@@ -105,12 +105,21 @@ int dynres_target(int display_fps, int frame_limit_fps, int max_fps);
 // Keeping the render targets of DynamicResolution's sizes. The engine's cache of render target sets (offsets.h) frees
 // sets 1-7 once they haven't been used for 11 frames (set 0, ResolutionPercent's own, stays), so every step to a size
 // other than the user's allocated its set again: one frame of 25-67 ms each time, 2-4 frames after the step. The glue
-// learns the size of each set that appears right after a step and, every frame, sets those sets' last use to the
-// engine's frame counter, so a step back to a size it used before finds its set in the cache.
+// learns the size of each set that appears right after a step and, every frame, sets those sets' last use, so a step
+// back to a size it used before finds its set in the cache.
+//
+// The last use it sets is Dynres_Keep_Age frames old, not the newest. When all 8 sets are taken and a view needs
+// another size, the engine's lookup frees the least recently used of sets 1-7 on the spot, without waiting for the
+// render thread (wip/night/rt-rebuild.md), and the render thread draws the frame before with the sets of that frame and
+// of the 3 before it (the view's history of its sets): their last uses are at most 4 frames old when the lookup runs. A
+// kept set marked with the newest frame would never be the least recently used, so the engine's choice would fall on a
+// set the frame being drawn uses. Marked 6 frames old, a kept set nobody draws with goes first, and a set a view really
+// used keeps the engine's own, younger mark (the glue only ever makes a last use younger).
 #define Dynres_Sets 8      // the engine's sets; 0 is never freed
 #define Dynres_Keep_Max 3  // sizes kept (the steps from 95% to 85%), the oldest goes when a 4th comes
-#define Dynres_Keep_Fresh 5 // only a set used in the last 5 frames is kept (the engine frees at 11): one the engine
-                            // already let go is left alone
+#define Dynres_Keep_Age 6  // frames: the age a kept set is held at, between the render thread's 4 and the engine's 11
+#define Dynres_Keep_Fresh 9 // a kept set is held while its last use is at most 9 frames old (the engine frees at 11):
+                            // one older the engine is letting go of, and is left alone
 
 typedef struct {
     uint32_t size[Dynres_Keep_Max]; // width << 16 | height, most recent first; 0 for none
@@ -123,10 +132,40 @@ static inline uint32_t dynres_size(uint16_t width, uint16_t height) {
 // a set of this size appeared after a step: keep it (0, or one already kept, only moves it first)
 void dynres_keep_add(dynres_keep_t *keep, uint32_t size);
 
-// the sets (bit i for set i, 1-7) whose last use to set to the frame counter: in use (size not 0), of a kept size,
-// and used within the last Dynres_Keep_Fresh frames
+// the sets (bit i for set i, 1-7) whose last use to set to frame - hold_age (Dynres_Keep_Age; 0 only for the test
+// switch BO3MACFIX_DYNRESKEEPNEWEST, which holds them at the newest frame as before): in use (size not 0), of a kept
+// size, and last used more than hold_age and at most Dynres_Keep_Fresh frames before frame. A younger one is in use
+// by a view (or already held), whose own mark stays.
 unsigned dynres_keep_mask(const dynres_keep_t *keep, const uint32_t sizes[Dynres_Sets],
-                          const uint64_t last_use[Dynres_Sets], uint64_t frame);
+                          const uint64_t last_use[Dynres_Sets], uint64_t frame, int hold_age);
+
+// The engine's own rules for its sets, which the glue's log and the tests follow (offsets.h, wip/night/rt-rebuild.md).
+#define Dynres_Engine_Frees 11 // the lookup frees sets 1-7 whose last use is this many frames old or more
+#define Dynres_In_Flight_Age 4 // when the main thread's lookup runs, the render thread draws the frame before, whose
+                               // passes read the sets of that frame and of the 3 before it: last used 1 to 4 frames
+                               // before. A set freed at that age is freed under the render thread.
+
+// the set the engine's lookup frees for a size it doesn't have when all 8 sets are taken: the least recently used of
+// sets 1-7, the lower one on a tie (0x100e8d938), whatever its age. -1 while a set is free (size 0).
+int dynres_eviction_victim(const uint32_t sizes[Dynres_Sets], const uint64_t last_use[Dynres_Sets]);
+
+// What the engine did to each of sets 1-7 between two looks at its table (the glue looks once a frame): from the
+// sizes and last uses then and the sizes and frame counter now. A set unused for Dynres_Engine_Frees frames can be
+// freed by the lookup's sweep (and made again for another size). A set in use goes in a rebuild of every render target
+// (the video restart's or the renderer's, which wait for the render thread first and free every set, so a set in use
+// is left free, or set 0 changes size); or the lookup takes it for another size because all 8 were taken: freed and
+// made again on the spot, while the render thread may still draw with it. out[0] is about set 0 (same or rebuilt).
+// Returns how many sets were taken that way.
+typedef enum {
+    Dynres_Set_Same,
+    Dynres_Set_Made,    // was free, now in use
+    Dynres_Set_Freed,   // by the sweep (now free, or made again for another size)
+    Dynres_Set_Rebuilt, // by a rebuild of every render target
+    Dynres_Set_Taken,   // by the lookup's eviction
+} dynres_set_change_t;
+int dynres_table_changes(const uint32_t sizes_before[Dynres_Sets], const uint64_t last_use_before[Dynres_Sets],
+                         const uint32_t sizes_now[Dynres_Sets], uint64_t frame_now,
+                         dynres_set_change_t out[Dynres_Sets]);
 
 // forget every kept size, so dynres_keep_mask gives 0 and the engine frees those sets itself 11 frames after their last
 // use (the one in use stays). Returns whether any size was kept.

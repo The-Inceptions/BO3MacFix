@@ -175,16 +175,61 @@ void dynres_keep_add(dynres_keep_t *keep, uint32_t size) {
 }
 
 unsigned dynres_keep_mask(const dynres_keep_t *keep, const uint32_t sizes[Dynres_Sets],
-                          const uint64_t last_use[Dynres_Sets], uint64_t frame) {
+                          const uint64_t last_use[Dynres_Sets], uint64_t frame, int hold_age) {
     unsigned mask = 0;
     for (int set = 1; set < Dynres_Sets; set++) {
-        if (sizes[set] == 0 || last_use[set] > frame || frame - last_use[set] > Dynres_Keep_Fresh)
+        if (sizes[set] == 0)
+            continue;
+        // unsigned: a last use after frame (the engine marked it after frame was read) comes out older than
+        // Dynres_Keep_Fresh, so the set is left alone; and an age over hold_age means frame - hold_age is after the
+        // last use, never before the counter's start (a negative hold_age is over every age: nothing held)
+        uint64_t age = frame - last_use[set];
+        if (age <= (uint64_t)hold_age || age > Dynres_Keep_Fresh)
             continue;
         for (int i = 0; i < Dynres_Keep_Max; i++)
             if (keep->size[i] == sizes[set])
                 mask |= 1u << set;
     }
     return mask;
+}
+
+int dynres_eviction_victim(const uint32_t sizes[Dynres_Sets], const uint64_t last_use[Dynres_Sets]) {
+    for (int set = 0; set < Dynres_Sets; set++)
+        if (sizes[set] == 0)
+            return -1;
+    int victim = -1;
+    for (int set = 1; set < Dynres_Sets; set++)
+        if (victim < 0 || last_use[set] < last_use[victim])
+            victim = set;
+    return victim;
+}
+
+int dynres_table_changes(const uint32_t sizes_before[Dynres_Sets], const uint64_t last_use_before[Dynres_Sets],
+                         const uint32_t sizes_now[Dynres_Sets], uint64_t frame_now,
+                         dynres_set_change_t out[Dynres_Sets]) {
+    bool rebuilt = sizes_before[0] != sizes_now[0];
+    for (int set = 1; set < Dynres_Sets; set++) {
+        uint64_t age = last_use_before[set] < frame_now ? frame_now - last_use_before[set] : 0;
+        if (sizes_before[set] == sizes_now[set])
+            out[set] = Dynres_Set_Same;
+        else if (sizes_before[set] == 0)
+            out[set] = Dynres_Set_Made;
+        else if (age >= Dynres_Engine_Frees)
+            out[set] = Dynres_Set_Freed;
+        else if (sizes_now[set] == 0) // gone while in use, not made again: only a rebuild does that
+            out[set] = Dynres_Set_Rebuilt;
+        else
+            out[set] = Dynres_Set_Taken; // unless a rebuild explains it, below
+        rebuilt |= out[set] == Dynres_Set_Rebuilt;
+    }
+    int taken = 0;
+    out[0] = rebuilt ? Dynres_Set_Rebuilt : Dynres_Set_Same;
+    for (int set = 1; set < Dynres_Sets; set++) {
+        if (out[set] == Dynres_Set_Taken && rebuilt)
+            out[set] = Dynres_Set_Rebuilt;
+        taken += out[set] == Dynres_Set_Taken;
+    }
+    return taken;
 }
 
 bool dynres_keep_release(dynres_keep_t *keep) {

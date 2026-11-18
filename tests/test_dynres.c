@@ -229,19 +229,38 @@ static void test_keep(void) {
     dynres_keep_add(&k, s85);
     dynres_keep_add(&k, s80); // a 4th: the oldest (s90) goes
     CHECK(k.size[0] == s80 && k.size[1] == s85 && k.size[2] == s95);
+    // which sets get the mark frame - Dynres_Keep_Age: kept ones older than that, up to Dynres_Keep_Fresh
     uint32_t sizes[Dynres_Sets] = {dynres_size(2624, 1696), s95, cam, s85, 0, s90, s80, s95};
-    uint64_t used[Dynres_Sets] = {100, 99, 100, 95, 100, 100, 94, 101};
-    unsigned mask = dynres_keep_mask(&k, sizes, used, 100);
-    CHECK(mask & (1u << 1));    // kept size, used a frame ago
+    uint64_t used[Dynres_Sets] = {80, 93, 80, 91, 80, 94, 99, 101};
+    unsigned mask = dynres_keep_mask(&k, sizes, used, 100, Dynres_Keep_Age);
     CHECK(!(mask & (1u << 0))); // set 0 is the engine's own
+    CHECK(mask & (1u << 1));    // kept size, 7 frames old: held at 6
     CHECK(!(mask & (1u << 2))); // another view's set: the engine's to free
-    CHECK(mask & (1u << 3));    // 5 frames ago: still fresh
+    CHECK(mask & (1u << 3));    // 9 frames old: still held
     CHECK(!(mask & (1u << 4))); // free
     CHECK(!(mask & (1u << 5))); // a size no longer kept
-    CHECK(!(mask & (1u << 6))); // 6 frames ago: left to the engine
+    CHECK(!(mask & (1u << 6))); // a frame old: a view uses it, its own mark stays (never made older)
     CHECK(!(mask & (1u << 7))); // last use after the frame read: left alone
+    CHECK(mask == 0xa);
+    // the edges: 6 frames old is held already, 10 is the engine's to free, 5 is younger than the mark
+    uint64_t edge[Dynres_Sets] = {80, 94, 80, 90, 80, 94, 94, 95};
+    CHECK(dynres_keep_mask(&k, sizes, edge, 100, Dynres_Keep_Age) == 0);
     dynres_keep_t none = {{0}};
-    CHECK(dynres_keep_mask(&none, sizes, used, 100) == 0);
+    CHECK(dynres_keep_mask(&none, sizes, used, 100, Dynres_Keep_Age) == 0);
+    // the test switch BO3MACFIX_DYNRESKEEPNEWEST: hold age 0, every kept set used 1 to 9 frames before
+    CHECK(dynres_keep_mask(&k, sizes, used, 100, 0) == 0x4a);
+    // the counter's first frames: no mark before frame 0
+    uint64_t early[Dynres_Sets] = {0, 0, 0, 0, 0, 0, 0, 0};
+    CHECK(dynres_keep_mask(&k, sizes, early, 5, Dynres_Keep_Age) == 0);
+    CHECK(dynres_keep_mask(&k, sizes, early, 6, Dynres_Keep_Age) == 0);
+    CHECK(dynres_keep_mask(&k, sizes, early, 7, Dynres_Keep_Age) == 0xca);
+    CHECK(dynres_keep_mask(&k, sizes, used, 100, -1) == 0);
+    // a keep list with room: its empty places match no free set; set 0 is never held, even of a kept size
+    dynres_keep_t one = {{0}};
+    dynres_keep_add(&one, dynres_size(2624, 1696));
+    uint32_t with_free[Dynres_Sets] = {dynres_size(2624, 1696), 0, dynres_size(2624, 1696), 0, 0, 0, 0, 0};
+    uint64_t aged[Dynres_Sets] = {93, 93, 93, 93, 93, 93, 93, 93};
+    CHECK(dynres_keep_mask(&one, with_free, aged, 100, Dynres_Keep_Age) == 0x4);
     // the set of a percent, from set 0's size: the engine's 95/90/85% of 2624x1696
     uint32_t table[Dynres_Sets] = {dynres_size(2624, 1696), cam, s85, 0, s95, s90, 0, 0};
     CHECK(dynres_set_for_percent(table, 100, 95) == 4);
@@ -261,13 +280,13 @@ static void test_pressure(void) {
     dynres_keep_add(&k, s90);
     dynres_keep_add(&k, s95);
     uint32_t sizes[Dynres_Sets] = {dynres_size(2624, 1696), s95, s90, s85};
-    uint64_t used[Dynres_Sets] = {100, 100, 100, 100};
-    CHECK(dynres_keep_mask(&k, sizes, used, 100) == 0xe);
+    uint64_t used[Dynres_Sets] = {93, 93, 93, 93};
+    CHECK(dynres_keep_mask(&k, sizes, used, 100, Dynres_Keep_Age) == 0xe);
     CHECK(dynres_keep_release(&k));
-    CHECK(dynres_keep_mask(&k, sizes, used, 100) == 0); // nothing refreshed: the engine frees them at 11 frames
-    CHECK(!dynres_keep_release(&k));                     // nothing left to let go
-    dynres_keep_add(&k, s90);                            // learned again after the pressure
-    CHECK(dynres_keep_mask(&k, sizes, used, 100) == 0x4);
+    CHECK(dynres_keep_mask(&k, sizes, used, 100, Dynres_Keep_Age) == 0); // nothing held: the engine frees them at 11
+    CHECK(!dynres_keep_release(&k));                                      // nothing left to let go
+    dynres_keep_add(&k, s90);                                             // learned again after the pressure
+    CHECK(dynres_keep_mask(&k, sizes, used, 100, Dynres_Keep_Age) == 0x4);
     // the dispatch source's events
     CHECK(dynres_pressure_after(DISPATCH_MEMORYPRESSURE_WARN, false));
     CHECK(dynres_pressure_after(DISPATCH_MEMORYPRESSURE_CRITICAL, false));
@@ -799,7 +818,299 @@ static void test_no_limit_unchanged(void) {
     CHECK(dynres_window_limited(&d, 35.0, 0.99, 40, true) == 95);
 }
 
+// the set the engine's lookup frees when all 8 are taken: the least recently used of 1-7, the lower one on a tie
+static void test_eviction_victim(void) {
+    uint32_t full[Dynres_Sets] = {1, 2, 3, 4, 5, 6, 7, 8};
+    uint64_t used[Dynres_Sets] = {0, 50, 40, 60, 40, 70, 80, 90};
+    CHECK(dynres_eviction_victim(full, used) == 2); // 40 twice: the lower one
+    used[4] = 39;
+    CHECK(dynres_eviction_victim(full, used) == 4);
+    used[1] = 1;
+    CHECK(dynres_eviction_victim(full, used) == 1); // set 0's last use (0) doesn't count: it's never freed
+    uint64_t same[Dynres_Sets] = {5, 5, 5, 5, 5, 5, 5, 5};
+    CHECK(dynres_eviction_victim(full, same) == 1);
+    used[7] = 0;
+    CHECK(dynres_eviction_victim(full, used) == 7);
+    for (int free_set = 0; free_set < Dynres_Sets; free_set++) {
+        uint32_t sizes[Dynres_Sets] = {1, 2, 3, 4, 5, 6, 7, 8};
+        sizes[free_set] = 0;
+        CHECK(dynres_eviction_victim(sizes, used) == -1); // a free set is taken first, nothing freed
+    }
+}
+
+// what the engine did between two looks at its table
+static void test_table_changes(void) {
+    uint32_t s0 = dynres_size(2624, 1696), a = dynres_size(2496, 1616), b = dynres_size(2368, 1528),
+             c = dynres_size(2232, 1448), d = dynres_size(2104, 1360), e = dynres_size(1976, 1272),
+             f = dynres_size(1840, 1192), g = dynres_size(1712, 1104);
+    dynres_set_change_t out[Dynres_Sets];
+    {
+        uint32_t before[Dynres_Sets] = {s0, a, b, 0, c, f, 0, g};
+        uint64_t use[Dynres_Sets] = {100, 99, 80, 0, 95, 86, 0, 91};
+        uint32_t now[Dynres_Sets] = {s0, a, 0, d, e, g, 0, g};
+        CHECK(dynres_table_changes(before, use, now, 101, out) == 1);
+        CHECK(out[0] == Dynres_Set_Same);
+        CHECK(out[1] == Dynres_Set_Same);
+        CHECK(out[2] == Dynres_Set_Freed); // 21 frames unused: the sweep
+        CHECK(out[3] == Dynres_Set_Made);
+        CHECK(out[4] == Dynres_Set_Taken); // 6 frames old, made again for another size: only the eviction
+        CHECK(out[5] == Dynres_Set_Freed); // 15 frames unused: the sweep, then made again for another size
+        CHECK(out[6] == Dynres_Set_Same);
+        CHECK(out[7] == Dynres_Set_Same);
+    }
+    {
+        // 10 frames: the sweep can't have freed it yet; 11: it can
+        uint32_t before[Dynres_Sets] = {s0, a, b};
+        uint64_t use[Dynres_Sets] = {100, 91, 90};
+        uint32_t now[Dynres_Sets] = {s0, c, d};
+        CHECK(dynres_table_changes(before, use, now, 101, out) == 1);
+        CHECK(out[1] == Dynres_Set_Taken && out[2] == Dynres_Set_Freed);
+    }
+    {
+        // a rebuild: every set freed, a set in use left free; the one made again in its place isn't taken
+        uint32_t before[Dynres_Sets] = {s0, a, b, c};
+        uint64_t use[Dynres_Sets] = {100, 100, 95, 97};
+        uint32_t now[Dynres_Sets] = {s0, d, 0, 0};
+        CHECK(dynres_table_changes(before, use, now, 101, out) == 0);
+        CHECK(out[0] == Dynres_Set_Rebuilt);
+        CHECK(out[1] == Dynres_Set_Rebuilt && out[2] == Dynres_Set_Rebuilt && out[3] == Dynres_Set_Rebuilt);
+    }
+    {
+        // a rebuild at another size of set 0 (a display change)
+        uint32_t before[Dynres_Sets] = {s0, a};
+        uint64_t use[Dynres_Sets] = {100, 100};
+        uint32_t now[Dynres_Sets] = {dynres_size(3456, 2234), b};
+        CHECK(dynres_table_changes(before, use, now, 101, out) == 0);
+        CHECK(out[0] == Dynres_Set_Rebuilt && out[1] == Dynres_Set_Rebuilt);
+    }
+    {
+        // a last use after the frame read (the engine marked it between the two reads): as young as can be
+        uint32_t before[Dynres_Sets] = {s0, a};
+        uint64_t use[Dynres_Sets] = {100, 102};
+        uint32_t now[Dynres_Sets] = {s0, b};
+        CHECK(dynres_table_changes(before, use, now, 101, out) == 1);
+        CHECK(out[1] == Dynres_Set_Taken);
+    }
+}
+
+// A model of the engine's render target sets as its lookup 0x100e8d843 treats them (wip/night/rt-rebuild.md): the
+// sweep of sets 1-7 unused for Dynres_Engine_Frees frames, a hit, the first free set, else the least recently used of
+// sets 1-7 (the lower one on a tie). It records which frame used which incarnation of each set, so that a set freed
+// while the render thread may still draw with it can be told: the main thread's lookups of frame c run while the render
+// thread draws frame c-1, whose passes read the sets of frames c-4 to c-1.
+typedef struct {
+    uint32_t size[Dynres_Sets];
+    uint64_t last_use[Dynres_Sets];
+    int generation[Dynres_Sets]; // a new one each time a set is made
+    int used[64][Dynres_Sets];   // per frame (counter % 64): 1 + the generation of each set a view used it in, 0 none
+    uint64_t counter;
+    int made, evictions, evictions_in_flight, freed_in_flight, most_in_use;
+    uint64_t youngest_eviction; // the age of the youngest set taken by an eviction
+} engine_t;
+
+static void engine_init(engine_t *e, uint32_t set0) {
+    memset(e, 0, sizeof(*e));
+    e->size[0] = set0;
+    e->counter = 1000;
+    e->youngest_eviction = UINT64_MAX;
+}
+
+static bool engine_in_flight(const engine_t *e, int set) {
+    for (uint64_t frame = e->counter - Dynres_In_Flight_Age; frame < e->counter; frame++)
+        if (e->used[frame % 64][set] == e->generation[set] + 1)
+            return true;
+    return false;
+}
+
+static int engine_lookup(engine_t *e, uint32_t size) {
+    for (int set = 1; set < Dynres_Sets; set++)
+        if (e->size[set] != 0 && e->counter - e->last_use[set] >= Dynres_Engine_Frees) {
+            e->freed_in_flight += engine_in_flight(e, set);
+            e->size[set] = 0;
+            e->last_use[set] = 0;
+        }
+    int set = -1;
+    for (int i = 0; i < Dynres_Sets && set < 0; i++)
+        if (e->size[i] == size)
+            set = i;
+    if (set < 0) {
+        int victim = dynres_eviction_victim(e->size, e->last_use);
+        for (int i = 0; i < Dynres_Sets && set < 0; i++)
+            if (e->size[i] == 0)
+                set = i;
+        if (set < 0) {
+            set = 1;
+            for (int i = 2; i < Dynres_Sets; i++)
+                if (e->last_use[i] < e->last_use[set]) // the engine's cmovae: a tie keeps the lower one
+                    set = i;
+            CHECK(victim == set);
+            uint64_t age = e->counter - e->last_use[set];
+            e->evictions++;
+            if (age < e->youngest_eviction)
+                e->youngest_eviction = age;
+            bool in_flight = engine_in_flight(e, set);
+            e->evictions_in_flight += in_flight;
+            e->freed_in_flight += in_flight;
+        } else {
+            CHECK(victim == -1);
+        }
+        e->size[set] = size;
+        e->generation[set]++;
+        e->made++;
+    }
+    e->last_use[set] = e->counter;
+    e->used[e->counter % 64][set] = e->generation[set] + 1;
+    int in_use = 0;
+    for (int i = 0; i < Dynres_Sets; i++)
+        in_use += e->size[i] != 0;
+    if (in_use > e->most_in_use)
+        e->most_in_use = in_use;
+    return set;
+}
+
+static void engine_next_frame(engine_t *e) {
+    e->counter++;
+    memset(e->used[e->counter % 64], 0, sizeof(e->used[0]));
+}
+
+// the glue's hold of the kept sets, at the counter the render thread reads in the present
+static void engine_keep(engine_t *e, const dynres_keep_t *keep, int hold_age) {
+    unsigned mask = dynres_keep_mask(keep, e->size, e->last_use, e->counter, hold_age);
+    for (int set = 1; set < Dynres_Sets; set++)
+        if (mask & (1u << set)) {
+            CHECK(e->counter - hold_age > e->last_use[set]); // only ever younger
+            e->last_use[set] = e->counter - hold_age;
+        }
+}
+
+static uint32_t percent_size(int percent) {
+    return dynres_size((uint16_t)((2624 * percent / 100 + 7) & ~7), (uint16_t)((1696 * percent / 100 + 7) & ~7));
+}
+
+// the stress test BO3MACFIX_DYNRESTESTFRAMES: the warm-up keeps 95/90/85%, then the view takes another of five other
+// sizes every frame. 3 kept sets and set 0 leave four sets for five sizes, so every step frees one. Held at the
+// newest frame (before), the kept sets are never the least recently used, and the set freed is the one the frame drawn
+// 4 frames before used, which the render thread's passes are still reading; held at Dynres_Keep_Age, the kept sets go
+// first, and once they are gone the five sizes fit.
+static void engine_stress(int hold_age, bool keep_first, engine_t *e) {
+    dynres_keep_t keep = {{0}};
+    int cycle[] = {80, 75, 70, 65, 60};
+    engine_init(e, percent_size(100));
+    for (int percent = 95; percent >= 85; percent -= 5) { // the warm-up
+        engine_lookup(e, percent_size(percent));
+        dynres_keep_add(&keep, percent_size(percent));
+        engine_next_frame(e);
+    }
+    for (int frame = 0; frame < 300; frame++) {
+        if (keep_first)
+            engine_keep(e, &keep, hold_age);
+        engine_lookup(e, percent_size(cycle[frame % 5]));
+        if (!keep_first)
+            engine_keep(e, &keep, hold_age);
+        engine_next_frame(e);
+    }
+}
+
+static void test_engine_stress(void) {
+    engine_t e;
+    for (int order = 0; order < 2; order++) {
+        engine_stress(Dynres_Keep_Age, order, &e);
+        CHECK(e.freed_in_flight == 0);
+        CHECK(e.evictions <= 3);          // the three kept sets, once each
+        CHECK(e.youngest_eviction > Dynres_In_Flight_Age);
+        engine_stress(0, order, &e);      // held at the newest frame, as before
+        CHECK(e.evictions > 250);         // every step
+        CHECK(e.evictions_in_flight > 250);
+        CHECK(e.youngest_eviction <= Dynres_In_Flight_Age);
+    }
+}
+
+// DynamicResolution's own steps in a match: one every 2 windows at most (60 frames), up and down between 60 and 100%,
+// the new set of each step learned and kept. With one view the table never fills (5 sets at most). A crowded table
+// besides: the user's own size in sets 1-7 (set 0 rebuilt while DynamicResolution held 80%) and an extra view that
+// renders at one of 4 camera sizes in turn, a new one each frame (more than a real camera does, to fill the table):
+// then every step finds all 8 sets taken, and the engine frees one. Held at the newest frame, the kept sets are never
+// that one, and the cameras' sets the render thread is drawing with are; held at Dynres_Keep_Age, never.
+static void engine_play(int hold_age, bool extra_views, engine_t *e) {
+    dynres_keep_t keep = {{0}};
+    engine_init(e, percent_size(extra_views ? 80 : 100));
+    int percent = 100, direction = -5, learn = 0;
+    uint32_t cameras[] = {dynres_size(1224, 750), dynres_size(1024, 1024), dynres_size(512, 512),
+                          dynres_size(640, 480)};
+    for (int frame = 0; frame < 6000; frame++) {
+        if (frame % 60 == 59) { // a step
+            percent += direction;
+            if (percent <= 60 || percent >= 100)
+                direction = -direction;
+            learn = 12;
+        }
+        engine_keep(e, &keep, hold_age);
+        int set = engine_lookup(e, percent_size(percent));
+        if (learn > 0) { // the sets that appear in the frames after a step are learned (dynres_keep_tick)
+            learn--;
+            if (set != 0)
+                dynres_keep_add(&keep, e->size[set]);
+        }
+        if (extra_views)
+            engine_lookup(e, cameras[frame % 4]);
+        engine_next_frame(e);
+    }
+}
+
+static void test_engine_play(void) {
+    engine_t e;
+    for (int hold_age = 0; hold_age <= Dynres_Keep_Age; hold_age += Dynres_Keep_Age) {
+        engine_play(hold_age, false, &e);
+        CHECK(e.evictions == 0 && e.freed_in_flight == 0);
+        CHECK(e.most_in_use <= 5); // set 0, 3 kept and the size now (the one before is freed before the next step)
+        CHECK(e.made > 50);        // the steps made sets: the play ran
+    }
+    engine_play(Dynres_Keep_Age, true, &e);
+    CHECK(e.evictions > 20);        // the table is full at the steps
+    CHECK(e.freed_in_flight == 0);  // and no set the render thread may draw with is freed
+    CHECK(e.youngest_eviction > Dynres_In_Flight_Age);
+    engine_play(0, true, &e);       // before: the same play does free them
+    CHECK(e.evictions_in_flight > 100);
+}
+
+// the edge of what the render thread may be drawing with: 2 sets held at the newest frame and 6 other sizes in turn,
+// one per frame, leave 5 sets for 6 sizes, so the engine takes the one used 5 frames before at every step; the frame
+// being drawn and the 3 its passes read back don't have it. With 3 held and 5 sizes in 4 sets, the one used 4 frames
+// before: they do.
+static void engine_edge(int held, engine_t *e) {
+    dynres_keep_t keep = {{0}};
+    int cycle[] = {80, 75, 70, 65, 60, 55};
+    engine_init(e, percent_size(100));
+    for (int i = 0; i < held; i++) {
+        engine_lookup(e, percent_size(95 - 5 * i));
+        dynres_keep_add(&keep, percent_size(95 - 5 * i));
+        engine_next_frame(e);
+    }
+    for (int frame = 0; frame < 300; frame++) {
+        engine_keep(e, &keep, 0);
+        engine_lookup(e, percent_size(cycle[frame % (8 - held)]));
+        engine_next_frame(e);
+    }
+}
+
+static void test_engine_edge(void) {
+    engine_t e;
+    engine_edge(2, &e);
+    CHECK(e.evictions > 250);
+    CHECK(e.youngest_eviction == Dynres_In_Flight_Age + 1);
+    CHECK(e.freed_in_flight == 0);
+    engine_edge(3, &e);
+    CHECK(e.evictions > 250);
+    CHECK(e.youngest_eviction == Dynres_In_Flight_Age);
+    CHECK(e.evictions_in_flight == e.evictions);
+}
+
 int main(void) {
+    test_eviction_victim();
+    test_table_changes();
+    test_engine_stress();
+    test_engine_play();
+    test_engine_edge();
     test_climb_at_limit();
     test_trial_taken_back();
     test_no_limit_unchanged();
