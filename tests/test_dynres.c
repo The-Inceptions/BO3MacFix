@@ -1465,6 +1465,24 @@ static void test_rise_hold(void) {
         dynres_window_limited(&d, 100, 0.5, 120, Dynres_No_Limit); // the one after it: the same
         CHECK(d.held_windows == 0 && !d.after_rise_window && d.rise_hold > 0);
         CHECK(dynres_window_limited(&d, 70, 0.99, 120, Dynres_No_Limit) == 90 && d.event == Dynres_Event_Too_Slow);
+        // the other way round: the window of the rise isn't held (all its frames paced at the old limit, room on the
+        // GPU; gc30_perfbatt_pausebatt's second close held nothing), and the first frames after the rise, all in the
+        // next window, are slow with the GPU busy: that window is held all the same, held window of the rise or not
+        dynres_reset(&d, 100, 60);
+        d.windows_since_change = 20;
+        dynres_window_limited(&d, 40, 0.5, 40, Dynres_Match_Limit);
+        dynres_window_limited(&d, 40.0, 0.8, 120, Dynres_No_Limit); // the window of the rise: room on the GPU
+        CHECK(d.rise_window && d.event == Dynres_Event_None && d.held_windows == 0);
+        CHECK(dynres_window_limited(&d, 60.0, 0.99, 120, Dynres_No_Limit) == 100 && d.event == Dynres_Event_Held);
+        CHECK(d.after_rise_window && d.held_windows == 1);
+        // and a fall of the target in the window after the window of the rise (the pause menu opened again at once) is
+        // held too, whatever its rate: 15 fps of the pause menu's 30
+        dynres_reset(&d, 100, 60);
+        d.windows_since_change = 20;
+        dynres_window_limited(&d, 40, 0.5, 40, Dynres_Match_Limit);
+        dynres_window_limited(&d, 40.0, 0.99, 120, Dynres_No_Limit); // the window of the rise
+        CHECK(dynres_window_limited(&d, 15.0, 0.99, 30, Dynres_Situation_Limit) == 100 && d.event == Dynres_Event_Held);
+        CHECK(d.after_rise_window);
         // (the log's "in the window after the rise's" is said of that window whatever its frame rate)
         dynres_reset(&d, 100, 60);
         d.windows_since_change = 20;
