@@ -1297,6 +1297,9 @@ __attribute__((constructor)) static void dylib_main() {
     gpu_tweaks_metalfx_init(read_int_setting("MetalFXUpscale", 0), checked_code_patch);
     // DynamicResolution: lowers ResolutionPercent in steps while the GPU can't keep up, down to this share of it
     gpu_tweaks_dynres_init(read_int_setting("DynamicResolution", 0), checked_code_patch);
+    // a charger under this many watts counts as battery for the battery settings below (WeakChargerWatts, 0 = off);
+    // first, before anything asks the power source (AAEEngineDefaults 2, BatteryFPS), see weak_charger.c
+    gpu_tweaks_weak_charger_init(read_int_setting_or_env("WeakChargerWatts", 0));
     // the gun's shadow resolution at the game's own values while All-around Enhancement raises it (aae_engine_defaults.c)
     aae_engine_defaults_init(game_base_address, read_int_setting_or_env("AAEEngineDefaults", 0));
 

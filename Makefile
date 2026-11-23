@@ -12,6 +12,8 @@ TEST_TARGETS += tests/test_launch_args
 TEST_TARGETS += tests/test_display_sleep
 # BatterySaver's levels against the user's settings (battery_saver.c)
 TEST_TARGETS += tests/test_battery_saver
+# WeakChargerWatts' rule: when a charger counts as battery (weak_charger.c)
+TEST_TARGETS += tests/test_weak_charger
 # VoiceMicrophone: the voice system's start of recording refused or left alone (voice_mic.c)
 TEST_TARGETS += tests/test_voice_mic
 # StartWithMod: which mods are remembered and when, the launcher's decisions, the marker of a start given the mod, its
@@ -153,6 +155,8 @@ SOURCES += source/frame_limit.c source/app_focus.m
 SOURCES += source/display_sleep.c source/display_sleep_mac.c
 # BatterySaver: the battery settings at a level's values on battery (battery_saver.c, plain C)
 SOURCES += source/battery_saver.c
+# WeakChargerWatts: a charger under N watts counts as battery (weak_charger.c, plain C)
+SOURCES += source/weak_charger.c
 # VoiceMicrophone: the voice system's start of recording refused, so Steam keeps the microphone closed (voice_mic.c)
 SOURCES += source/voice_mic.c
 # how many refreshes each frame stayed on screen, for FrameStats with BO3MACFIX_FRAMEPACESTATS=1 (frame_pace.c)
@@ -674,6 +678,9 @@ tests/test_voice_mic: tests/test_voice_mic.c source/voice_mic.c source/voice_mic
 # what BatterySaver's levels set on battery and plugged in (battery_saver.c)
 tests/test_battery_saver: tests/test_battery_saver.c source/battery_saver.c source/battery_saver.h
 	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_battery_saver.c source/battery_saver.c
+
+tests/test_weak_charger: tests/test_weak_charger.c source/weak_charger.c source/weak_charger.h
+	$(CLANG) -std=c11 -O1 -Wall -Wextra -Werror -o $@ tests/test_weak_charger.c source/weak_charger.c
 
 # when IdleDisplaySleep lets the display sleep and declares a controller's input (display_sleep.c)
 tests/test_display_sleep: tests/test_display_sleep.c source/display_sleep.c source/display_sleep.h

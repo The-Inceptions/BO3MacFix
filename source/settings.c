@@ -78,6 +78,7 @@ static const setting_t settings[] = {
     { "BatteryFPS", "Battery frame limit", "Limits the frame rate only while the Mac runs on battery, to save power. 30, 40 and 60 divide a 120 Hz display's refresh evenly.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 0, Live_Present },
     { "BatterySaver", "Battery saver", "On battery only. Saver: 40 fps, the 3D scene at 85% at most, 20 fps in an untouched menu, 15 behind another app, the display may sleep when idle. Longest: 30 fps, 70%, 15 and 10 fps, the same. Your own settings stay where they save more; the menu and display parts need ControllerBridge. Plugged in, nothing changes.", "Graphics", false, 3, { 0, 1, 2 }, { "Off", "Saver", "Longest" }, 0, Live_Present },
     { "BatteryResolution", "Battery resolution", "Renders the 3D scene at this share of Render Resolution at most while the Mac runs on battery, to save the GPU's power; the HUD stays sharp. Plugged in, it goes back up. Measured at 40 fps: 70% saves 1.2 W on Kino, more on heavy maps.", "Graphics", false, 5, { 0, 85, 75, 70, 60 }, { "Off", "85%", "75%", "70%", "60%" }, 0, Live_Present },
+    { "WeakChargerWatts", "Small charger counts as battery", "Keeps the battery settings on while the Mac runs from a charger under this many watts: one that can't run the game at full speed and charge the battery too, like a 65 W charger or a plane's seat power. With the game at 120 fps a MacBook Pro drew 55 to 80 W, more than such a charger gives, so the battery drained while plugged in; at a battery frame limit it charged. A bigger charger stays plugged in.", "Graphics", false, 3, { 0, 70, 100 }, { "Off", "under 70 W", "under 100 W" }, 0, Live_Always },
     { "LowPowerFPS", "Low Power Mode frame limit", "Limits the frame rate while macOS's Low Power Mode is on, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 0, Live_Present },
     { "PauseMenuFPS", "Pause menu frame limit", "Limits the frame rate while the pause menu is open in a match, to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 30, Live_Present },
     { "MenuFPS", "Menu frame limit", "Limits the frame rate in the menus outside a match (main menu, lobby, mods), to save power.", "Graphics", false, 4, { 0, 30, 40, 60 }, { "Off", "30", "40", "60" }, 40, Live_Present },
@@ -194,6 +195,8 @@ static bool apply_live(const setting_t *t, int value) {
         return gpu_tweaks_set_battery_resolution(value);
     if (strcmp(n, "BatterySaver") == 0)
         return gpu_tweaks_set_battery_saver(value);
+    if (strcmp(n, "WeakChargerWatts") == 0)
+        return gpu_tweaks_set_weak_charger(value);
     if (strcmp(n, "PauseMenuFPS") == 0)
         return gpu_tweaks_set_pause_menu_fps(value);
     if (strcmp(n, "MenuFPS") == 0)

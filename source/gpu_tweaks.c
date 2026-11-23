@@ -41,6 +41,7 @@
 #include "app_focus.h"
 #include "dynres.h"
 #include "battery_saver.h"
+#include "weak_charger.h"
 #include "display_sleep.h"
 #include "display_sleep_mac.h"
 #include "frame_limit.h"
@@ -1054,6 +1055,26 @@ static bool running_on_battery(void) {
     return battery;
 }
 
+// the external power adapter's watts as macOS reports them (IOPSCopyExternalPowerAdapterDetails' "Watts", which
+// `pmset -g ac` shows as Wattage), 0 when it says none (no adapter, no wattage, not a whole number).
+// BO3MACFIX_CHARGERWATTS=N pretends a charger of N watts, for testing; with BO3MACFIX_ONBATTERY=1 the Mac is still on
+// battery whatever the charger.
+static int charger_watts(void) {
+    const char *env = getenv("BO3MACFIX_CHARGERWATTS");
+    if (env != NULL)
+        return atoi(env);
+    CFDictionaryRef details = IOPSCopyExternalPowerAdapterDetails();
+    if (details == NULL)
+        return 0;
+    int watts = 0;
+    CFTypeRef value = CFDictionaryGetValue(details, CFSTR(kIOPSPowerAdapterWattsKey));
+    if (value == NULL || CFGetTypeID(value) != CFNumberGetTypeID() ||
+        !CFNumberGetValue((CFNumberRef)value, kCFNumberIntType, &watts))
+        watts = 0;
+    CFRelease(details);
+    return watts;
+}
+
 // whether macOS's Low Power Mode is on (System Settings > Battery, or Control Center), from NSProcessInfo's
 // lowPowerModeEnabled (macOS 12 and later; off before that). BO3MACFIX_LOWPOWERMODE=1 pretends it is, for testing.
 static bool low_power_mode_on(void) {
@@ -1126,22 +1147,58 @@ static void display_sleep_tick(void) {
                          atomic_load(&limits.on_battery));
 }
 
+// WeakChargerWatts (weak_charger.h): a charger under this many watts counts as battery, 0 = off. limits.on_battery is
+// whether the Mac counts as on battery, so every battery setting follows it: BatteryFPS, BatteryResolution's ceiling,
+// BatterySaver, IdleDisplaySleep 1 and AAEEngineDefaults 2.
+static atomic_int weak_charger_watts = 0;
+static atomic_bool power_watched = false;          // the power watch's first check is done
+static os_unfair_lock power_lock = OS_UNFAIR_LOCK_INIT;
+static power_said_t power_said = { Power_Unsaid, false }; // what WeakChargerWatts' last line said (power_lock)
+
+// checks the power source (and, with WeakChargerWatts on and the Mac plugged in, the charger's watts) and stores
+// whether the Mac counts as on battery. After the first check (first: no lines but WeakChargerWatts', nothing applied)
+// a change applies BatterySaver's values and says so while BatteryFPS is set, as it always did. With WeakChargerWatts
+// on, one line more says what powers the Mac whenever that changes: a charger under the setting's watts in place of
+// "running on battery, limiting the frame rate", another charger after "plugged in, frame rate unlimited", the battery
+// off a charger when no line said it (weak_charger_line). Under power_lock: the watch and a settings page change can
+// check at the same moment.
+static void power_check(bool first) {
+    os_unfair_lock_lock(&power_lock);
+    int setting = weak_charger_setting(atomic_load(&weak_charger_watts));
+    bool real_battery = running_on_battery();
+    int watts = setting > 0 && !real_battery ? charger_watts() : 0;
+    bool battery = weak_charger_counts_as_battery(real_battery, setting, watts);
+    bool changed = battery != atomic_exchange(&limits.on_battery, battery) && !first;
+    if (changed && atomic_load(&saver_level) != Battery_Saver_Off)
+        saver_apply(); // BatterySaver's menus and background values apply on battery only
+    bool old_line = changed && atomic_load(&limits.battery_fps) > 0;
+    power_line_t line = weak_charger_line(&power_said, setting, real_battery, watts, old_line);
+    if (old_line && line != Power_Line_Small)
+        printf("%s, %s\n", battery ? "running on battery" : "plugged in", battery ? "limiting the frame rate" : "frame rate unlimited");
+    if (line == Power_Line_Small)
+        printf("on a %i W charger, which counts as battery (WeakChargerWatts %i)%s\n", watts, setting,
+               old_line ? ", limiting the frame rate" : "");
+    else if (line == Power_Line_Charger)
+        printf("plugged in (%i W charger)\n", watts);
+    else if (line == Power_Line_Unknown)
+        printf("plugged in (a charger of unknown wattage)\n");
+    else if (line == Power_Line_Battery)
+        printf("running on battery\n");
+    os_unfair_lock_unlock(&power_lock);
+}
+
 // checks the power source and Low Power Mode now and then every 5 seconds (once, however often it's asked), for
 // BatteryFPS and LowPowerFPS, and says so when one of them changes while its limit is set
 static void start_power_watch(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        atomic_store(&limits.on_battery, running_on_battery());
+        power_check(true);
         atomic_store(&limits.low_power, low_power_mode_on());
+        atomic_store(&power_watched, true);
         dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
         dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC);
         dispatch_source_set_event_handler(timer, ^{
-            bool battery = running_on_battery();
-            bool changed = battery != atomic_exchange(&limits.on_battery, battery);
-            if (changed && atomic_load(&saver_level) != Battery_Saver_Off)
-                saver_apply(); // BatterySaver's menus and background values apply on battery only
-            if (changed && atomic_load(&limits.battery_fps) > 0)
-                printf("%s, %s\n", battery ? "running on battery" : "plugged in", battery ? "limiting the frame rate" : "frame rate unlimited");
+            power_check(false);
             bool low_power = low_power_mode_on();
             if (low_power != atomic_exchange(&limits.low_power, low_power) && atomic_load(&limits.low_power_fps) > 0)
                 printf("Low Power Mode %s, %s\n", low_power ? "on" : "off",
@@ -1155,6 +1212,37 @@ static void start_power_watch(void) {
 bool gpu_tweaks_on_battery(void) {
     start_power_watch();
     return atomic_load(&limits.on_battery);
+}
+
+// WeakChargerWatts' line: what it does now
+static void weak_charger_say(int watts) {
+    if (watts > 0)
+        printf("a charger under %i W counts as battery (WeakChargerWatts)\n", watts);
+    else
+        printf("a charger counts as plugged in whatever its watts (WeakChargerWatts off)\n");
+}
+
+void gpu_tweaks_weak_charger_init(int watts) {
+    watts = weak_charger_setting(watts);
+    if (watts == 0)
+        return;
+    atomic_store(&weak_charger_watts, watts);
+    weak_charger_say(watts);
+    if (atomic_load(&power_watched))
+        power_check(false); // something asked the power source before; it's read again with the setting
+}
+
+bool gpu_tweaks_set_weak_charger(int watts) {
+    if (watts < 0 || watts > Weak_Charger_Max_Watts)
+        return false;
+    atomic_store(&weak_charger_watts, watts);
+    weak_charger_say(watts);
+    // with the power watch running (a battery setting on) it applies now; else when one starts it
+    if (atomic_load(&power_watched)) {
+        power_check(false);
+        display_sleep_tick();
+    }
+    return true;
 }
 
 void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch) {

@@ -20,8 +20,13 @@ void gpu_tweaks_frame_stats_init(int seconds, code_patch_fn checked_code_patch);
 // fps: the frame rate limit while on battery, 30 to 240 (0 = off)
 void gpu_tweaks_battery_fps_init(int fps, code_patch_fn checked_code_patch);
 // whether the Mac runs on battery, as BatteryFPS sees it (checked every 5 s from the first call; BO3MACFIX_ONBATTERY=1
-// pretends it does), for AAEEngineDefaults' battery choice
+// pretends it does), for AAEEngineDefaults' battery choice. With WeakChargerWatts on, a charger under its watts counts
+// as battery too.
 bool gpu_tweaks_on_battery(void);
+// WeakChargerWatts (weak_charger.h): a charger under this many watts (1 to 300; anything else is off) counts as battery
+// for every battery setting. Before anything asks the power source (AAEEngineDefaults, BatteryFPS), so that the power
+// watch's first check knows it.
+void gpu_tweaks_weak_charger_init(int watts);
 // fps: the frame rate limit while macOS's Low Power Mode is on, 30 to 240 (0 = off)
 void gpu_tweaks_low_power_fps_init(int fps, code_patch_fn checked_code_patch);
 
@@ -96,5 +101,8 @@ bool gpu_tweaks_set_frame_stats(int seconds);
 bool gpu_tweaks_set_dynamic_resolution(int setting);
 bool gpu_tweaks_set_idle_display_sleep(int mode);
 bool gpu_tweaks_set_battery_saver(int level);
+// WeakChargerWatts: 0 to 300 (false for anything else); it needs no hook, and applies at once while the power watch
+// runs
+bool gpu_tweaks_set_weak_charger(int watts);
 
 #endif
