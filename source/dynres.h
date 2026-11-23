@@ -96,18 +96,22 @@ enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back, Dynres_Ev
 //   last present, so a limit lifted at a window's last present leaves all 30 of that window's frames at the old pace;
 //   the frames drawn while the GPU is still clocked for the old limit are then the next window's. A scene that clock
 //   fitted tightly starts under the share below though it holds the new target at full clock: the review of
-//   2026-11-18, wip/night/review-share-hold.md, F1. It is also the window that came closest to the share in every
-//   log, at 72 to 90% of the target.)
+//   2026-11-18, wip/night/review-share-hold.md, F1. Seen in the game: Kino after a lift and after a plug-in,
+//   gc30_perfbatt_liftplain and battplug, 57% and 60% of the target in this window, then 120 fps at full clock; the rule
+//   before took two steps down at once in both.)
 // - a later one only while its frame rate is at least Dynres_Rise_Hold_Share of the new target: a clock coming up.
 // A window further below it is a scene that can't keep up and is judged as without a rise. Every window logged after a
-// rise says which is which: a clock coming up was at 72% of the target or more from the window after the rise window on
-// (gc27/gc28 liftplain, battplug: 86.7, 88.9, 90.0, 91.3, 92.3 ... of 120; the journeys' unpauses on mains: 88.0, 96.7
-// of 120; pausebatt: 40 of 40), while DEIMOS at 100%, which can't hold 120, was flat at 55-58% (gc28_perfbatt_deimoslift:
-// 66.1 to 69.9 fps of 120, from its second window on). 65% lies in the middle: 7 points under the slowest clock seen, 7
-// over the heavy scene's best window. What each side costs: a clock window under 65% (not seen) is judged, two steps
-// down at once where there were none; a heavy scene at 65% or more (DEIMOS at 85% gives 82-91 fps of 120: 68-76%) waits
-// up to the 3 s for its first step, as it did with a plain 3 s hold. DEIMOS at 100% gets its first step in the second
-// window after the rise window, about 1.5 s after the rise (the 3 s hold: 3.7 s; no hold: 0.6 s).
+// rise says which is which: a clock coming up was at 65% of the target or more from the second window after the rise
+// window on (gc27/gc28 liftplain, battplug: 86.7, 88.9, 90.0, 91.3, 92.3 ... of 120; gc30 liftplain and battplug: 78.3
+// and 83.7, 65% and 70%; the journeys' unpauses on mains: 88.0, 96.7 of 120; pausebatt: 40 of 40), while DEIMOS at 100%,
+// which can't hold 120, was flat at 55-58% (gc28_perfbatt_deimoslift: 66.1 to 69.9 fps of 120, from its second window
+// on; gc30_lead_deimoslift2: 52% in that window). 65% lies between them, with no margin left on the clock's side:
+// gc30 liftplain's window was 65.25%, and on that ramp (54 to 113 fps over 3 s) a lift later in its window puts it
+// under 65% (a model of the ramp, wip/agents/rev-int14/ramp: for 22 of the 30 frames the lift can come at). What each
+// side costs: a clock window under 65% is judged, two steps down at once where there were none; a heavy scene at 65% or
+// more (DEIMOS at 85% gives 82-91 fps of 120: 68-76%) waits up to the 3 s for its first step, as it did with a plain
+// 3 s hold. DEIMOS at 100% gets its first step in the second window after the rise window, about 1.5-1.7 s after the
+// rise (gc30_lead_deimoslift2: 1.7 s; the 3 s hold: 3.7 s; no hold: 0.6 s).
 // A window at the floor isn't held (nothing to step down to: none is said either). Everything else goes on as without
 // a rise: steps up, the count toward the next step up or trial in windows with room (a held window starts it again, as
 // a window behind with the GPU busy always did), a fall of the target, BatteryResolution's moves at once (a rise in the
