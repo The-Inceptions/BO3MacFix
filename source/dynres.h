@@ -59,7 +59,8 @@ typedef struct {
     double target;      // the frame rate the last window aimed at, 0 before the first (Dynres_Rise_Hold_Seconds)
     double rise_hold;   // seconds of play left in which no step down is taken, after the frame target rose
     int held_windows;   // windows behind with the GPU busy that the hold kept from stepping down since the rise
-    bool rise_window;   // the last window was the one in which the target rose (for the log)
+    bool rise_window;   // the last window was the one in which the target rose (the next one is held too; the log)
+    bool after_rise_window; // the last window was held as the one after that window (for the log)
     int percent;  // the resolution now
     int windows_since_change;
     int headroom_windows; // windows in a row in which a step up would have fit (under a limit: held the limit)
@@ -89,6 +90,14 @@ enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back, Dynres_Ev
 // Dynres_Rise_Hold_Seconds of play, counted from the window in which the target rose and including it, these windows
 // take no step down and no trial take-back:
 // - the window in which the target rose, whatever its frame rate: it was partly paced to the old target;
+// - the window after it, whatever its frame rate too, and even when the window of the rise took the whole 3 s (30
+//   frames at a limit of 10): it has the first frames after the rise when the rise came in the last frames of its
+//   window. (The limiter paces a frame by the limit of the present before it, and a window's target is that of its
+//   last present, so a limit lifted at a window's last present leaves all 30 of that window's frames at the old pace;
+//   the frames drawn while the GPU is still clocked for the old limit are then the next window's. A scene that clock
+//   fitted tightly starts under the share below though it holds the new target at full clock: the review of
+//   2026-11-18, wip/night/review-share-hold.md, F1. It is also the window that came closest to the share in every
+//   log, at 72 to 90% of the target.)
 // - a later one only while its frame rate is at least Dynres_Rise_Hold_Share of the new target: a clock coming up.
 // A window further below it is a scene that can't keep up and is judged as without a rise. Every window logged after a
 // rise says which is which: a clock coming up was at 72% of the target or more from the window after the rise window on
@@ -97,8 +106,8 @@ enum { Dynres_Event_None, Dynres_Event_Trial, Dynres_Event_Taken_Back, Dynres_Ev
 // 66.1 to 69.9 fps of 120, from its second window on). 65% lies in the middle: 7 points under the slowest clock seen, 7
 // over the heavy scene's best window. What each side costs: a clock window under 65% (not seen) is judged, two steps
 // down at once where there were none; a heavy scene at 65% or more (DEIMOS at 85% gives 82-91 fps of 120: 68-76%) waits
-// up to the 3 s for its first step, as it did with a plain 3 s hold. DEIMOS at 100% gets its first step in the window
-// after the rise window, about 1 s after the rise (the 3 s hold: 3.7 s; no hold: 0.6 s).
+// up to the 3 s for its first step, as it did with a plain 3 s hold. DEIMOS at 100% gets its first step in the second
+// window after the rise window, about 1.5 s after the rise (the 3 s hold: 3.7 s; no hold: 0.6 s).
 // A window at the floor isn't held (nothing to step down to: none is said either). Everything else goes on as without
 // a rise: steps up, the count toward the next step up or trial in windows with room (a held window starts it again, as
 // a window behind with the GPU busy always did), a fall of the target, BatteryResolution's moves at once (a rise in the

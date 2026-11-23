@@ -801,14 +801,16 @@ static void dynres_tick(int frame_limit_fps) {
             percent = dynres_window_limited(&dynres, window_fps, window_busy, target, limit);
             // the frame target rose and this window, behind with the GPU busy, wasn't taken as a reason to step down
             // (dynres.h, Dynres_Rise_Hold_Seconds): said for the first such window after a rise, each with
-            // BO3MACFIX_DYNRESDEBUG; the window of the rise, or one at Dynres_Rise_Hold_Share of the target or more
+            // BO3MACFIX_DYNRESDEBUG; the window of the rise, the one after it, or one at Dynres_Rise_Hold_Share of the
+            // target or more
             static int rise_debug = -1;
             if (rise_debug < 0)
                 rise_debug = getenv("BO3MACFIX_DYNRESDEBUG") != NULL;
             if (dynres.event == Dynres_Event_Held && (dynres.held_windows == 1 || rise_debug)) {
-                char share[32] = " in the window of the rise";
+                char share[64] = " in the window of the rise";
                 if (!dynres.rise_window)
-                    snprintf(share, sizeof(share), ", %.0f%% of it", window_fps * 100 / target);
+                    snprintf(share, sizeof(share), ", %.0f%% of it%s", window_fps * 100 / target,
+                             dynres.after_rise_window ? " in the window after the rise's" : "");
                 printf("dynamic resolution: the frame target rose to %i, no step down while the GPU catches up "
                        "(%.1f fps%s, GPU busy %.0f%%, %.1f s of the hold left)\n",
                        target, window_fps, share, window_busy * 100, dynres.rise_hold > 0 ? dynres.rise_hold : 0.0);

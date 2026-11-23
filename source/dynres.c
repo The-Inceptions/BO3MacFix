@@ -11,6 +11,7 @@ void dynres_reset(dynres_t *d, int base, int lowest) {
     d->rise_hold = 0;
     d->held_windows = 0;
     d->rise_window = false;
+    d->after_rise_window = false;
     d->percent = base;
     d->windows_since_change = 0;
     d->headroom_windows = 0;
@@ -88,7 +89,10 @@ int dynres_window(dynres_t *d, double fps, double gpu_busy, double target_fps) {
 int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double target_fps, dynres_limit_t limit) {
     d->windows_since_change++;
     d->event = Dynres_Event_None;
+    // the window after the window of a rise, for this window only (a move at once below included): held too (dynres.h)
+    bool after_rise = d->rise_window;
     d->rise_window = false;
+    d->after_rise_window = false;
     // another kind of limit: the count of windows with room starts again; back to none, a trial is kept as it is
     if ((int)limit != d->limit) {
         d->headroom_windows = 0;
@@ -123,14 +127,17 @@ int dynres_window_limited(dynres_t *d, double fps, double gpu_busy, double targe
     bool held = d->rise_hold > 0;
     if (held && fps > 0)
         d->rise_hold -= Dynres_Window_Frames / fps;
+    // (the window after the window of the rise, even when that one took the whole of the hold's seconds)
+    held = held || after_rise;
     if (target_fps <= 0 || fps <= 0)
         return d->percent;
     bool settled = d->windows_since_change > Dynres_Hold_Down;
     bool behind = fps < target_fps * Dynres_Missed;
     if (held && behind && gpu_busy >= Dynres_GPU_Bound && d->percent > least) {
-        if (rose || fps >= target_fps * Dynres_Rise_Hold_Share) {
+        if (rose || after_rise || fps >= target_fps * Dynres_Rise_Hold_Share) {
             d->headroom_windows = 0;
             d->held_windows++;
+            d->after_rise_window = after_rise && !rose;
             d->event = Dynres_Event_Held;
             return d->percent;
         }
