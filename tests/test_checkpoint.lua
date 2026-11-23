@@ -13,6 +13,14 @@ end
 
 -- ---- a made-up game
 local models, dvars, execs, logs = {}, {}, {}, {}
+local logs_all = {} -- every log line of the whole run (logs is emptied between the cases)
+local function count_lines(list, text)
+    local n = 0
+    for _, line in ipairs(list) do
+        if string.find(line, text, 1, true) then n = n + 1 end
+    end
+    return n
+end
 local map, in_game = "core_frontend", false
 local function model(path) return { path = path } end
 Engine = {
@@ -50,7 +58,10 @@ BO3MacFix = {
         switch_calls = switch_calls + 1
         return table.remove(switch_answers, 1)
     end,
-    Log = function(text) table.insert(logs, text) end,
+    Log = function(text)
+        table.insert(logs, text)
+        table.insert(logs_all, text)
+    end,
     ReadCheckpoint = function()
         local lines = {}
         for key, value in pairs(store) do table.insert(lines, key .. "=" .. value) end
@@ -408,6 +419,144 @@ check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true)
     "a menu made unpaused doesn't stop the five minutes: " .. tostring(notices[#notices]))
 leave_match()
 polls(1)
+
+-- a page that takes the pause menu's place is made after the pause menu has left the root (the game's NavigateToMenu
+-- closes the old menu first): still paused (the review of the pad's quick save, finding 2)
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+pause_menu = lui_element{ getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+polls(13)
+pause_menu.getParent = function() return nil end
+options = lui_element{ getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Options", options)
+polls(1200)
+check(state == 3 and allowed == "take pistol_m1911\ngive ray_gun_upgraded\n" and
+    not string.find(table.concat(notices, "\n"), "not given back", 1, true),
+    "kept for ten minutes in a page made after the pause menu closed")
+options.getParent = function() return nil end
+polls(600)
+check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true) ~= nil and allowed == "",
+    "and given up on five minutes after that page closed: " .. tostring(notices[#notices]))
+leave_match()
+polls(1)
+
+-- (every match so far had no Engine.DvarInt: said once, not at every poll or match)
+check(count_lines(logs_all, "cl_paused can't be read, so the menus say whether the game is paused") == 1 and
+    count_lines(logs_all, "is the engine's word") == 0, "the menus' word is said once")
+-- ---- where the UI can ask the engine (Engine.DvarInt, as in the game), cl_paused is the answer, whatever the menus:
+local cl_paused, asked = 0, {}
+Engine.DvarInt = function(_, name)
+    asked[name] = (asked[name] or 0) + 1
+    return name == "cl_paused" and cl_paused or 0
+end
+-- a menu a script opens while the pause menu is up (AAE's fade) and leaves up after it holds nothing once the game
+-- goes on (the menus' rule took it for a page of the pause menu for as long as it stayed)
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+pause_menu = lui_element{ getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+cl_paused = 1
+polls(13)
+local fade = lui_element{ getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("FullScreenBlack", fade)
+polls(1200)
+check(asked.cl_paused ~= nil and asked.cl_paused >= 1200, "the engine is asked at every poll: " .. tostring(asked.cl_paused))
+check(state == 3 and allowed == "take pistol_m1911\ngive ray_gun_upgraded\n" and
+    not string.find(table.concat(notices, "\n"), "not given back", 1, true), "kept while cl_paused is 1 for ten minutes")
+pause_menu.getParent = function() return nil end
+cl_paused = 0
+polls(599)
+check(not string.find(table.concat(notices, "\n"), "not given back", 1, true), "not given up on before the five minutes")
+polls(2)
+check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true) ~= nil and allowed == "",
+    "the game goes on under a script's menu: given up on after five minutes: " .. tostring(notices[#notices]))
+leave_match()
+polls(1)
+-- the pause menu open in a game that goes on behind it (co-op, LAN: cl_paused stays 0): not paused
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+pause_menu = lui_element{ getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+polls(13 + 600)
+check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true) ~= nil and allowed == "",
+    "the pause menu over a game that goes on isn't a pause: " .. tostring(notices[#notices]))
+pause_menu.getParent = function() return nil end
+leave_match()
+polls(1)
+-- held without any menu of ours (cl_paused 2 too: not 0), and a pause of two that come and go
+resume_row.run()
+enter_match("zm_theater")
+weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+execs, notices, logs, held_commands = {}, {}, {}, true
+polls(13)
+cl_paused = 2
+polls(1200)
+check(state == 3 and allowed == "take pistol_m1911\ngive ray_gun_upgraded\n" and
+    not string.find(table.concat(notices, "\n"), "not given back", 1, true), "kept while the engine says paused, no menu")
+cl_paused = 0
+polls(300)
+cl_paused = 1
+polls(1200)
+cl_paused = 0
+polls(280)
+check(not string.find(table.concat(notices, "\n"), "not given back", 1, true),
+    "the time out of the pause adds up over two pauses: not yet at 290 s")
+polls(30)
+check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true) ~= nil,
+    "and given up on at five minutes unpaused: " .. tostring(notices[#notices]))
+leave_match()
+polls(1)
+-- nothing is kept of the menus where the engine answers: one made in a pause can be collected after the next poll
+-- (the menus' rule holds them until the pause is over)
+do
+    local weak = setmetatable({}, { __mode = "k" })
+    enter_match("zm_theater")
+    cl_paused = 1
+    pause_menu = lui_element{ getParent = function() return root end }
+    BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+    local page = lui_element{ getParent = function() return root end }
+    weak[page] = true
+    BO3MacFix.CheckpointMenuCreated("StartMenu_Options", page)
+    page = nil
+    polls(1)
+    for _ = 1, 3 do collectgarbage() end
+    check(next(weak) == nil, "a menu made in a pause isn't held once the engine has answered")
+    cl_paused = 0
+    pause_menu.getParent = function() return nil end
+    leave_match()
+    polls(1)
+end
+check(count_lines(logs_all, "whether the game is paused is the engine's word (cl_paused)") == 1 and
+    count_lines(logs_all, "cl_paused can't be read") == 1, "the engine's word is said once, over four matches")
+-- an answer that is no number (the call failing, nil): the menus say, as before
+for _, broken in ipairs({ function() error("no such dvar") end, function() return nil end, function() return "" end }) do
+    Engine.DvarInt = broken
+    resume_row.run()
+    enter_match("zm_theater")
+    weapons = "pistol_m1911_zm:0,frag_grenade_zm:1,knife_zm:4"
+    execs, notices, logs, held_commands = {}, {}, {}, true
+    pause_menu = lui_element{ getParent = function() return root end }
+    BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+    polls(13 + 1200)
+    check(state == 3 and not string.find(table.concat(notices, "\n"), "not given back", 1, true),
+        "the engine's answer unreadable: the pause menu on its root is a pause")
+    pause_menu.getParent = function() return nil end
+    polls(601)
+    check(string.find(notices[#notices] or "", "Saved guns not given back", 1, true) ~= nil,
+        "... and five minutes after it closed they are given up on: " .. tostring(notices[#notices]))
+    leave_match()
+    polls(1)
+end
+Engine.DvarInt = nil
+check(count_lines(logs_all, "cl_paused can't be read") == 2 and count_lines(logs_all, "is the engine's word") == 1,
+    "and the menus' word again, once for the three matches without an answer")
 
 -- a resume that can't be undone (a file that can't be written) says so and stays on, rather than saying it's off
 resume_row.run()

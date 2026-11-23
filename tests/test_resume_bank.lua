@@ -366,6 +366,40 @@ polls(12)
 check(count(execs, "bo3macfix_points") == 2 and score == 560 + 3380, "sent again after it: " .. tostring(score))
 leave_match()
 
+-- ---- where the UI can ask the engine (Engine.DvarInt, as in the game), its cl_paused is the pause: nothing is sent
+-- while it is 1, with no menu of ours on a root, and a menu a script opened in the pause and left up after it (AAE's
+-- fade) holds nothing back once the game goes on
+local cl_paused = 0
+Engine.DvarInt = function(_, name) return name == "cl_paused" and cl_paused or 0 end
+resume(3880, 3380)
+polls(12)
+cl_paused = 1
+local fade = lui_element{ getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("FullScreenBlack", fade)
+score = 560 -- (the last hit before the pause)
+polls(600)
+check(count(execs, "bo3macfix_points") == 0 and count(notices, "not given back") == 0,
+    "nothing sent while the engine says paused")
+check(count(logs, "the game is paused: the saved game's other 3380 points wait until it goes on") == 1,
+    "the wait for the engine's pause is said, once")
+cl_paused = 0
+polls(3)
+check(count(execs, "bo3macfix_points") == 1 and score == 3940,
+    "sent once the game goes on, a script's menu still up: " .. tostring(score))
+leave_match()
+-- the pause menu up over a game that isn't held (cl_paused 0): sent as without it
+resume(3880, 3380)
+polls(12)
+pause_menu = lui_element{ getParent = function() return root end }
+BO3MacFix.CheckpointMenuCreated("StartMenu_Main", pause_menu)
+score = 560
+polls(8)
+check(count(execs, "bo3macfix_points") == 1 and count(logs, "points wait until it goes on") == 0,
+    "the pause menu over a game that goes on holds nothing back")
+pause_menu.getParent = function() return nil end
+leave_match()
+Engine.DvarInt = nil
+
 -- ---- a game with other players: nothing is handed over
 resume(3880, 3380)
 lobby_clients = 2

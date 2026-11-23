@@ -769,7 +769,7 @@ local AUTOSAVE_SETTLE_POLLS = 4
 local AUTOSAVE_AFTER_GIVE_POLLS = 10 -- a resumed game's weapons arrive a moment after the give commands
 -- give and take commands for the saved guns that still haven't run at the next round, or after this long out of the
 -- pause menu, are given up on (a paused game holds them, but runs them as soon as it's unpaused). The round is what
--- matters for AutoSave. A menu opened from the pause menu counts as paused while it's open (game_paused).
+-- matters for AutoSave. Paused is the engine's own word (game_paused).
 local GUNS_GIVE_UP_POLLS = math.floor(300 * 1000 / POLL_MS)
 local GUNS_ROUND_GIVE_UP_POLLS = 4 -- out of the pause menu since they were sent, before a new round gives up on them
 
@@ -820,9 +820,11 @@ local QUICK_REASONS = { menus = "start a solo zombies game first", not_zombies =
     unread = "couldn't read this game's round and points", unwritten = "couldn't write BO3MacFix/checkpoint.ini" }
 local quick_armed = nil -- a first press over a deeper saved game: { time, by the notices' clock; source }
 local start_menu = nil  -- the pause menu (StartMenu_Main) made last
--- menus made while the pause menu was open (Options, say), and whether it has been: one it opens might take its place
--- on the root, and the game stays paused until the last of them has gone
+-- only where the engine can't be asked whether the game is paused (game_paused): menus made while the pause menu was
+-- open (Options, say), and whether it has been: one it opens might take its place on the root, and the game stays
+-- paused until the last of them has gone
 local pause_held, pause_seen = {}, false
+local pause_word = nil -- who answered last, "engine" or "menus": said in the log when it changes
 
 -- an element's parent, nil for none. The game's menus and elements are userdata, not Lua tables: their methods are
 -- reached through their metatable, so nothing here asks what type they are (a "table" test kept the pad's quick save
@@ -846,8 +848,29 @@ local function on_root(element)
     return false
 end
 
--- whether the game is paused: the pause menu is on a root, or a menu made while it was open still is
+-- whether the game is paused. The engine says so itself: cl_paused, not 0 while the game is held, which is the pause
+-- menu and its pages in a solo game, and 0 where the match goes on behind the pause menu (a co-op or LAN game without
+-- the co-op pause) or under a menu a script opens around a pause. AAE's own pause menu reads and writes that dvar, and
+-- IdleMenuFPS reads it too (gpu_tweaks.c). Asked through the UI's own Engine.DvarInt; where that gives no number, the
+-- menus say: the pause menu is on a root, or a menu made while it was open still is. That rule is looser: it takes
+-- every menu made from the pause menu's creation until the half second after it closed for one of its pages, because
+-- the game closes the pause menu before it makes the page that takes its place (NavigateToMenu), so a fade a script
+-- starts in that time counted as a pause for as long as it stayed up (the review of 2026-11-18,
+-- wip/night/review-smallfix2.md, finding 1).
 local function game_paused()
+    local engine = tonumber(call(Engine.DvarInt, nil, "cl_paused"))
+    if engine ~= nil then
+        if pause_word ~= "engine" then
+            pause_word = "engine"
+            log("checkpoint: whether the game is paused is the engine's word (cl_paused)")
+        end
+        pause_held, pause_seen = {}, false -- (nothing is kept of the menus: the table holds them)
+        return engine ~= 0
+    end
+    if pause_word ~= "menus" then
+        pause_word = "menus"
+        log("checkpoint: cl_paused can't be read, so the menus say whether the game is paused")
+    end
     if on_root(start_menu) then
         pause_seen = true
         return true
@@ -1200,7 +1223,9 @@ function bo3macfix.CheckpointMenuCreated(name, menu, kind)
     if name == "StartMenu_Main" and kind == nil then
         start_menu, pause_seen = menu, true
     elseif kind == nil and (pause_seen or on_root(start_menu)) then
-        pause_held[menu] = true -- the give-up's time doesn't count while it's open, as the game is still paused
+        -- the give-up's time doesn't count while it's open, as the game is still paused (where the engine can't be
+        -- asked: game_paused empties this at the next poll otherwise)
+        pause_held[menu] = true
     end
     -- the report test switch also logs what a match makes, to tell which menu or overlay a popup is
     if report_after ~= nil and in_match() then
