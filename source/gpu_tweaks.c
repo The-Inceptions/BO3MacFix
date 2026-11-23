@@ -1058,11 +1058,15 @@ static bool running_on_battery(void) {
 // the external power adapter's watts as macOS reports them (IOPSCopyExternalPowerAdapterDetails' "Watts", which
 // `pmset -g ac` shows as Wattage), 0 when it says none (no adapter, no wattage, not a whole number).
 // BO3MACFIX_CHARGERWATTS=N pretends a charger of N watts, for testing; with BO3MACFIX_ONBATTERY=1 the Mac is still on
-// battery whatever the charger.
+// battery whatever the charger. A power source pretended by BO3MACFIX_ONBATTERY alone has no charger behind it to ask:
+// its wattage is unknown, so BO3MACFIX_ONBATTERY=0 stays plugged in whatever the Mac's real charger and a
+// WeakChargerWatts in the player's settings.ini (the game checks that pretend plugged in rely on it).
 static int charger_watts(void) {
     const char *env = getenv("BO3MACFIX_CHARGERWATTS");
     if (env != NULL)
         return atoi(env);
+    if (getenv("BO3MACFIX_ONBATTERY") != NULL)
+        return 0;
     CFDictionaryRef details = IOPSCopyExternalPowerAdapterDetails();
     if (details == NULL)
         return 0;

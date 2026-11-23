@@ -124,6 +124,7 @@ static void test_lines_changes(void) {
     CHECK(weak_charger_line(&said, 100, false, 140, true) == Power_Line_Charger); // small to big, without unplugging
     CHECK(weak_charger_line(&said, 100, false, 65, true) == Power_Line_Small);    // big to small: the merged line
     CHECK(weak_charger_line(&said, 100, false, 0, true) == Power_Line_Unknown);   // small to unknown
+    CHECK(weak_charger_line(&said, 100, true, 0, false) == Power_Line_Battery);   // unplugged off it, no old line due
 }
 
 // the setting changed while the watch runs (the settings page): off says nothing and forgets what was said, on says
